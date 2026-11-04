@@ -46,12 +46,12 @@ later one is kept as `note (conflict ...).md` next to it.
 
 ## Setup
 
-Install (each person):
+Install (each person; needs Python 3.10+ and git):
 ```bash
-git clone https://github.com/f0x1en/tgsync && cd tgsync
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -e .
+pipx install git+https://github.com/f0x1en/tgsync      # or: uv tool install git+https://github.com/f0x1en/tgsync
+tgsync --version
 ```
+Update later with `pipx upgrade tgsync`. (Developing it? `pip install -e ".[dev]"` in a clone.)
 
 **api_id / api_hash:** one person creates the pair once at https://my.telegram.org -> *API
 development tools* and shares it with the team privately (it identifies the *app*, not anyone's
@@ -67,10 +67,12 @@ tgsync vault create ~/vaults/team --new-group "team vault"
 
 **Inviting a friend**
 1. Owner: `tgsync invite` -> send the printed `tgsync join tgsync1-...` line to the friend.
-2. Friend: run that line. It creates their key, logs them into Telegram, joins the group and
-   shows a short code like `f17d-13fd`; they read it to the owner.
-3. Owner: `tgsync members pending` (check the code matches), then `tgsync members accept`.
-4. Friend: run the same `tgsync join ...` line again; the vault downloads.
+2. Friend: run that line. It creates their key, logs them into Telegram, joins the group, sends a
+   join request and prints a short code like `f17d-13fd`. They read the code to the owner.
+3. Owner: `tgsync members accept f17d-13fd` (typing the code you were told is the confirmation;
+   `tgsync members pending` lists who is waiting).
+4. Friend: whenever they like, however long it takes, run the same `tgsync join ...` line again;
+   the vault downloads.
 
 The invite code carries the vault's key fingerprint, so the join is checked automatically.
 A join request alone grants nothing: only an owner/member approving it adds their key.

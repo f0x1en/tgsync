@@ -273,8 +273,7 @@ def vault_create(folder: Path, title: str | None, chat: str | None, name: str, p
             code = encode_invite(Invite(link, v.vault_id, fingerprint(v.keys.key(1))))
             click.echo("\nInvite a friend: send them this code (and the install steps in the README):\n")
             click.echo(f"  tgsync join {code}\n")
-            click.echo("They will see a short code; when they tell you, run `tgsync members pending` then "
-                       "`tgsync members accept`.")
+            click.echo("They will get a short code; when they read it to you: `tgsync members accept <code>`.")
         else:
             click.echo("Run `tgsync invite --link <group link>` to make an invite code.")
         await tr.close()
@@ -346,8 +345,8 @@ def invite(vault_dir: Path, link: str | None, include_api: bool) -> None:
             click.secho("This code contains your api_id/api_hash: share it only with people you trust.", fg="yellow")
         code = encode_invite(Invite(use, v.vault_id, fingerprint(v.keys.key(1)), api))
         click.echo(f"\n  tgsync join {code}\n")
-        click.echo("Send that to your friend. When they run it they get a short code to read back to you,")
-        click.echo("then you run `tgsync members pending` and `tgsync members accept`.")
+        click.echo("Send that to your friend. When they run it they get a short code to read back to you;")
+        click.echo("you then run `tgsync members accept <code>` (`tgsync members pending` lists waiting people).")
         await tr.close()
 
     _guard(lambda: run(go()))
@@ -359,7 +358,8 @@ def invite(vault_dir: Path, link: str | None, include_api: bool) -> None:
 @click.option("--profile", default=None, help="Which of your accounts to use (asked if you have several).")
 @click.option("--name", help="Name members will see (default: your profile name).")
 @click.option("--proxy", help="Telegram proxy, e.g. socks5://127.0.0.1:10808 (saved).")
-@click.option("--wait", default=120, show_default=True, help="Seconds to wait for approval.")
+@click.option("--wait", default=0, show_default=True,
+              help="Seconds to wait for approval (default: ask, then come back later).")
 @click.option("--no-git", is_flag=True)
 def join_cmd(code: str, folder: Path | None, profile: str | None, name: str | None, proxy: str | None,
              wait: int, no_git: bool) -> None:
@@ -384,17 +384,19 @@ def join_cmd(code: str, folder: Path | None, profile: str | None, name: str | No
                 await Vault.post_join_request(tr, ident, inv.vault_id, who)
                 click.echo(f"Join request sent as '{who}'.")
                 click.secho(f"Tell the person who invited you this code: {short_code(ident.recipient)}", bold=True)
-                click.echo("Waiting for approval", nl=False)
-                deadline = time.monotonic() + wait
-                while time.monotonic() < deadline:
-                    await asyncio.sleep(15)
-                    click.echo(".", nl=False)
-                    found = await Vault.discover(tr, ident)
-                    if inv.vault_id in found:
-                        break
-                click.echo()
+                if wait > 0:
+                    click.echo("Waiting for approval", nl=False)
+                    deadline = time.monotonic() + wait
+                    while time.monotonic() < deadline:
+                        await asyncio.sleep(15)
+                        click.echo(".", nl=False)
+                        found = await Vault.discover(tr, ident)
+                        if inv.vault_id in found:
+                            break
+                    click.echo()
             if inv.vault_id not in found:
-                click.echo("Not approved yet. Once they accept you, run this same command again.")
+                click.echo("Not approved yet. Come back any time after they accept you and run this same "
+                           "command again; nothing else is needed.")
                 return
             if found[inv.vault_id][1].replace(" ", "") != inv.fingerprint.replace(" ", ""):
                 raise click.ClickException("KEY FINGERPRINT MISMATCH between the invite and the vault - refusing to join")
@@ -448,58 +450,43 @@ def members_add(recipient: str, name: str, vault_dir: Path) -> None:
 @members.command("pending")
 @vault_opt
 def members_pending(vault_dir: Path) -> None:
-    """Show people who asked to join."""
+    """List people who asked to join, with the code they should read to you."""
 
     async def go():
         v, tr = await _open(vault_dir)
         reqs = await v.pending_requests()
         if not reqs:
-            click.echo("no pending requests")
-        for i, r in enumerate(reqs, 1):
-            click.echo(f"{i}) {r.name or '(no name)':16} code {r.code}   {r.recipient[:20]}...")
+            click.echo("nobody is waiting")
+        for r in reqs:
+            click.echo(f"{r.code}  {r.name or '(no name)'}")
         if reqs:
-            click.echo("Check the code with them, then: tgsync members accept")
+            click.echo("\nOnly accept someone whose code they read to you yourself:  "
+                       "tgsync members accept <code>")
         await tr.close()
 
     _guard(lambda: run(go()))
 
 
 @members.command("accept")
-@click.argument("who", required=False)
-@click.option("--all", "all_", is_flag=True, help="Accept every pending request (only if you trust the group).")
-@click.option("--name", help="Display name to store (default: the name they gave).")
-@click.option("--yes", is_flag=True, help="Skip the code confirmation.")
+@click.argument("code")
+@click.option("--name", help="Name to show in the member list (default: the name they gave).")
 @vault_opt
-def members_accept(who: str | None, all_: bool, name: str | None, yes: bool, vault_dir: Path) -> None:
-    """Approve a join request (by number, code or name; asks if you leave it out)."""
+def members_accept(code: str, name: str | None, vault_dir: Path) -> None:
+    """Let in the person whose join code is CODE (typing it is the confirmation)."""
 
     async def go():
         v, tr = await _open(vault_dir)
-        reqs = await v.pending_requests()
-        if not reqs:
-            raise click.ClickException("no pending requests")
-        if all_:
-            chosen = reqs
-        else:
-            if who is None:
-                for i, r in enumerate(reqs, 1):
-                    click.echo(f"{i}) {r.name or '(no name)':16} code {r.code}")
-                who_ = str(click.prompt("Accept which", type=click.IntRange(1, len(reqs)), default=1))
-            else:
-                who_ = who
-            chosen = [r for i, r in enumerate(reqs, 1) if who_ in (str(i), r.code, r.name, r.recipient)]
-            if len(chosen) != 1:
-                raise click.ClickException(f"{who_!r} matches {len(chosen)} requests; use the number or code")
-        for r in chosen:
-            if not (yes or all_) and not click.confirm(
-                    f"Does {r.name or 'the person'} see the code {r.code} on their screen?"):
-                click.echo("skipped")
-                continue
-            await v.accept_request(r, name if len(chosen) == 1 else None)
-            click.echo(f"Accepted {name or r.name or r.recipient[:12]}. They can now finish `tgsync join`.")
+        want = code.strip().lower()
+        hits = [r for r in await v.pending_requests() if r.code == want]
+        if not hits:
+            raise click.ClickException(f"no pending request with code {code!r} (see `tgsync members pending`)")
+        r = hits[0]
+        await v.accept_request(r, name)
+        click.echo(f"Accepted {name or r.name or r.code}. They can now run `tgsync join` again.")
         await tr.close()
 
     _guard(lambda: run(go()))
+
 
 @members.command("remove")
 @click.argument("who")
