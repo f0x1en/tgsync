@@ -2,6 +2,7 @@
 """Command-line interface: a button that syncs a folder with a Telegram group.
 
     tgsync              sync this folder (pull + push), same as `tgsync sync`
+    tgsync pull / push  only download / only upload
     tgsync status       what changed locally (add --check to test Telegram access)
     tgsync restore      bring back an older version of a file
     tgsync new DIR      start a vault        tgsync join CODE   join one
@@ -406,12 +407,42 @@ def remove(who: str, vault_dir: Path) -> None:
 @main.command()
 @vault_opt
 def sync(vault_dir: Path) -> None:
-    """Download others' changes and upload yours (this is also what plain `tgsync` does)."""
+    """Download others' changes AND upload yours (this is also what plain `tgsync` does)."""
 
     async def go():
         v, tr = await _open(vault_dir)
         try:
             _print_report(await v.sync())
+        finally:
+            await tr.close()
+
+    _guard(lambda: run(go()))
+
+
+@main.command()
+@vault_opt
+def pull(vault_dir: Path) -> None:
+    """Download teammates' changes only (uploads nothing)."""
+
+    async def go():
+        v, tr = await _open(vault_dir)
+        try:
+            _print_report(await v.pull_changes())
+        finally:
+            await tr.close()
+
+    _guard(lambda: run(go()))
+
+
+@main.command()
+@vault_opt
+def push(vault_dir: Path) -> None:
+    """Upload your changes only (never touches your local files)."""
+
+    async def go():
+        v, tr = await _open(vault_dir)
+        try:
+            _print_report(await v.push_changes())
         finally:
             await tr.close()
 

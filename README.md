@@ -32,7 +32,9 @@ files from editors are ignored automatically. When you want to share or fetch, i
 
 ```bash
 cd ~/vaults/team
-tgsync            # sync: download others' changes, upload yours, list what moved
+tgsync            # sync: download others' changes AND upload yours, list what moved
+tgsync pull       # only download (safe while you are mid-edit: publishes nothing)
+tgsync push       # only upload (never touches your local files)
 tgsync status     # what changed locally (works offline); `--check` also tests Telegram
 tgsync restore    # bring back an older version of a file (it asks which)
 ```
@@ -49,7 +51,8 @@ Install (each person; needs Python 3.10+ and git):
 pipx install git+https://github.com/f0x1en/tgsync      # or: uv tool install git+https://github.com/f0x1en/tgsync
 tgsync --version
 ```
-Update later with `pipx upgrade tgsync`. (Developing it? `pip install -e ".[dev]"` in a clone.)
+If `tgsync` isn't found afterwards, run `pipx ensurepath` and open a new terminal. Update later with
+`pipx upgrade tgsync`. (Developing it? `pip install -e ".[dev]"` in a clone.)
 
 **api_id / api_hash:** one person creates the pair once at https://my.telegram.org -> *API
 development tools* and shares it with the team privately (it identifies the *app*, not anyone's
@@ -106,8 +109,9 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 ## Development
 
 ```bash
-uv venv && uv pip install -e ".[dev]"
+uv venv && uv pip install -e ".[dev]"      # test/lint environment
 pytest && ruff check src tests && mypy src
+pipx install --editable .                  # optional: a global `tgsync` that follows your edits
 python scripts/live_e2e.py     # optional: full two-person test on real Telegram (needs two logged-in accounts)
 ```
 
