@@ -23,6 +23,16 @@ from .transport import Transport
 from .tree import Node, Tree
 
 HASH_BLOCK = 1024 * 1024
+BIG_FILE = 8 * 1024 * 1024  # files at least this big get a heads-up message while transferring
+
+
+def human_size(n: int) -> str:
+    x = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if x < 1024 or unit == "GB":
+            return f"{x:.0f} {unit}" if unit == "B" else f"{x:.1f} {unit}"
+        x /= 1024
+    return f"{n} B"
 
 
 def sha256_file(p: Path) -> str:
@@ -69,6 +79,7 @@ class Vault:
         self._sent_seq = 0
         self._cache: dict[int, bytes] = {}
         self._desc_seen = 0
+        self.notify = lambda msg: None  # set by the CLI to print heads-up lines
         self._ignore = load_ignore(self.root)
         for data in self.state.descriptors():
             with contextlib.suppress(CryptoError, KeyError_):
@@ -338,6 +349,8 @@ class Vault:
             payload += data
             return entry
         # large file: stream in sealed chunks
+        if size >= BIG_FILE:
+            self.notify(f"uploading {ch['path']} ({human_size(size)}); big files take a while")
         file_id = os.urandom(8).hex()
         count = max(1, -(-size // chunk_size))
         h = hashlib.sha256()
@@ -365,6 +378,9 @@ class Vault:
         return self._cache[mid]
 
     async def _write_node(self, node: Node, dest: Path) -> None:
+        if node.size >= BIG_FILE:
+            self.notify(f"downloading {node.path} ({human_size(node.size)}); big files take a while and "
+                        f"only appear in your folder when finished")
         tmp = dest.with_name(dest.name + TMP_SUFFIX)
         dest.parent.mkdir(parents=True, exist_ok=True)
         h = hashlib.sha256()

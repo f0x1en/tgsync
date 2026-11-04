@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import pytest
-from click.testing import CliRunner
 
 from tgsync import cli, identity, invites
 from tgsync.engine import Vault
@@ -59,22 +58,22 @@ async def test_duplicate_requests_collapse(mk):
     assert [r.name for r in await a.vault.pending_requests()] == ["bobby"]
 
 
-def test_profile_commands():
-    r = CliRunner()
-    assert identity.current_profile() == "default"
-    identity.init_identity("default")
-    identity.init_identity("work")
-    out = r.invoke(cli.main, ["profile", "list"]).output
-    assert "default" in out and "work" in out and "no Telegram login" in out
-    assert r.invoke(cli.main, ["profile", "use", "work"]).exit_code == 0
-    assert identity.current_profile() == "work"
-    assert r.invoke(cli.main, ["profile", "use", "nope"]).exit_code != 0
-    assert r.invoke(cli.main, ["keys", "show"]).output.strip() == identity.load_identity("work").recipient
-    assert r.invoke(cli.main, ["profile", "remove", "work"], input="n\n").exit_code != 0
-    assert "work" in identity.list_profiles()
-    assert r.invoke(cli.main, ["profile", "remove", "work"], input="y\n").exit_code == 0
-    assert identity.list_profiles() == ["default"]
-    assert identity.current_profile() == "default"   # fell back after deleting the current one
+def test_creds_use_env_and_keep_proxy(monkeypatch):
+    from tgsync.identity import TelegramCreds
+    monkeypatch.setenv("TGSYNC_API_ID", "123")
+    monkeypatch.setenv("TGSYNC_API_HASH", "abc")
+    c = cli._creds_for("default", "socks5://h:1", None)       # no prompts: env supplies the pair
+    assert (c.api_id, c.api_hash, c.proxy) == (123, "abc", "socks5://h:1")
+    monkeypatch.setenv("TGSYNC_API_ID", "456")
+    cli._creds_for("default", None, None)
+    saved = TelegramCreds.load("default")
+    assert (saved.api_id, saved.proxy) == (456, "socks5://h:1")  # new pair, saved proxy kept
+    assert cli._creds_for("default", "none", None).proxy is None
+
+
+def test_removed_commands_are_gone():
+    names = set(cli.main.commands)
+    assert names == {"new", "join", "invite", "members", "accept", "remove", "sync", "status", "restore"}
 
 
 def test_profile_names_are_safe():

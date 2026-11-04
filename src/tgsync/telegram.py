@@ -2,7 +2,7 @@
 """Telethon-backed transport (MTProto, your own user account).
 
 NOTE: written against Telethon 1.x docs; exercised in CI only through the fake
-transport. Run `tgsync doctor` against a throwaway group before trusting it.
+transport. Check changes against a throwaway group (scripts/live_e2e.py) before trusting them.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ async def connect(profile: str) -> TelegramClient:
         raise
     if not await client.is_user_authorized():
         await client.disconnect()
-        raise NotLoggedIn("Telegram session missing or revoked; run `tgsync login`")
+        raise NotLoggedIn("Telegram session missing or revoked; run `tgsync` in a terminal to log in again")
     return client
 
 
@@ -181,7 +181,7 @@ class TelethonTransport:
                 await asyncio.sleep(e.seconds + 1)
             except (ConnectionError, TimeoutError, errors.RPCError) as e:
                 if isinstance(e, (errors.AuthKeyError, errors.SessionRevokedError, errors.UserDeactivatedError)):
-                    raise TransportError("Telegram session revoked; run `tgsync login`") from e
+                    raise TransportError("Telegram session revoked; run `tgsync` in a terminal to log in again") from e
                 raise TransportError(f"Telegram error: {e}") from e
         raise TransportError("giving up after repeated flood-waits")
 

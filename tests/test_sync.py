@@ -194,3 +194,22 @@ async def test_deleted_file_push_marks_synced(pair):
     (a.root / "n.md").unlink()
     await a.vault.push_changes()
     assert (await a.vault.push_changes()).pushed == 0
+
+
+async def test_big_files_announce_themselves(pair, monkeypatch):
+    from tgsync import engine
+    monkeypatch.setattr(engine, "BIG_FILE", 1000)
+    a, b = pair
+    msgs_a, msgs_b = [], []
+    a.vault.notify, b.vault.notify = msgs_a.append, msgs_b.append
+    a.write("small.md", "tiny")
+    a.write("movie.bin", os.urandom(300_000))
+    await a.vault.sync()
+    await b.vault.sync()
+    assert len(msgs_a) == 1 and "uploading movie.bin" in msgs_a[0] and "KB" in msgs_a[0]
+    assert len(msgs_b) == 1 and "downloading movie.bin" in msgs_b[0] and "only appear" in msgs_b[0]
+
+
+def test_human_size():
+    from tgsync.engine import human_size
+    assert human_size(5) == "5 B" and human_size(2048) == "2.0 KB" and human_size(100_000_000) == "95.4 MB"

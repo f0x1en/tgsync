@@ -8,7 +8,7 @@ a member, who adds their public key to the vault.
 
 A join request is a small *unencrypted* message posted in the group (the friend has no key yet)
 holding the friend's public key and a display name. Anyone in the group can post one, so the
-approver must check the short code the friend sees against the one in `members pending`.
+approver must check the short code the friend sees against the one in `tgsync members`.
 """
 
 from __future__ import annotations

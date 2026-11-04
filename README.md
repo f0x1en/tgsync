@@ -5,9 +5,9 @@ Telegram group as the sync/backup server. Each teammate runs their own copy with
 Telegram account. Linux, Windows, macOS; a small CLI, no GUI: your editor and file manager are the UI.
 
 > Status: alpha. Crypto, sync and conflict logic are covered by automated tests against an
-> in-memory fake of Telegram. The real transport has been exercised by hand against live
-> Telegram on one account (create, push, join, 100 MB multi-chunk file). Multi-person
-> conflict handling over real Telegram is not yet field-tested. Use a throwaway group first.
+> in-memory fake of Telegram, and `scripts/live_e2e.py` replays the full two-person story (invite,
+> approval, sync, conflict, removal, re-join) on real Telegram with two accounts. Use a throwaway
+> group first.
 
 ## How it works
 
@@ -23,26 +23,24 @@ Telegram account. Linux, Windows, macOS; a small CLI, no GUI: your editor and fi
 * Many small notes are batched into one Telegram message (Telegram limits ~20 msgs/min);
   big files are split into sealed 32 MiB chunks.
 * A local git repo (`.tgsync/history.git`, separate from any `.git` of yours) snapshots the
-  vault before and after each sync: `tgsync history`, `tgsync restore`.
+  vault before and after each sync; `tgsync restore` brings old versions back.
 
-## Daily use (works like git: nothing runs unless you type a command)
+## Daily use
 
 Open your vault folder in any editor (nvim, VS Code, Obsidian...) and just work. Swap/backup
-files from editors are ignored automatically. When you want to share or fetch:
+files from editors are ignored automatically. When you want to share or fetch, it's one button:
 
 ```bash
 cd ~/vaults/team
-tgsync status      # what changed locally (works offline)
-tgsync pull        # download teammates' changes (uploads nothing)
-tgsync push        # upload your changes (never touches your files)
-tgsync sync        # both, in one go
-tgsync history     # local git history of the vault; `tgsync restore <path> <rev>` to undo
-tgsync doctor      # check proxy, login, group access, vault health
+tgsync            # sync: download others' changes, upload yours, list what moved
+tgsync status     # what changed locally (works offline); `--check` also tests Telegram
+tgsync restore    # bring back an older version of a file (it asks which)
 ```
 
-tgsync never runs in the background: it does something only when you run a command. Commands act on the
-current folder (or `-C <folder>`). If two people change the same note, nothing is lost: the
-later one is kept as `note (conflict ...).md` next to it.
+tgsync never runs in the background: it does something only when you run it. If two people
+change the same note, nothing is lost: the later one is kept as `note (conflict ...).md` next to
+it. Big files print a heads-up ("downloading ... big files take a while") and appear in your
+folder only once they have fully arrived.
 
 ## Setup
 
@@ -61,36 +59,30 @@ once (it is saved).
 
 **First person (owner)**
 ```bash
-tgsync vault create ~/vaults/team --new-group "team vault"
-# creates your key, logs you in (phone + code), makes the group, prints an invite code
+tgsync new ~/vaults/team
+# makes your key, logs you in (phone + code), creates a private group, prints an invite line
 ```
 
 **Inviting a friend**
-1. Owner: `tgsync invite` -> send the printed `tgsync join tgsync1-...` line to the friend.
+1. Owner: `tgsync invite` (or use the line `new` printed) and send the `tgsync join tgsync1-...`
+   line to the friend.
 2. Friend: run that line. It creates their key, logs them into Telegram, joins the group, sends a
    join request and prints a short code like `f17d-13fd`. They read the code to the owner.
-3. Owner: `tgsync members accept f17d-13fd` (typing the code you were told is the confirmation;
-   `tgsync members pending` lists who is waiting).
+3. Owner: `tgsync accept f17d-13fd` (typing the code you were told is the confirmation;
+   `tgsync members` shows who is waiting).
 4. Friend: whenever they like, however long it takes, run the same `tgsync join ...` line again;
    the vault downloads.
 
 The invite code carries the vault's key fingerprint, so the join is checked automatically.
-A join request alone grants nothing: only an owner/member approving it adds their key.
+A join request alone grants nothing: only a member accepting it adds their key.
 
-**Removing someone:** `tgsync members remove bob`. The key rotates, so they can't read anything
-new. Kicking them from the Telegram group is optional (they only see ciphertext); they keep what
-they had already synced. If they later ask to join again and you accept, they get everything.
+**Removing someone:** `tgsync remove bob`. The key rotates, so they can't read anything new.
+Kicking them from the Telegram group is optional (they only see ciphertext); they keep what they
+had already synced. If they later ask to join again and you accept, they get everything.
 
-**Several Telegram accounts on one machine** (for testing, or a separate work account): vault
-folders remember their account, so you rarely type anything. When you create or join and have
-more than one, you're asked which to use.
-```bash
-tgsync profile add work      # new key + Telegram login
-tgsync profile list          # who is who  (* = current)
-tgsync profile use work      # default account outside a vault folder
-tgsync whoami -C ~/vaults/team
-tgsync profile remove work   # deletes that key from this machine
-```
+**Several Telegram accounts on one machine:** vault folders remember their account. If you have
+more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Account data lives in
+`~/.config/tgsync/<name>/` (delete that folder to forget an account).
 
 ## Security model & limits
 
@@ -116,6 +108,7 @@ tgsync profile remove work   # deletes that key from this machine
 ```bash
 uv venv && uv pip install -e ".[dev]"
 pytest && ruff check src tests && mypy src
+python scripts/live_e2e.py     # optional: full two-person test on real Telegram (needs two logged-in accounts)
 ```
 
 ## License

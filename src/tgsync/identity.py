@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,31 +39,9 @@ def list_profiles() -> list[str]:
 
 
 def current_profile() -> str:
-    """Env TGSYNC_PROFILE, else the one set by `tgsync profile use`, else 'default'."""
+    """Env TGSYNC_PROFILE, else 'default'."""
     env = os.environ.get("TGSYNC_PROFILE")
-    if env:
-        return check_profile_name(env)
-    f = root_dir() / "current-profile"
-    if f.exists():
-        name = f.read_text().strip()
-        if name and (root_dir() / name).is_dir():
-            return name
-    return "default"
-
-
-def set_current_profile(name: str) -> None:
-    check_profile_name(name)
-    (root_dir() / "current-profile").write_text(name + "\n")
-
-
-def delete_profile(name: str) -> None:
-    check_profile_name(name)
-    d = root_dir() / name
-    if d.is_dir():
-        shutil.rmtree(d)
-    f = root_dir() / "current-profile"
-    if f.exists() and f.read_text().strip() == name:
-        f.unlink()
+    return check_profile_name(env) if env else "default"
 
 
 def app_dir(profile: str = "default") -> Path:
@@ -133,7 +110,7 @@ def identity_path(profile: str = "default") -> Path:
 def load_identity(profile: str = "default") -> Identity:
     p = identity_path(profile)
     if not p.exists():
-        raise KeyError_(f"no identity for profile {profile!r}; run `tgsync keys init`")
+        raise KeyError_(f"no identity for profile {profile!r}; run `tgsync new` or `tgsync join`")
     secret = p.read_text().strip().splitlines()[-1].strip()
     i = pyrage.x25519.Identity.from_str(secret)
     return Identity(secret, str(i.to_public()))
@@ -165,6 +142,6 @@ class TelegramCreds:
     def load(cls, profile: str) -> TelegramCreds:
         p = cls.path(profile)
         if not p.exists():
-            raise KeyError_("no Telegram API credentials; run `tgsync login`")
+            raise KeyError_("no Telegram API credentials; run `tgsync new` or `tgsync join` to set up")
         d = json.loads(p.read_text())
         return cls(int(d["api_id"]), d["api_hash"], d.get("proxy"))
