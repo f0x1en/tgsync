@@ -6,7 +6,7 @@ Telegram account. Linux, Windows, macOS; a small CLI, no GUI: your editor and fi
 
 > Status: alpha. Crypto, sync and conflict logic are covered by automated tests against an
 > in-memory fake of Telegram. The real transport has been exercised by hand against live
-> Telegram on one account (create, push, join, 100 MB multi-chunk file, `watch`). Multi-person
+> Telegram on one account (create, push, join, 100 MB multi-chunk file). Multi-person
 > conflict handling over real Telegram is not yet field-tested. Use a throwaway group first.
 
 ## How it works
@@ -40,7 +40,7 @@ tgsync history     # local git history of the vault; `tgsync restore <path> <rev
 tgsync doctor      # check proxy, login, group access, vault health
 ```
 
-No background process exists unless you start `tgsync watch` yourself. Commands act on the
+tgsync never runs in the background: it does something only when you run a command. Commands act on the
 current folder (or `-C <folder>`). If two people change the same note, nothing is lost: the
 later one is kept as `note (conflict ...).md` next to it.
 
@@ -107,8 +107,8 @@ tgsync profile remove work   # deletes that key from this machine
 * Automating a user account is a grey area under Telegram's ToS; keep traffic modest. The limiter
   caps sends at 18/min with >=1.2 s gaps, spaces downloads, honours FloodWait and slows itself
   down after one. Telegram does not publish exact limits.
-* One tgsync process per Telegram account at a time (the session file is single-process). Use
-  `tgsync watch` and leave it running instead of also running `sync` by hand.
+* One tgsync command per Telegram account at a time (the session file is single-process); if you
+  start two at once the second one says so and you just retry.
 * Speed is bounded by Telegram and your network: ~100 MB took ~4 minutes each way through a proxy.
 
 ## Development

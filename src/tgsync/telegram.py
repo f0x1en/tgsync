@@ -102,9 +102,8 @@ async def connect(profile: str) -> TelegramClient:
     except sqlite3.OperationalError as e:
         if "locked" in str(e):
             raise TransportError(
-                "Your Telegram session is in use by another tgsync process (a running `tgsync watch` "
-                "or another command?). Only one process per Telegram account at a time: stop it, or just let "
-                "`watch` do the syncing."
+                "Your Telegram session is in use by another tgsync process. Only one command per "
+                "Telegram account can run at a time; wait for the other one to finish and try again."
             ) from None
         raise
     if not await client.is_user_authorized():

@@ -643,52 +643,6 @@ def push(vault_dir: Path) -> None:
 
 
 @main.command()
-@click.option("--interval", default=30, show_default=True, help="Seconds between remote polls.")
-@vault_opt
-def watch(interval: int, vault_dir: Path) -> None:
-    """Keep syncing: on local file changes and on a timer."""
-    from watchdog.events import FileSystemEventHandler
-    from watchdog.observers import Observer
-
-    async def go():
-        v, tr = await _open(vault_dir)
-        loop = asyncio.get_running_loop()
-        wake = asyncio.Event()
-
-        class H(FileSystemEventHandler):
-            def on_any_event(self, event):
-                if INTERNAL_DIR not in Path(event.src_path).parts and not event.src_path.endswith("tgsync-tmp"):
-                    loop.call_soon_threadsafe(wake.set)
-
-        obs = Observer()
-        obs.schedule(H(), str(v.root), recursive=True)
-        obs.start()
-        click.echo(f"Watching {v.root} (Ctrl-C to stop)")
-        try:
-            while True:
-                try:
-                    rep = await v.sync()
-                    if rep.pushed or rep.written or rep.deleted or rep.conflicts or rep.problems:
-                        _print_report(rep)
-                except TgSyncError as e:
-                    click.secho(f"sync failed: {e}", fg="red", err=True)
-                try:
-                    await asyncio.wait_for(wake.wait(), timeout=interval)
-                    await asyncio.sleep(2)  # debounce bursts of edits
-                except asyncio.TimeoutError:
-                    pass
-                wake.clear()
-        finally:
-            obs.stop()
-            await tr.close()
-
-    try:
-        _guard(lambda: run(go()))
-    except KeyboardInterrupt:
-        pass
-
-
-@main.command()
 @vault_opt
 def status(vault_dir: Path) -> None:
     """Show local pending changes and vault info (works offline)."""

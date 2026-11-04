@@ -17,7 +17,6 @@ dependencies = [
     "platformdirs>=4",
     "python-socks[asyncio]>=2.4",
     "pathspec>=0.12",
-    "watchdog>=4",
 ]
 
 [project.optional-dependencies]
