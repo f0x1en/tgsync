@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import os
+
+from tgsync import oplog
+
+
+async def test_basic_roundtrip(pair):
+    a, b = pair
+    a.write("notes/hello.md", "# hi")
+    a.write("big.bin", os.urandom(300_000))
+    await a.vault.sync()
+    rep = await b.vault.sync()
+    assert b.read("notes/hello.md") == b"# hi"
+    assert b.read("big.bin") == a.read("big.bin")
+    assert sorted(rep.written) == ["big.bin", "notes/hello.md"]
+
+
+async def test_small_files_are_batched(pair, channel):
+    a, b = pair
+    for i in range(50):
+        a.write(f"n/{i}.md", f"note {i}")
+    before = channel.sent
+    await a.vault.sync()
+    assert channel.sent - before == 1  # 50 notes -> one Telegram message
+
+
+async def test_chunked_large_file(pair, channel):
+    a, b = pair
+    data = os.urandom(1_000_000)
+    a.write("movie.bin", data)
+    await a.vault.sync(chunk_size=300_000)
+    kinds = [k for k, _ in channel.messages.values()]
+    assert kinds.count(oplog.KIND_CHUNK) == 4
+    await b.vault.sync()
+    assert b.read("movie.bin") == data
+
+
+async def test_server_sees_only_ciphertext(pair, channel):
+    a, b = pair
+    a.write("secret-plans.md", "TOP SECRET LAUNCH CODES")
+    await a.vault.sync()
+    blob = b"".join(d for k, d in channel.messages.values() if k != oplog.KIND_DESCRIPTOR)
+    assert b"TOP SECRET" not in blob and b"secret-plans" not in blob
+
+
+async def test_edit_and_delete_propagate(pair):
+    a, b = pair
+    a.write("x.md", "v1")
+    await a.vault.sync(); await b.vault.sync()
+    b.write("x.md", "v2")
+    await b.vault.sync(); await a.vault.sync()
+    assert a.read("x.md") == b"v2"
+    (a.root / "x.md").unlink()
+    await a.vault.sync(); await b.vault.sync()
+    assert not b.exists("x.md")
+
+
+async def test_concurrent_edit_makes_conflict_copy(pair):
+    a, b = pair
+    a.write("x.md", "base")
+    await a.vault.sync(); await b.vault.sync()
+    a.write("x.md", "alice edit")
+    b.write("x.md", "bob edit")
+    await a.vault.sync()          # alice lands first
+    await b.vault.sync()          # bob's edit becomes a conflict copy
+    await a.vault.sync()
+    assert a.files() == b.files()
+    assert a.read("x.md") == b.read("x.md") == b"alice edit"
+    conflict = [f for f in a.files() if "conflict" in f]
+    assert len(conflict) == 1
+    assert a.read(conflict[0]) == b.read(conflict[0]) == b"bob edit"
+
+
+async def test_edit_beats_delete(pair):
+    a, b = pair
+    a.write("x.md", "base")
+    await a.vault.sync(); await b.vault.sync()
+    (a.root / "x.md").unlink()
+    b.write("x.md", "bob kept working")
+    await a.vault.sync()
+    await b.vault.sync()
+    await a.vault.sync()
+    assert a.read("x.md") == b"bob kept working" == b.read("x.md")
+
+
+async def test_tampered_record_is_rejected_not_applied(pair, channel):
+    a, b = pair
+    a.write("x.md", "hello")
+    await a.vault.sync()
+    mid = max(i for i, (k, _) in channel.messages.items() if k == oplog.KIND_RECORD)
+    k, d = channel.messages[mid]
+    channel.messages[mid] = (k, d[:-1] + bytes([d[-1] ^ 1]))
+    rep = await b.vault.sync()
+    assert not b.exists("x.md")
+    assert any("unreadable" in p for p in rep.problems)
+
+
+async def test_replayed_record_ignored(pair, channel):
+    a, b = pair
+    a.write("x.md", "hello")
+    await a.vault.sync()
+    mid = max(i for i, (k, _) in channel.messages.items() if k == oplog.KIND_RECORD)
+    channel.messages[channel.next_id] = channel.messages[mid]
+    channel.next_id += 1
+    rep = await b.vault.sync()
+    assert b.read("x.md") == b"hello"
+    assert any("replayed" in p for p in rep.problems)
+
+
+async def test_unsafe_paths_from_peer_are_ignored(pair):
+    a, b = pair
+    v = a.vault
+    rec = oplog.Record(a.ident.id, 1, 0, [
+        {"op": "put", "path": "../../evil", "sha": "0" * 64, "size": 0, "base": None, "blob": {"inline": [0, 0], "file_id": "x"}},
+        {"op": "put", "path": "C:/Windows/x", "sha": "0" * 64, "size": 0, "base": None, "blob": {"inline": [0, 0], "file_id": "x"}},
+    ])
+    await v.transport.send(oplog.KIND_RECORD, oplog.encode_record(v.keys, rec))
+    await b.vault.sync()
+    assert b.files() == set()
+
+
+async def test_local_edit_not_clobbered_when_offline_changes(pair):
+    a, b = pair
+    a.write("x.md", "1")
+    await a.vault.sync(); await b.vault.sync()
+    a.write("x.md", "2")
+    await a.vault.sync()
+    b.write("x.md", "mine")
+    await b.vault.sync()
+    assert "mine" in "".join(b.read(f).decode() for f in b.files())  # never lost

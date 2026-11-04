@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tgsync"
+version = "0.2.0"
+description = "End-to-end encrypted shared-folder sync (Obsidian-style vaults) using Telegram as the backing store"
+requires-python = ">=3.10"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+dependencies = [
+    "telethon>=1.36",
+    "pyrage>=1.1",
+    "cryptography>=42",
+    "click>=8.1",
+    "platformdirs>=4",
+    "python-socks[asyncio]>=2.4",
+    "pathspec>=0.12",
+    "watchdog>=4",
+    "textual>=0.80",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10"]
+
+[project.scripts]
+tgsync = "tgsync.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tgsync"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "E702", "E731", "B904", "UP037"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
