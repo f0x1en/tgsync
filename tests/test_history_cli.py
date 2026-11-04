@@ -43,9 +43,14 @@ async def test_cli_status_offline(mk, monkeypatch, tmp_path):
 
 
 @needs_git
-async def test_git_history_sees_same_size_same_mtime_versions(mk):
+async def test_git_history_sees_same_size_same_mtime_versions(mk, monkeypatch):
     import os
     import time
+
+    from tgsync import state
+    # Make every scan re-hash (so the sender always notices the edit, however slow the machine);
+    # this test is about the RECEIVER's git history when versions share size and mtime.
+    monkeypatch.setattr(state, "RACY_NS", 10**18)
     now = time.time()
     a, b = mk("alice"), mk("bob")
     a.vault = await Vault.create(a.root, a.ident, a.transport, "alice", use_git=False)
