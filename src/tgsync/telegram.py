@@ -35,6 +35,10 @@ MAX_FLOOD_RETRIES = 6
 _INVITE = re.compile(r"(?:t\.me|telegram\.me)/(?:joinchat/|\+)([\w-]+)")
 
 
+class NotLoggedIn(TransportError):
+    """No usable Telegram session for this profile."""
+
+
 class RateLimiter:
     """Sliding one-minute window plus a minimum gap between calls."""
 
@@ -105,7 +109,7 @@ async def connect(profile: str) -> TelegramClient:
         raise
     if not await client.is_user_authorized():
         await client.disconnect()
-        raise TransportError("Telegram session missing or revoked; run `tgsync login`")
+        raise NotLoggedIn("Telegram session missing or revoked; run `tgsync login`")
     return client
 
 
@@ -146,6 +150,15 @@ async def create_group(client: TelegramClient, title: str) -> tuple[object, str]
     chat = res.chats[0]
     inv = await client(functions.messages.ExportChatInviteRequest(peer=chat))
     return chat, inv.link
+
+
+async def export_invite(client: TelegramClient, entity) -> str:
+    """Create a fresh invite link (needs admin rights in the group)."""
+    try:
+        inv = await client(functions.messages.ExportChatInviteRequest(peer=entity))
+    except errors.RPCError as e:
+        raise TransportError(f"cannot create an invite link ({e}); pass --link with the group's link") from e
+    return inv.link
 
 
 class TelethonTransport:

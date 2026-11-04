@@ -6,12 +6,13 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import oplog, vaultkeys
-from .crypto import KeyRing, fingerprint
+from . import invites, oplog, vaultkeys
+from .crypto import KeyRing, blob_epoch, fingerprint
 from .errors import CryptoError, KeyError_, PathError, TransportError, VaultError
 from .history import History
 from .identity import Identity
@@ -66,10 +67,11 @@ class Vault:
         self.history = History(self.root) if use_git and History.available() else None
         self._sent_seq = 0
         self._cache: dict[int, bytes] = {}
+        self._desc_seen = 0
         self._ignore = load_ignore(self.root)
         for data in self.state.descriptors():
             with contextlib.suppress(CryptoError, KeyError_):
-                d = vaultkeys.accept(data, self.identity, self.keys, self.vault_id)
+                d = vaultkeys.accept(data, self.identity, self.keys, self.vault_id, trusted=True)
                 if d:
                     self.members = d.members
 
@@ -93,8 +95,12 @@ class Vault:
 
     @classmethod
     async def discover(cls, transport: Transport, identity: Identity) -> dict[str, tuple[KeyRing, str]]:
-        """Find vaults in the chat that include us. Returns {vault_id: (ring, fingerprint)}."""
+        """Find vaults in the chat that currently include us. Returns {vault_id: (ring, fingerprint)}.
+
+        Descriptors are replayed in order, so a later one that drops us (we were removed) wins.
+        """
         rings: dict[str, KeyRing] = {}
+        member: dict[str, bool] = {}
         async for m in transport.iter_after(0):
             if m.kind != oplog.KIND_DESCRIPTOR:
                 continue
@@ -102,10 +108,14 @@ class Vault:
                 data = await transport.fetch(m.id)
                 vid = vaultkeys.parse(data)["vault_id"]
                 ring = rings.setdefault(vid, KeyRing())
-                vaultkeys.accept(data, identity, ring, vid)
+                d = vaultkeys.accept(data, identity, ring, vid)
+                member[vid] = d is not None
+                if d is None:  # dropped from the vault: forget old keys; a later re-add is a fresh join
+                    rings[vid] = KeyRing()
             except (CryptoError, KeyError_, TransportError):
                 continue
-        return {vid: (r, fingerprint(r.key(1) if r.has(1) else r.key(r.epochs[0]))) for vid, r in rings.items() if r}
+        return {vid: (r, fingerprint(r.key(1) if r.has(1) else r.key(r.epochs[0])))
+                for vid, r in rings.items() if r and member.get(vid)}
 
     @classmethod
     async def join(cls, root: Path, identity: Identity, transport: Transport, vault_id: str,
@@ -117,8 +127,14 @@ class Vault:
         v.state.set("vault_id", vault_id)
         v.vault_id = vault_id
         await v.pull()
-        if not v.keys:
-            raise VaultError("you are not a member of that vault (ask a member to run `tgsync members add`)")
+        if not v.keys or v.removed:
+            reason = ("you were removed from that vault" if v.removed
+                      else "you are not a member of that vault (ask a member to approve you)")
+            v.close()
+            shutil.rmtree(root / INTERNAL_DIR, ignore_errors=True)
+            with contextlib.suppress(OSError):
+                root.rmdir()  # only succeeds if we created it and it is empty
+            raise VaultError(reason)
         v._init_files()
         return v
 
@@ -158,9 +174,13 @@ class Vault:
         new_desc: list[tuple[int, bytes]] = []
         last = cursor
         blocked = False  # saw records we could not read yet; freeze the cursor before them
+        fresh = self.state.get("active") != "1"  # this vault has never been synced to disk
         try:
             async for msg in self.transport.iter_after(cursor):
                 if msg.kind == oplog.KIND_DESCRIPTOR:
+                    if msg.id <= self._desc_seen:
+                        continue  # already handled in an earlier pass of this run
+                    self._desc_seen = msg.id
                     data = await self.transport.fetch(msg.id)
                     try:
                         d = vaultkeys.accept(data, self.identity, self.keys, self.vault_id)
@@ -168,7 +188,9 @@ class Vault:
                         self._problem(rep, msg.id, f"rejected descriptor: {err}")
                     else:
                         if d is None:
-                            if self.keys:
+                            if self.keys and fresh:  # never used this vault yet: a later re-add is a fresh join
+                                self.keys, self.members = KeyRing(), []
+                            elif self.keys:
                                 self.removed = True
                                 self.state.set("removed", "1")
                         else:
@@ -185,6 +207,13 @@ class Vault:
                         try:
                             rec = oplog.decode_record(self.keys, data)
                         except CryptoError as err:
+                            try:
+                                missing = not self.keys.has(blob_epoch(data))
+                            except CryptoError:
+                                missing = False
+                            if missing:  # written under a key epoch we do not hold yet
+                                blocked = True
+                                continue
                             self._problem(rep, msg.id, f"unreadable record: {err}")
                         else:
                             prev = authors.get(rec.author, 0)
@@ -409,6 +438,7 @@ class Vault:
                 rep.deleted.append(path)
                 self._prune_empty(dest.parent)
             self.state.del_synced(path)
+        self.state.set("active", "1")
         self.state.commit()
 
     def _prune_empty(self, d: Path) -> None:
@@ -495,6 +525,29 @@ class Vault:
         data, _ = vaultkeys.add_member(self.keys, self._vid(), self.members, vaultkeys.Member(recipient, name))
         await self.transport.send(oplog.KIND_DESCRIPTOR, data)
         await self.pull()
+
+    @staticmethod
+    async def post_join_request(transport: Transport, ident: Identity, vault_id: str, name: str) -> None:
+        await transport.send(invites.KIND_JOIN, invites.encode_request(vault_id, ident, name))
+
+    async def pending_requests(self) -> list[invites.JoinRequest]:
+        """Join requests for this vault from people who are not members yet (latest per key)."""
+        await self.pull()
+        have = {m.recipient for m in self.members}
+        found: dict[str, invites.JoinRequest] = {}
+        async for m in self.transport.iter_after(0):
+            if m.kind != invites.KIND_JOIN:
+                continue
+            try:
+                req = invites.decode_request(await self.transport.fetch(m.id), m.id)
+            except TransportError:
+                continue
+            if req and req.vault_id == self.vault_id and req.recipient not in have:
+                found[req.recipient] = req
+        return sorted(found.values(), key=lambda r: r.msg_id)
+
+    async def accept_request(self, req: invites.JoinRequest, name: str | None = None) -> None:
+        await self.add_member(req.recipient, name or req.name)
 
     async def remove_member(self, target: str) -> None:
         await self.pull()

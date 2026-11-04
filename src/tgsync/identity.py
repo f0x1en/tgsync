@@ -6,6 +6,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,10 +17,58 @@ import pyrage
 from .errors import KeyError_
 
 
-def app_dir(profile: str = "default") -> Path:
+def root_dir() -> Path:
     base = os.environ.get("TGSYNC_HOME")
     d = Path(base) if base else Path(platformdirs.user_config_dir("tgsync", appauthor=False))
-    d = d / profile
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+_PROFILE_OK = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def check_profile_name(name: str) -> str:
+    if not _PROFILE_OK.match(name):
+        raise KeyError_("profile names may only use letters, digits, '_' and '-' (max 32)")
+    return name
+
+
+def list_profiles() -> list[str]:
+    root = root_dir()
+    return sorted(p.name for p in root.iterdir()
+                  if p.is_dir() and ((p / "identity.age-key").exists() or (p / "telegram.json").exists()))
+
+
+def current_profile() -> str:
+    """Env TGSYNC_PROFILE, else the one set by `tgsync profile use`, else 'default'."""
+    env = os.environ.get("TGSYNC_PROFILE")
+    if env:
+        return check_profile_name(env)
+    f = root_dir() / "current-profile"
+    if f.exists():
+        name = f.read_text().strip()
+        if name and (root_dir() / name).is_dir():
+            return name
+    return "default"
+
+
+def set_current_profile(name: str) -> None:
+    check_profile_name(name)
+    (root_dir() / "current-profile").write_text(name + "\n")
+
+
+def delete_profile(name: str) -> None:
+    check_profile_name(name)
+    d = root_dir() / name
+    if d.is_dir():
+        shutil.rmtree(d)
+    f = root_dir() / "current-profile"
+    if f.exists() and f.read_text().strip() == name:
+        f.unlink()
+
+
+def app_dir(profile: str = "default") -> Path:
+    d = root_dir() / check_profile_name(profile)
     d.mkdir(parents=True, exist_ok=True)
     _private(d, directory=True)
     return d

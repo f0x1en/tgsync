@@ -44,40 +44,51 @@ No background process exists unless you start `tgsync watch` yourself. Commands 
 current folder (or `-C <folder>`). If two people change the same note, nothing is lost: the
 later one is kept as `note (conflict ...).md` next to it.
 
-## Setup (each person)
+## Setup
 
+Install (each person):
 ```bash
 git clone https://github.com/f0x1en/tgsync && cd tgsync
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -e .                                         # or: uv pip install -e .
-tgsync keys init              # prints your public key
-tgsync login                  # needs an api_id/api_hash pair (see below)
-# behind a firewall? add --proxy socks5://127.0.0.1:10808 (saved; used by every later command)
-```
-
-**First person**
-```bash
-tgsync vault create ~/vaults/team --new-group "team vault" --name alice
-# prints a group invite link and the key fingerprint
-tgsync members add age1... --name bob      # bob's public key
-```
-**Everyone else** (send your `tgsync keys show` output to a member first):
-```bash
-tgsync vault join ~/vaults/team --chat https://t.me/+xxxx
-# compare the fingerprint with alice's over a channel you trust (call, Signal, in person)
-tgsync watch -C ~/vaults/team       # or just `tgsync sync` when you want
+pip install -e .
 ```
 
 **api_id / api_hash:** one person creates the pair once at https://my.telegram.org -> *API
-development tools* and shares it with the team privately. It identifies the *app*, not anyone's
-account, so everyone can log in with the same pair and skip that website (and its aggressive
-"too many attempts" limits): `tgsync login --api-id 123 --api-hash abc...` (or set
-`TGSYNC_API_ID` / `TGSYNC_API_HASH`). Don't publish it. Telegram can rate-limit an app id that
-is abused, which would affect everyone using it.
+development tools* and shares it with the team privately (it identifies the *app*, not anyone's
+account; don't publish it). The owner can put it into the invite with `tgsync invite --include-api`
+so friends never have to touch that website. Behind a firewall? add `--proxy socks5://127.0.0.1:10808`
+once (it is saved).
 
-Remove someone: `tgsync members remove bob`. The key rotates, so they can't read anything new.
-Kicking them from the Telegram group is optional (they only see ciphertext); they keep whatever
-they had already synced.
+**First person (owner)**
+```bash
+tgsync vault create ~/vaults/team --new-group "team vault"
+# creates your key, logs you in (phone + code), makes the group, prints an invite code
+```
+
+**Inviting a friend**
+1. Owner: `tgsync invite` -> send the printed `tgsync join tgsync1-...` line to the friend.
+2. Friend: run that line. It creates their key, logs them into Telegram, joins the group and
+   shows a short code like `f17d-13fd`; they read it to the owner.
+3. Owner: `tgsync members pending` (check the code matches), then `tgsync members accept`.
+4. Friend: run the same `tgsync join ...` line again; the vault downloads.
+
+The invite code carries the vault's key fingerprint, so the join is checked automatically.
+A join request alone grants nothing: only an owner/member approving it adds their key.
+
+**Removing someone:** `tgsync members remove bob`. The key rotates, so they can't read anything
+new. Kicking them from the Telegram group is optional (they only see ciphertext); they keep what
+they had already synced. If they later ask to join again and you accept, they get everything.
+
+**Several Telegram accounts on one machine** (for testing, or a separate work account): vault
+folders remember their account, so you rarely type anything. When you create or join and have
+more than one, you're asked which to use.
+```bash
+tgsync profile add work      # new key + Telegram login
+tgsync profile list          # who is who  (* = current)
+tgsync profile use work      # default account outside a vault folder
+tgsync whoami -C ~/vaults/team
+tgsync profile remove work   # deletes that key from this machine
+```
 
 ## Security model & limits
 

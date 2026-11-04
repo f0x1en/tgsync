@@ -103,6 +103,7 @@ def accept(
     identity: Identity,
     ring: KeyRing,
     expected_vault_id: str | None,
+    trusted: bool = False,
 ) -> Descriptor | None:
     """Validate a descriptor and merge its keys into `ring`.
 
@@ -139,7 +140,9 @@ def accept(
     proof_epoch = d["proof_epoch"]
     if proof_epoch not in (epoch, epoch - 1):
         raise CryptoError("bad proof epoch")
-    if ring:  # established member: proof must be made with a key we ALREADY trust
+    if trusted:  # already validated when first stored locally (keycheck above still applies)
+        verifier = candidate
+    elif ring:  # established member: proof must be made with a key we ALREADY trust
         if not ring.has(proof_epoch):
             raise CryptoError("descriptor proof uses a key we do not hold")
         verifier = ring
