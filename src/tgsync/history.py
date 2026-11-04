@@ -66,5 +66,30 @@ class History:
             args += ["--", path]
         return self._git(*args).stdout.decode(errors="replace").splitlines()
 
+    def is_commit(self, rev: str) -> bool:
+        return self._git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}", check=False).returncode == 0
+
+    def _rows(self, *args: str) -> list[tuple[str, str, str]]:
+        if self._git("rev-parse", "--verify", "-q", "HEAD", check=False).returncode != 0:
+            return []
+        out = self._git("log", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%h\t%ad\t%s", *args).stdout
+        rows = []
+        for line in out.decode(errors="replace").splitlines():
+            h, d, subj = (line.split("\t", 2) + ["", ""])[:3]
+            rows.append((h, d, subj))
+        return rows
+
+    def recent(self, limit: int = 15) -> list[tuple[str, str, str]]:
+        return self._rows(f"-{limit}")
+
+    def versions(self, path: str, limit: int = 20) -> list[tuple[str, str, str]]:
+        """Snapshots in which `path` changed (newest first)."""
+        return self._rows(f"-{limit}", "--", path)
+
+    def files_in(self, rev: str) -> list[str]:
+        """Files that changed in snapshot `rev` (deletions included)."""
+        out = self._git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", rev).stdout
+        return [x for x in out.decode(errors="replace").splitlines() if x]
+
     def show(self, rev: str, path: str) -> bytes:
         return self._git("show", f"{rev}:{path}").stdout

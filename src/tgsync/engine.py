@@ -36,6 +36,7 @@ def sha256_file(p: Path) -> str:
 @dataclass
 class SyncReport:
     pushed: int = 0
+    pushed_paths: list[str] = field(default_factory=list)
     applied_remote: int = 0
     written: list[str] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
@@ -306,6 +307,7 @@ class Vault:
             rec = oplog.Record(self.identity.id, self._sent_seq, time.time(), batch, bytes(payload))
             await self.transport.send(oplog.KIND_RECORD, oplog.encode_record(self.keys, rec))
             rep.pushed += len(batch)
+            rep.pushed_paths += [e["path"] for e in batch]
             batch, payload = [], bytearray()
 
         for ch in changes:

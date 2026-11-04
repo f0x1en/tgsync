@@ -57,3 +57,69 @@ async def test_git_history_sees_same_size_same_mtime_versions(mk):
         await a.vault.sync()
         await b.vault.sync()
     assert len(History(b.root).log("n.md")) == 3
+
+
+@needs_git
+async def test_restore_flows(mk):
+    a = mk("alice")
+    ident = identity.generate()
+    a.vault = await Vault.create(a.root, ident, a.transport, "alice", use_git=True)
+    for text in ("one", "two", "three"):
+        a.write("n.md", text)
+        await a.vault.sync()
+    a.vault.close()
+    r = CliRunner()
+    h = History(a.root)
+    revs = [row[0] for row in h.versions("n.md")]           # newest first: three, two, one
+    assert len(revs) == 3
+    # 1) explicit path + rev
+    out = r.invoke(cli.main, ["restore", "n.md", revs[2], "-C", str(a.root)])
+    assert out.exit_code == 0, out.output
+    assert a.read("n.md") == b"one"
+    # the version we overwrote is still in history (nothing lost)
+    assert any(h.show(rv, "n.md") == b"three" for rv in revs)
+    # 2) path only -> pick a version (input "2" = second newest of the file)
+    versions = [row[0] for row in h.versions("n.md")]
+    out = r.invoke(cli.main, ["restore", "n.md", "-C", str(a.root)], input="2\n")
+    assert out.exit_code == 0, out.output
+    assert a.read("n.md") == h.show(versions[1], "n.md")
+    # 3) lone argument that is a snapshot id -> pick a file in it
+    out = r.invoke(cli.main, ["restore", revs[0], "-C", str(a.root)], input="1\n")
+    assert out.exit_code == 0, out.output
+    assert "Files in snapshot" in out.output
+    # 4) nothing given -> pick snapshot, then file
+    out = r.invoke(cli.main, ["restore", "-C", str(a.root)], input="1\n1\n")
+    assert out.exit_code == 0, out.output
+    assert "Recent snapshots" in out.output
+    # bad input is a clean error, not a traceback
+    out = r.invoke(cli.main, ["restore", "n.md", "zzzzzzz", "-C", str(a.root)])
+    assert out.exit_code != 0 and "not a snapshot id" in out.output
+
+
+def test_bare_command_outside_a_vault_shows_help(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = CliRunner().invoke(cli.main, [])
+    assert out.exit_code == 0 and "Commands:" in out.output and "New here?" in out.output
+
+
+async def test_bare_command_inside_a_vault_shows_status(mk, monkeypatch):
+    a = mk("alice")
+    identity.init_identity("default")
+    ident = identity.load_identity("default")
+    a.vault = await Vault.create(a.root, ident, a.transport, "alice", use_git=False)
+    cli._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
+    a.write("x.md", "hi")
+    a.vault.close()
+    monkeypatch.chdir(a.root)
+    out = CliRunner().invoke(cli.main, [])
+    assert out.exit_code == 0, out.output
+    assert "M x.md" in out.output and "Next:" in out.output
+
+
+async def test_report_lists_files(pair):
+    a, b = pair
+    a.write("n/one.md", "1")
+    ra = await a.vault.sync()
+    assert "n/one.md" in ra.pushed_paths
+    rb = await b.vault.sync()
+    assert rb.written == ["n/one.md"]

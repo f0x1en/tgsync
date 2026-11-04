@@ -64,8 +64,18 @@ async def _open(vault_dir: Path):
     return v, tr
 
 
+def _lines(sym: str, paths: list[str], limit: int = 15) -> None:
+    for p in paths[:limit]:
+        click.echo(f"  {sym} {p}")
+    if len(paths) > limit:
+        click.echo(f"  {sym} ... and {len(paths) - limit} more")
+
+
 def _print_report(rep: SyncReport) -> None:
     click.echo(rep.summary())
+    _lines("^", rep.pushed_paths)   # uploaded
+    _lines("v", rep.written)        # downloaded / updated here
+    _lines("x", rep.deleted)        # deleted here
     for a, b in rep.conflicts:
         click.secho(f"  conflict: {a} -> kept both, other copy at {b}", fg="yellow")
     for s in rep.skipped:
@@ -78,10 +88,23 @@ vault_opt = click.option("--vault", "-C", "vault_dir", type=click.Path(file_okay
                          default=".", show_default=True, help="Vault folder.")
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(__version__)
-def main() -> None:
-    """End-to-end encrypted shared folder sync over Telegram."""
+@click.pass_context
+def main(ctx: click.Context) -> None:
+    """End-to-end encrypted shared folder sync over Telegram.
+
+    Run with no command inside a vault folder to see where things stand.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    if _cfg_path(Path.cwd()).exists():
+        ctx.invoke(status, vault_dir=Path.cwd())
+        click.echo("\nNext:  tgsync pull (get others' changes)  |  tgsync push (share yours)  |  "
+                   "tgsync sync (both)  |  tgsync --help")
+    else:
+        click.echo(ctx.get_help())
+        click.echo("\nNew here?  `tgsync join <invite code>`  or  `tgsync vault create ~/vaults/name --new-group \"name\"`")
 
 
 # ---------------------------------------------------------------- account
@@ -691,19 +714,63 @@ def history(path: str | None, vault_dir: Path) -> None:
         click.echo(line)
 
 
+def _pick(title: str, rows: list[str]) -> int:
+    click.echo(title)
+    for i, r in enumerate(rows, 1):
+        click.echo(f"  {i:>2}) {r}")
+    return click.prompt("Which one (number)", type=click.IntRange(1, len(rows)), default=1) - 1
+
+
 @main.command()
-@click.argument("path")
-@click.argument("rev")
+@click.argument("path", required=False)
+@click.argument("rev", required=False)
 @vault_opt
-def restore(path: str, rev: str, vault_dir: Path) -> None:
-    """Restore PATH as of git revision REV (shown by `history`). It syncs like any edit."""
+def restore(path: str | None, rev: str | None, vault_dir: Path) -> None:
+    """Bring back an older version of a file. Leave things out and it asks.
+
+    \b
+    tgsync restore                    pick a snapshot, then a file in it
+    tgsync restore a1b2c3d            pick a file from that snapshot
+    tgsync restore notes/x.md         pick one of that file's older versions
+    tgsync restore notes/x.md a1b2c3d restore exactly that version
+    """
     from .paths import safe_join
 
-    data = History(vault_dir.resolve()).show(rev, path)
-    dest = safe_join(vault_dir.resolve(), path)
+    vault = vault_dir.resolve()
+    h = History(vault)
+    if not (vault / INTERNAL_DIR / "history.git").exists():
+        raise click.ClickException("this vault has no local history yet (run `tgsync sync` first)")
+    if path and rev is None and not (vault / path).exists() and h.is_commit(path):
+        path, rev = None, path  # a lone argument that is a snapshot id means "this snapshot"
+    if rev is not None and not h.is_commit(rev):
+        raise click.ClickException(f"{rev!r} is not a snapshot id; see `tgsync history`")
+    if rev is None and path is None:
+        rows = h.recent()
+        if not rows:
+            raise click.ClickException("no history yet")
+        rev = rows[_pick("Recent snapshots:", [f"{r[0]}  {r[1]}  {r[2]}" for r in rows])][0]
+    if path is None:
+        assert rev is not None
+        files = h.files_in(rev)
+        if not files:
+            raise click.ClickException(f"snapshot {rev} changed no files")
+        path = files[_pick(f"Files in snapshot {rev}:", files)]
+    if rev is None:
+        rows = h.versions(path)
+        if not rows:
+            raise click.ClickException(f"no history for {path!r}")
+        rev = rows[_pick(f"Versions of {path}:", [f"{r[0]}  {r[1]}  {r[2]}" for r in rows])][0]
+    try:
+        data = h.show(rev, path)
+    except TgSyncError:
+        raise click.ClickException(f"{path!r} does not exist in snapshot {rev} (it may have been deleted then; "
+                                   f"try an earlier snapshot)") from None
+    dest = safe_join(vault, path)
+    h.commit(f"before restoring {path}")  # whatever is there now stays recoverable
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
-    click.echo(f"Restored {path} from {rev}; run `tgsync sync` to share it.")
+    click.echo(f"Restored {path} as of {rev}. Your previous version is saved in history. "
+               f"Run `tgsync push` to share it.")
 
 
 @main.command()
