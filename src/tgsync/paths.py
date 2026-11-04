@@ -24,7 +24,7 @@ _RESERVED = {
 _BAD_CHARS = re.compile(r'[<>:"|?*\x00-\x1f\\]')
 MAX_PATH_LEN = 240
 
-DEFAULT_IGNORE = r"""\
+DEFAULT_IGNORE = r"""
 # tgsync ignore rules (gitignore syntax)
 .tgsync/
 .git/
