@@ -354,7 +354,13 @@ class Vault:
                         f.write(data)
             if h.hexdigest() != node.sha:
                 raise CryptoError("content hash mismatch after decryption")
-            os.utime(tmp, (node.mtime, node.mtime))
+            target_ns = int(node.mtime * 1e9)
+            try:  # never leave the exact same (size, mtime) as the previous version: stat-cache
+                if dest.stat().st_mtime_ns == target_ns:  # based tools (git) would miss the change
+                    target_ns += 1_000_000
+            except OSError:
+                pass
+            os.utime(tmp, ns=(target_ns, target_ns))
             os.replace(tmp, dest)
         except BaseException:
             with contextlib.suppress(OSError):
@@ -461,7 +467,20 @@ class Vault:
                 rep.applied_remote += r2.applied_remote
                 rep.conflicts += r2.conflicts
                 rep.problems += r2.problems
+                self._mark_pushed_synced(changes)
             return rep
+
+    def _mark_pushed_synced(self, changes: list[dict]) -> None:
+        """After a push, files whose content is now the accepted tree version count as synced."""
+        for ch in changes:
+            node = self.tree.get(ch["path"])
+            p = self.root / ch["path"]
+            if ch["op"] == "put" and node and p.is_file() and sha256_file(p) == node.sha:
+                st = p.stat()
+                self.state.set_synced(ch["path"], node.sha, st.st_size, st.st_mtime_ns)
+            elif ch["op"] == "delete" and node is None:
+                self.state.del_synced(ch["path"])
+        self.state.commit()
 
     def _check_member(self, rep: SyncReport) -> None:
         if self.removed:

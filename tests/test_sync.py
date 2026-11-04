@@ -176,3 +176,21 @@ async def test_same_size_same_mtime_edit_is_detected(pair):
     await a.vault.sync()
     await b.vault.sync()
     assert b.read("n.md") == b"v2"
+
+
+async def test_push_marks_files_synced(pair):
+    a, b = pair
+    a.write("n.md", "x")
+    await a.vault.push_changes()
+    assert [c for c in a.vault.status()["pending"] if c[1] == "n.md"] == []
+    again = await a.vault.push_changes()
+    assert again.pushed == 0  # nothing re-uploaded
+
+
+async def test_deleted_file_push_marks_synced(pair):
+    a, b = pair
+    a.write("n.md", "x")
+    await a.vault.sync()
+    (a.root / "n.md").unlink()
+    await a.vault.push_changes()
+    assert (await a.vault.push_changes()).pushed == 0

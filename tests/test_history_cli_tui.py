@@ -74,3 +74,20 @@ def test_login_accepts_shared_credentials_without_prompts(monkeypatch):
     assert r.exit_code == 0, r.output
     saved = TelegramCreds.load("default")
     assert (saved.api_id, saved.proxy) == (456, "socks5://h:1")
+
+
+@needs_git
+async def test_git_history_sees_same_size_same_mtime_versions(mk):
+    import os
+    import time
+    now = time.time()
+    a, b = mk("alice"), mk("bob")
+    a.vault = await Vault.create(a.root, a.ident, a.transport, "alice", use_git=False)
+    await a.vault.add_member(b.ident.recipient, "bob")
+    b.vault = await Vault.join(b.root, b.ident, b.transport, a.vault.vault_id, use_git=True)
+    for text in ("v1", "v2", "v3"):
+        a.write("n.md", text)
+        os.utime(a.root / "n.md", (now, now))  # identical (recent) mtime + size each time
+        await a.vault.sync()
+        await b.vault.sync()
+    assert len(History(b.root).log("n.md")) == 3
