@@ -99,7 +99,7 @@ async def connect(profile: str) -> TelegramClient:
         if "locked" in str(e):
             raise TransportError(
                 "Your Telegram session is in use by another tgsync process (a running `tgsync watch` "
-                "or `tui`?). Only one process per Telegram account at a time: stop it, or just let "
+                "or another command?). Only one process per Telegram account at a time: stop it, or just let "
                 "`watch` do the syncing."
             ) from None
         raise

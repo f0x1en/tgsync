@@ -474,15 +474,6 @@ def doctor(vault_dir: Path) -> None:
     sys.exit(0 if ok_all else 1)
 
 
-@main.command()
-@vault_opt
-def tui(vault_dir: Path) -> None:
-    """Interactive terminal UI."""
-    from .tui import run_tui
-
-    run_tui(vault_dir.resolve(), _open)
-
-
 def _guard(fn):
     try:
         return fn()

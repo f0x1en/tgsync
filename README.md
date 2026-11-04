@@ -2,7 +2,7 @@
 
 A shared, end-to-end encrypted folder (works great as an Obsidian vault) that uses a private
 Telegram group as the sync/backup server. Each teammate runs their own copy with their own
-Telegram account. Linux, Windows, macOS; CLI + TUI.
+Telegram account. Linux, Windows, macOS; a small CLI, no GUI: your editor and file manager are the UI.
 
 > Status: alpha. Crypto, sync and conflict logic are covered by automated tests against an
 > in-memory fake of Telegram. The real transport has been exercised by hand against live
@@ -65,7 +65,7 @@ tgsync members add age1... --name bob      # bob's public key
 ```bash
 tgsync vault join ~/vaults/team --chat https://t.me/+xxxx
 # compare the fingerprint with alice's over a channel you trust (call, Signal, in person)
-tgsync watch -C ~/vaults/team       # or `tgsync sync` / `tgsync tui`
+tgsync watch -C ~/vaults/team       # or just `tgsync sync` when you want
 ```
 
 **api_id / api_hash:** one person creates the pair once at https://my.telegram.org -> *API
