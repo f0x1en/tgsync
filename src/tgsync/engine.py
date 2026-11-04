@@ -438,7 +438,7 @@ class Vault:
             await self.materialize(rep)
             if self.history:
                 msg = f"sync: {len(rep.written)} written, {len(rep.deleted)} deleted, {rep.pushed} pushed"
-                rep.committed = self.history.commit(msg)
+                rep.committed = self.history.commit(msg, rep.written)
             return rep
 
     async def pull_changes(self) -> SyncReport:
@@ -450,7 +450,8 @@ class Vault:
                 self.history.commit("local changes before pull")
             await self.materialize(rep)
             if self.history:
-                rep.committed = self.history.commit(f"pull: {len(rep.written)} written, {len(rep.deleted)} deleted")
+                rep.committed = self.history.commit(
+                    f"pull: {len(rep.written)} written, {len(rep.deleted)} deleted", rep.written)
             return rep
 
     async def push_changes(self, chunk_size: int = oplog.DEFAULT_CHUNK) -> SyncReport:

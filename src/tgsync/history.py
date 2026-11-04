@@ -39,9 +39,20 @@ class History:
             exclude.parent.mkdir(exist_ok=True)
             exclude.write_text(f"{INTERNAL_DIR}/\n.git/\n*.tgsync-tmp\n")
 
-    def commit(self, message: str) -> str | None:
-        """Snapshot the vault. Returns short sha, or None if nothing changed."""
+    def commit(self, message: str, force_paths: list[str] | None = None) -> str | None:
+        """Snapshot the vault. Returns short sha, or None if nothing changed.
+
+        `force_paths` are files tgsync itself just rewrote. Those are hashed and staged directly,
+        bypassing git's stat cache, which can miss a same-size rewrite with a similar timestamp
+        (notably on Windows).
+        """
         self._git("add", "-A", "--", ".")
+        for rel in force_paths or []:
+            f = self.vault / rel
+            if not f.is_file():
+                continue
+            sha = self._git("hash-object", "-w", "--", str(f)).stdout.decode().strip()
+            self._git("update-index", "--add", "--cacheinfo", f"100644,{sha},{rel}")
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
             return None
         self._git("commit", "-q", "-m", message)
