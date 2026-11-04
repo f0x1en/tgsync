@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from .tree import Node, Tree
@@ -19,11 +20,18 @@ CREATE TABLE IF NOT EXISTS problems (id INTEGER PRIMARY KEY AUTOINCREMENT, msg_i
 """
 
 
+RACY_NS = 2_000_000_000  # 2 s: covers coarse filesystem timestamps (FAT/NTFS/HFS+)
+
+
 class State:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
+        try:  # migration: when each file was last hashed (for racy-timestamp detection)
+            self.db.execute("ALTER TABLE synced ADD COLUMN observed_ns INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self.db.commit()
 
     def close(self) -> None:
@@ -72,13 +80,18 @@ class State:
 
     # synced
     def synced(self) -> dict[str, tuple[str, int, int]]:
-        return {p: (s, z, m) for p, s, z, m in self.db.execute("SELECT path,sha,size,mtime_ns FROM synced")}
+        # A file whose mtime is within RACY_NS of the moment we hashed it could have been edited again
+        # in the same timestamp tick with the same size; report mtime -1 so callers re-hash it.
+        q = ("SELECT path, sha, size, CASE WHEN observed_ns - mtime_ns > ? THEN mtime_ns ELSE -1 END "
+             "FROM synced")
+        return {p: (s, z, m) for p, s, z, m in self.db.execute(q, (RACY_NS,))}
 
     def set_synced(self, path: str, sha: str, size: int, mtime_ns: int) -> None:
         self.db.execute(
-            "INSERT INTO synced(path,sha,size,mtime_ns) VALUES(?,?,?,?) "
-            "ON CONFLICT(path) DO UPDATE SET sha=excluded.sha,size=excluded.size,mtime_ns=excluded.mtime_ns",
-            (path, sha, size, mtime_ns),
+            "INSERT INTO synced(path,sha,size,mtime_ns,observed_ns) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(path) DO UPDATE SET sha=excluded.sha,size=excluded.size,"
+            "mtime_ns=excluded.mtime_ns,observed_ns=excluded.observed_ns",
+            (path, sha, size, mtime_ns, time.time_ns()),
         )
 
     def del_synced(self, path: str) -> None:

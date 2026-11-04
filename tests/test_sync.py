@@ -163,3 +163,16 @@ async def test_editor_scratch_files_ignored(pair):
     a.write("note.md", "real")
     await a.vault.sync(); await b.vault.sync()
     assert b.files() == {"note.md"}
+
+
+async def test_same_size_same_mtime_edit_is_detected(pair):
+    """Racy-timestamp case: edit lands in the same mtime tick with the same size."""
+    a, b = pair
+    a.write("n.md", "v1")
+    await a.vault.sync()
+    st = (a.root / "n.md").stat()
+    a.write("n.md", "v2")
+    os.utime(a.root / "n.md", ns=(st.st_atime_ns, st.st_mtime_ns))  # identical size + mtime
+    await a.vault.sync()
+    await b.vault.sync()
+    assert b.read("n.md") == b"v2"
