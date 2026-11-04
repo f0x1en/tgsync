@@ -139,11 +139,25 @@ class Vault:
 
     # ------------------------------------------------------------------ pull
     async def pull(self) -> SyncReport:
+        """Replay new log messages in order.
+
+        If records appear before we hold any key (we were added to the vault later), they are not
+        applied and the cursor is NOT advanced past them; once a descriptor gives us keys we
+        rescan from that point so late joiners receive the full history.
+        """
         rep = SyncReport()
+        for _ in range(2):
+            blocked = await self._pull_pass(rep)
+            if not (blocked and self.keys):
+                break
+        return rep
+
+    async def _pull_pass(self, rep: SyncReport) -> bool:
         cursor = self.state.cursor
         authors = self.state.author_seqs()
         new_desc: list[tuple[int, bytes]] = []
         last = cursor
+        blocked = False  # saw records we could not read yet; freeze the cursor before them
         try:
             async for msg in self.transport.iter_after(cursor):
                 if msg.kind == oplog.KIND_DESCRIPTOR:
@@ -161,33 +175,37 @@ class Vault:
                             self.members = d.members
                             new_desc.append((msg.id, data))
                 elif msg.kind == oplog.KIND_RECORD:
-                    if not self.keys or self.removed:
-                        last = msg.id
+                    if self.removed:
+                        pass
+                    elif not self.keys or blocked:
+                        blocked = True
                         continue
-                    data = await self.transport.fetch(msg.id)
-                    try:
-                        rec = oplog.decode_record(self.keys, data)
-                    except CryptoError as err:
-                        self._problem(rep, msg.id, f"unreadable record: {err}")
                     else:
-                        prev = authors.get(rec.author, 0)
-                        if rec.seq <= prev:
-                            self._problem(rep, msg.id, f"replayed/duplicate record from {rec.author[:6]} seq {rec.seq}")
+                        data = await self.transport.fetch(msg.id)
+                        try:
+                            rec = oplog.decode_record(self.keys, data)
+                        except CryptoError as err:
+                            self._problem(rep, msg.id, f"unreadable record: {err}")
                         else:
-                            if rec.seq != prev + 1 and prev:
-                                self._problem(rep, msg.id, f"gap in {rec.author[:6]}'s history: {prev} -> {rec.seq} (message dropped?)")
-                            authors[rec.author] = rec.seq
-                            for ent in rec.entries:
-                                r = self.tree.apply_entry(ent, rec.author, rec.ts, msg.id)
-                                if r is not None and r[0] != "noop":
-                                    rep.applied_remote += 1
-                                if r is not None and r[0] == "conflict":
-                                    rep.conflicts.append((r[1], r[2]))
-                last = msg.id
+                            prev = authors.get(rec.author, 0)
+                            if rec.seq <= prev:
+                                self._problem(rep, msg.id, f"replayed/duplicate record from {rec.author[:6]} seq {rec.seq}")
+                            else:
+                                if rec.seq != prev + 1 and prev:
+                                    self._problem(rep, msg.id, f"gap in {rec.author[:6]}'s history: {prev} -> {rec.seq} (message dropped?)")
+                                authors[rec.author] = rec.seq
+                                for ent in rec.entries:
+                                    r = self.tree.apply_entry(ent, rec.author, rec.ts, msg.id)
+                                    if r is not None and r[0] != "noop":
+                                        rep.applied_remote += 1
+                                    if r is not None and r[0] == "conflict":
+                                        rep.conflicts.append((r[1], r[2]))
+                if not blocked:
+                    last = msg.id
         finally:
             self.state.save_tree(self.tree, last, authors, new_desc)
         self._sent_seq = max(self._sent_seq, authors.get(self.identity.id, 0))
-        return rep
+        return blocked
 
     def _problem(self, rep: SyncReport, msg_id: int, what: str) -> None:
         rep.problems.append(f"msg {msg_id}: {what}")

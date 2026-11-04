@@ -75,15 +75,25 @@ def main() -> None:
 @main.command()
 @click.option("--profile", default="default", show_default=True)
 @click.option("--proxy", help="e.g. socks5://127.0.0.1:10808 (saved for all later commands). Use 'none' to clear.")
-def login(profile: str, proxy: str | None) -> None:
+@click.option("--api-id", type=int, envvar="TGSYNC_API_ID", help="Telegram app id (a teammate can share theirs).")
+@click.option("--api-hash", envvar="TGSYNC_API_HASH", help="Telegram app hash (shared the same way).")
+def login(profile: str, proxy: str | None, api_id: int | None, api_hash: str | None) -> None:
     """Log in to Telegram with your own account (api_id/api_hash from my.telegram.org)."""
     from .telegram import interactive_login, parse_proxy
 
-    try:
-        creds = TelegramCreds.load(profile)
-    except TgSyncError:
-        click.echo("Get api_id / api_hash at https://my.telegram.org -> API development tools")
-        creds = TelegramCreds(click.prompt("api_id", type=int), click.prompt("api_hash").strip())
+    if api_id and api_hash:
+        creds = TelegramCreds(api_id, api_hash.strip())
+        try:  # keep a previously saved proxy unless a new one is given
+            creds.proxy = TelegramCreds.load(profile).proxy
+        except TgSyncError:
+            pass
+    else:
+        try:
+            creds = TelegramCreds.load(profile)
+        except TgSyncError:
+            click.echo("Ask a teammate for their api_id/api_hash (the same pair works for everyone),\n"
+                       "or create one at https://my.telegram.org -> API development tools")
+            creds = TelegramCreds(click.prompt("api_id", type=int), click.prompt("api_hash").strip())
     if proxy is not None:
         creds.proxy = None if proxy.lower() == "none" else proxy
     try:
@@ -99,6 +109,32 @@ def login(profile: str, proxy: str | None) -> None:
         raise click.Abort()
     except Exception as e:
         raise click.ClickException(f"{type(e).__name__}: {e} (is your proxy running? try --proxy socks5://127.0.0.1:10808)") from e
+
+
+@main.command()
+@click.option("--profile", default=None, help="Profile name (default: the one saved in the vault, else 'default').")
+@click.option("--vault", "-C", "vault_dir", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Look up the profile that this vault folder uses.")
+def whoami(profile: str | None, vault_dir: Path | None) -> None:
+    """Show which profile / Telegram account you are acting as."""
+    from .telegram import connect
+
+    if vault_dir is not None and profile is None:
+        profile = _load_cfg(vault_dir).get("profile", "default")
+    profile = profile or "default"
+
+    async def go():
+        ident = load_identity(profile)
+        creds = TelegramCreds.load(profile)
+        click.echo(f"profile:   {profile}")
+        click.echo(f"public key: {ident.recipient}")
+        click.echo(f"proxy:     {creds.proxy or '(none)'}")
+        client = await connect(profile)
+        me = await client.get_me()
+        await client.disconnect()
+        click.echo(f"telegram:  {me.first_name or ''} {me.last_name or ''}  id {me.id}  phone +{me.phone}")
+
+    _guard(lambda: run(go()))
 
 
 @main.group()
@@ -248,12 +284,12 @@ def members_add(recipient: str, name: str, vault_dir: Path) -> None:
 @click.confirmation_option(prompt="Rotate the vault key and cut this member off from new data?")
 @vault_opt
 def members_remove(who: str, vault_dir: Path) -> None:
-    """Remove a member (by name, id or key). Also remove them from the Telegram group."""
+    """Remove a member (by name, id or key) and rotate the vault key."""
 
     async def go():
         v, tr = await _open(vault_dir)
         await v.remove_member(who)
-        click.echo(f"Removed. Now on key epoch {v.keys.current_epoch}. Remember to kick them from the group.")
+        click.echo(f"Removed. Now on key epoch {v.keys.current_epoch}; they cannot read anything new. (Kicking them from the group is optional.)")
         await tr.close()
 
     _guard(lambda: run(go()))

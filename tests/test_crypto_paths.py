@@ -98,3 +98,14 @@ async def test_rate_limiter_window():
     import asyncio
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(rl.wait(), 0.3)  # third call must block ~60s
+
+
+def test_join_result_shapes():
+    from types import SimpleNamespace as NS
+
+    from tgsync.telegram import chat_from_join_result
+    chat = object()
+    assert chat_from_join_result(NS(chats=[chat])) is chat                     # old: Updates
+    assert chat_from_join_result(NS(updates=NS(chats=[chat]))) is chat         # new: ...JoinResultOk
+    with pytest.raises(TransportError):
+        chat_from_join_result(NS(updates=NS(chats=[])))                        # needs admin approval

@@ -50,3 +50,23 @@ async def test_forged_descriptor_from_outsider_rejected(mk, pair, channel):
     rep = await b.vault.sync()
     assert any("rejected descriptor" in p for p in rep.problems)
     assert b.vault.keys.key(1) == a.vault.keys.key(1)
+
+
+async def test_late_joiner_receives_history_from_before_they_were_added(mk):
+    a, c = mk("alice"), mk("carol")
+    a.vault = await Vault.create(a.root, a.ident, a.transport, "alice", use_git=False)
+    a.write("old/one.md", "written before carol existed")
+    a.write("two.md", "also old")
+    await a.vault.sync()
+    a.write("two.md", "edited once more")
+    await a.vault.sync()
+    await a.vault.add_member(c.ident.recipient, "carol")
+    a.write("three.md", "after")
+    await a.vault.sync()
+    c.vault = await Vault.join(c.root, c.ident, c.transport, a.vault.vault_id, use_git=False)
+    rep = await c.vault.sync()
+    assert c.files() == a.files() == {"old/one.md", "two.md", "three.md"}
+    assert c.read("two.md") == b"edited once more"
+    assert not rep.problems
+    # and a second pull after catching up is a no-op, not a replay
+    assert (await c.vault.sync()).problems == []

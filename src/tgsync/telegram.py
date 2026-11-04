@@ -109,6 +109,18 @@ async def connect(profile: str) -> TelegramClient:
     return client
 
 
+def chat_from_join_result(res):
+    """Newer Telegram layers wrap the Updates in ChatInviteJoinResultOk; older return Updates."""
+    updates = getattr(res, "updates", res)
+    chats = getattr(updates, "chats", None)
+    if not chats:
+        raise TransportError(
+            "Joined, but Telegram did not return the chat (the group may require admin approval "
+            "to join). Ask an admin to approve you, then run the command again."
+        )
+    return chats[0]
+
+
 async def resolve_chat(client: TelegramClient, ref: str):
     """Accepts an invite link, @username, or numeric peer id."""
     m = _INVITE.search(ref)
@@ -118,7 +130,7 @@ async def resolve_chat(client: TelegramClient, ref: str):
         if isinstance(info, types.ChatInviteAlready):
             return info.chat
         res = await client(functions.messages.ImportChatInviteRequest(h))
-        return res.chats[0]
+        return chat_from_join_result(res)
     try:
         return await client.get_entity(int(ref))
     except ValueError:

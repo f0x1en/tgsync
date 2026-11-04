@@ -32,7 +32,7 @@ git clone https://github.com/f0x1en/tgsync && cd tgsync
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .                                         # or: uv pip install -e .
 tgsync keys init              # prints your public key
-tgsync login                  # needs api_id/api_hash from https://my.telegram.org
+tgsync login                  # needs an api_id/api_hash pair (see below)
 # behind a firewall? add --proxy socks5://127.0.0.1:10808 (saved; used by every later command)
 ```
 
@@ -49,7 +49,16 @@ tgsync vault join ~/vaults/team --chat https://t.me/+xxxx
 tgsync watch -C ~/vaults/team       # or `tgsync sync` / `tgsync tui`
 ```
 
-Remove someone: `tgsync members remove bob`, then kick them from the group.
+**api_id / api_hash:** one person creates the pair once at https://my.telegram.org -> *API
+development tools* and shares it with the team privately. It identifies the *app*, not anyone's
+account, so everyone can log in with the same pair and skip that website (and its aggressive
+"too many attempts" limits): `tgsync login --api-id 123 --api-hash abc...` (or set
+`TGSYNC_API_ID` / `TGSYNC_API_HASH`). Don't publish it. Telegram can rate-limit an app id that
+is abused, which would affect everyone using it.
+
+Remove someone: `tgsync members remove bob`. The key rotates, so they can't read anything new.
+Kicking them from the Telegram group is optional (they only see ciphertext); they keep whatever
+they had already synced.
 
 ## Security model & limits
 

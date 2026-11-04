@@ -55,3 +55,22 @@ async def test_tui_mounts(mk):
         await pilot.pause()
         text = "\n".join(str(line.text) for line in app.query_one("#log").lines)
         assert "vault" in text and "members" in text
+
+
+def test_login_accepts_shared_credentials_without_prompts(monkeypatch):
+    from tgsync import telegram
+    from tgsync.identity import TelegramCreds
+
+    async def fake_login(profile, creds):
+        return "tester"
+
+    monkeypatch.setattr(telegram, "interactive_login", fake_login)
+    r = CliRunner().invoke(cli.main, ["login", "--api-id", "123", "--api-hash", "abc", "--proxy", "socks5://h:1"])
+    assert r.exit_code == 0, r.output
+    saved = TelegramCreds.load("default")
+    assert (saved.api_id, saved.api_hash, saved.proxy) == (123, "abc", "socks5://h:1")
+    # re-running with new creds but no --proxy keeps the saved proxy
+    r = CliRunner().invoke(cli.main, ["login"], env={"TGSYNC_API_ID": "456", "TGSYNC_API_HASH": "def"})
+    assert r.exit_code == 0, r.output
+    saved = TelegramCreds.load("default")
+    assert (saved.api_id, saved.proxy) == (456, "socks5://h:1")
