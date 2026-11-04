@@ -435,6 +435,40 @@ class Vault:
                 rep.committed = self.history.commit(msg)
             return rep
 
+    async def pull_changes(self) -> SyncReport:
+        """Download and apply others' changes only (like `git pull`); uploads nothing."""
+        with VaultLock(self.meta / "lock"):
+            rep = await self.pull()
+            self._check_member(rep)
+            if self.history:
+                self.history.commit("local changes before pull")
+            await self.materialize(rep)
+            if self.history:
+                rep.committed = self.history.commit(f"pull: {len(rep.written)} written, {len(rep.deleted)} deleted")
+            return rep
+
+    async def push_changes(self, chunk_size: int = oplog.DEFAULT_CHUNK) -> SyncReport:
+        """Upload your local changes only (like `git push`); does not touch your files."""
+        with VaultLock(self.meta / "lock"):
+            if self.history:
+                self.history.commit("local changes before push")
+            rep = await self.pull()  # log only: needed to know the vault state, writes no files
+            self._check_member(rep)
+            changes = self.scan_local(rep)
+            if changes:
+                await self.push(changes, rep, chunk_size)
+                r2 = await self.pull()
+                rep.applied_remote += r2.applied_remote
+                rep.conflicts += r2.conflicts
+                rep.problems += r2.problems
+            return rep
+
+    def _check_member(self, rep: SyncReport) -> None:
+        if self.removed:
+            raise VaultError("you were removed from this vault; local files are left untouched")
+        if not self.keys:
+            raise VaultError("no vault keys; are you a member?")
+
     # --------------------------------------------------------------- members
     async def add_member(self, recipient: str, name: str = "") -> None:
         await self.pull()

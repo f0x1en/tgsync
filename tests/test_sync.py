@@ -128,3 +128,38 @@ async def test_local_edit_not_clobbered_when_offline_changes(pair):
     b.write("x.md", "mine")
     await b.vault.sync()
     assert "mine" in "".join(b.read(f).decode() for f in b.files())  # never lost
+
+
+async def test_pull_only_and_push_only(pair):
+    a, b = pair
+    a.write("n.md", "from alice")
+    rep = await a.vault.push_changes()
+    assert rep.pushed >= 1  # n.md (+ the auto-created .tgsyncignore)
+    assert not b.exists("n.md")            # b has not pulled yet
+    b.write("mine.md", "bob local")
+    rep = await b.vault.pull_changes()     # pull must not upload bob's file
+    assert b.read("n.md") == b"from alice" and rep.pushed == 0
+    await a.vault.pull_changes()
+    assert not a.exists("mine.md")         # bob's file was never pushed
+    await b.vault.push_changes()
+    await a.vault.pull_changes()
+    assert a.read("mine.md") == b"bob local"
+
+
+async def test_push_does_not_modify_local_files(pair):
+    a, b = pair
+    a.write("x.md", "base")
+    await a.vault.sync(); await b.vault.sync()
+    b.write("x.md", "bob v2"); await b.vault.push_changes()
+    a.write("x.md", "alice v2")
+    await a.vault.push_changes()
+    assert a.read("x.md") == b"alice v2"   # push alone never overwrites local files
+
+
+async def test_editor_scratch_files_ignored(pair):
+    a, b = pair
+    for junk in (".note.md.swp", "note.md~", "4913", ".#lock", "#auto#", ".netrwhist"):
+        a.write(junk, "junk")
+    a.write("note.md", "real")
+    await a.vault.sync(); await b.vault.sync()
+    assert b.files() == {"note.md"}

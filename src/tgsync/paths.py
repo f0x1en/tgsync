@@ -32,6 +32,15 @@ DEFAULT_IGNORE = """\
 .DS_Store
 Thumbs.db
 desktop.ini
+# editor scratch files (vim/nvim swap + backup, emacs locks/autosaves, nvim's write probe)
+*.swp
+*.swo
+*.swx
+*~
+.#*
+\#*#
+4913
+.netrwhist
 # Obsidian: per-device UI state churns constantly and conflicts for no reason
 .obsidian/workspace.json
 .obsidian/workspaces.json

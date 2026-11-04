@@ -25,6 +25,25 @@ Telegram account. Linux, Windows, macOS; CLI + TUI.
 * A local git repo (`.tgsync/history.git`, separate from any `.git` of yours) snapshots the
   vault before and after each sync: `tgsync history`, `tgsync restore`.
 
+## Daily use (works like git: nothing runs unless you type a command)
+
+Open your vault folder in any editor (nvim, VS Code, Obsidian...) and just work. Swap/backup
+files from editors are ignored automatically. When you want to share or fetch:
+
+```bash
+cd ~/vaults/team
+tgsync status      # what changed locally (works offline)
+tgsync pull        # download teammates' changes (uploads nothing)
+tgsync push        # upload your changes (never touches your files)
+tgsync sync        # both, in one go
+tgsync history     # local git history of the vault; `tgsync restore <path> <rev>` to undo
+tgsync doctor      # check proxy, login, group access, vault health
+```
+
+No background process exists unless you start `tgsync watch` yourself. Commands act on the
+current folder (or `-C <folder>`). If two people change the same note, nothing is lost: the
+later one is kept as `note (conflict ...).md` next to it.
+
 ## Setup (each person)
 
 ```bash

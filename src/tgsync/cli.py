@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import click
@@ -195,11 +196,16 @@ def vault_create(folder: Path, title: str | None, chat: str | None, name: str, p
         tr = TelethonTransport(client, entity)
         v = await Vault.create(folder, ident, tr, name, use_git=not no_git)
         _save_cfg(folder, {"chat": peer_id(entity), "profile": profile, "git": not no_git})
-        click.echo(f"Vault {v.vault_id} created in {folder}")
-        click.echo(f"Key fingerprint: {fingerprint(v.keys.key(1))}")
-        if link:
-            click.echo(f"Group invite link: {link}")
-        click.echo("Add teammates:  tgsync members add <their age public key> --name <name>")
+        fp = fingerprint(v.keys.key(1))
+        click.echo(f"Vault {v.vault_id} created in {folder}\n")
+        invite = link or "<group invite link>"
+        click.echo("Send your teammates this (the link is private; send the fingerprint over a different "
+                   "channel if you can):")
+        click.echo("  1. pip install it:  git clone https://github.com/f0x1en/tgsync && cd tgsync && pip install -e .")
+        click.echo("  2. tgsync keys init && tgsync login        <- then send YOU the public key it prints")
+        click.echo("You then run:  tgsync members add <their public key> --name <name>")
+        click.echo("They then run:")
+        click.echo(f'  tgsync vault join ~/vaults/{folder.name} --chat {invite} --fingerprint "{fp}"')
         await tr.close()
 
     _guard(lambda: run(go()))
@@ -310,6 +316,32 @@ def sync(vault_dir: Path) -> None:
 
 
 @main.command()
+@vault_opt
+def pull(vault_dir: Path) -> None:
+    """Download and apply teammates' changes (uploads nothing)."""
+
+    async def go():
+        v, tr = await _open(vault_dir)
+        _print_report(await v.pull_changes())
+        await tr.close()
+
+    _guard(lambda: run(go()))
+
+
+@main.command()
+@vault_opt
+def push(vault_dir: Path) -> None:
+    """Upload your local changes (does not modify your files)."""
+
+    async def go():
+        v, tr = await _open(vault_dir)
+        _print_report(await v.push_changes())
+        await tr.close()
+
+    _guard(lambda: run(go()))
+
+
+@main.command()
 @click.option("--interval", default=30, show_default=True, help="Seconds between remote polls.")
 @vault_opt
 def watch(interval: int, vault_dir: Path) -> None:
@@ -394,6 +426,52 @@ def restore(path: str, rev: str, vault_dir: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
     click.echo(f"Restored {path} from {rev}; run `tgsync sync` to share it.")
+
+
+@main.command()
+@vault_opt
+def doctor(vault_dir: Path) -> None:
+    """Check proxy, login, group access and vault health."""
+    ok_all = True
+
+    def line(ok: bool, what: str, detail: str = "") -> None:
+        nonlocal ok_all
+        ok_all &= ok
+        click.echo(f"  {'OK ' if ok else 'BAD'}  {what}" + (f"  ({detail})" if detail else ""))
+
+    async def go():
+        cfg = _load_cfg(vault_dir)
+        profile = cfg.get("profile", "default")
+        try:
+            ident = load_identity(profile)
+            line(True, "identity", ident.recipient[:16] + "...")
+        except TgSyncError as e:
+            return line(False, "identity", str(e))
+        line(History.available(), "git installed (local history)")
+        try:
+            creds = TelegramCreds.load(profile)
+            line(True, "Telegram credentials", f"proxy: {creds.proxy or 'none'}")
+        except TgSyncError as e:
+            return line(False, "Telegram credentials", str(e))
+        try:
+            v, tr = await _open(vault_dir)
+        except Exception as e:
+            return line(False, "Telegram connect / group access", f"{type(e).__name__}: {e}")
+        line(True, "Telegram connect + group access")
+        try:
+            rep = await v.pull()
+            line(not v.removed and bool(v.keys), "vault membership",
+                 "removed" if v.removed else f"key epoch {v.keys.current_epoch}" if v.keys else "no keys")
+            line(not rep.problems, "log health", f"{len(rep.problems)} problem(s) just now" if rep.problems else "")
+            old = v.state.problems()
+            line(not old, "recorded problems", f"{len(old)} on record, see `tgsync status`" if old else "")
+            line(True, "pending local changes", f"{len(v.scan_local(rep))}")
+        finally:
+            await tr.close()
+
+    _guard(lambda: run(go()))
+    click.echo("all good" if ok_all else "something needs attention")
+    sys.exit(0 if ok_all else 1)
 
 
 @main.command()
