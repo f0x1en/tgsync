@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import click
@@ -11,6 +12,7 @@ from ..crypto import fingerprint
 from ..engine import Vault
 from ..errors import TgSyncError
 from ..invites import Invite, decode_invite, encode_invite, short_code
+from ..paths import INTERNAL_DIR
 from . import common as c
 from .common import main, profile_opt, proxy_opt
 
@@ -82,6 +84,10 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
              proxy: str | None) -> None:
     """Join a vault from an invite code. After they accept you, run plain `tgsync join` again."""
     joins = c._mem().get("joins", {})
+    if code is None and not joins:  # removed from the vault in this folder? its saved invite line asks again
+        here = folder or Path.cwd()
+        if c._cfg_path(here).exists() and c._vault_at(here)[1]:
+            code, folder = c._load_cfg(here).get("code"), here
     if code is None:
         if not joins:
             raise click.ClickException("Paste the invite line your friend sent you, e.g.\n"
@@ -97,14 +103,15 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
     saved = joins.get(inv.vault_id, {})
     if folder is None and saved.get("folder"):
         folder = Path(saved["folder"])
+    if folder is None and c._vault_at(Path.cwd())[0] == inv.vault_id:  # this vault lives here already
+        folder = Path.cwd()
     if folder is None:
         here = Path.cwd()
         default = "." if not any(here.iterdir()) else f"~/vaults/{inv.vault_id[:6]}"
         folder = Path(c.ask("Folder for the vault", "FOLDER", default=default)).expanduser()
-    if c._cfg_path(folder).exists():  # check before touching Telegram
-        if c._vault_id_at(folder) == inv.vault_id:
-            raise click.ClickException(f"You already joined this vault in {c._short(folder)}. To sync:  "
-                                       f"cd {c._short(folder)} && tgsync")
+    vid, _ = c._vault_at(folder)
+    same = c._cfg_path(folder).exists() and vid == inv.vault_id  # this vault is already here: back in?
+    if c._cfg_path(folder).exists() and not same:  # check before touching Telegram
         raise click.ClickException(f"{c._short(folder)} already holds a different tgsync vault. "
                                    f"Pick an empty or new folder, e.g.:\n"
                                    f"  tgsync join <invite line> ~/vaults/{inv.vault_id[:6]}")
@@ -114,6 +121,17 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
         ident, client = await c._ensure_ready(profile, inv.api, proxy)
         tr, chat_id = await c._transport(client, inv.link)
         try:
+            rejoin = False
+            if same:  # catch up first: this folder may not know yet that we were removed
+                old = Vault(folder, ident, tr, use_git=False)
+                try:
+                    await old.pull()
+                    rejoin = old.removed
+                finally:
+                    old.close()
+                if not rejoin:
+                    raise click.ClickException(f"You already joined this vault in {c._short(folder)}. To sync:  "
+                                               f"cd {c._short(folder)} && tgsync")
             found = await Vault.discover(tr, ident)
             if inv.vault_id not in found:
                 who = name or profile
@@ -134,9 +152,13 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
                 return
             if found[inv.vault_id][1].replace(" ", "") != inv.fingerprint.replace(" ", ""):
                 raise click.ClickException("KEY FINGERPRINT MISMATCH between the invite and the vault - refusing to join")
+            if rejoin:  # start the vault state fresh; the old one is kept next to it, files and history stay
+                db = folder / INTERNAL_DIR / "state.db"
+                db.rename(db.with_name(f"state.db.removed-{int(time.time())}"))
             v = await Vault.join(folder, ident, tr, inv.vault_id, use_git=not no_git)
             v.notify = c._say
-            c._save_cfg(folder, {"chat": chat_id, "profile": profile, "git": not no_git, "invite": inv.link})
+            c._save_cfg(folder, {"chat": chat_id, "profile": profile, "git": not no_git, "invite": inv.link,
+                                 "code": code})
             c._remember_vault(folder)
             m = c._mem()
             if m.get("joins", {}).pop(inv.vault_id, None) is not None:

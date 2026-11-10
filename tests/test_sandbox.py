@@ -40,6 +40,23 @@ def test_two_people_in_the_sandbox(tmp_path):
     out, _ = _tg(sb, "bob", "pull", "-C", str(B))
     assert "hello.md" in out["report"]["written"] and (B / "hello.md").read_text() == "hi bob\n"
 
+    # removed, then asks to come back from the SAME folder with plain `tgsync join`
+    out, rc = _tg(sb, "alice", "remove", "bob", "--yes", "-C", str(A))
+    assert rc == 0, out
+    (A / "while_out.md").write_text("written while bob was out\n")
+    _tg(sb, "alice", "sync", "-C", str(A))
+    out, rc = _tg(sb, "bob", "sync", "-C", str(B))
+    assert rc == 1 and "tgsync join" in out["error"], out
+    out, _ = _tg(sb, "bob", "join", cwd=B)
+    assert out["state"] == "waiting", out
+    _tg(sb, "alice", "accept", out["code"], "-C", str(A))
+    out, _ = _tg(sb, "bob", "join", cwd=B)
+    assert out["state"] == "joined", out
+    assert (B / "while_out.md").read_text() == "written while bob was out\n"
+    assert (B / "hello.md").read_text() == "hi bob\n"
+    assert not out["report"]["conflicts"], out
+    assert list((B / ".tgsync").glob("state.db.removed-*"))   # old state kept, not deleted
+
 
 def test_json_errors_are_json_and_never_ask(tmp_path):
     out, rc = _tg(tmp_path / "sb", "alice", "push", "-C", str(tmp_path))

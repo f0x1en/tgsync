@@ -124,13 +124,14 @@ def _short(p: Path) -> str:
         return str(p)
 
 
-def _vault_id_at(folder: Path) -> str | None:
+def _vault_at(folder: Path) -> tuple[str | None, bool]:
+    """-> (vault id, were we removed from it) for a vault folder; (None, False) if none."""
     db = folder / INTERNAL_DIR / "state.db"
     if not db.exists():
-        return None
+        return None, False
     st = State(db)
     try:
-        return st.get("vault_id")
+        return st.get("vault_id"), st.get("removed") == "1"
     finally:
         st.close()
 

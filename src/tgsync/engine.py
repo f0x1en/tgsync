@@ -467,13 +467,13 @@ class Vault:
     # ------------------------------------------------------------------ sync
     async def sync(self, chunk_size: int = oplog.DEFAULT_CHUNK) -> SyncReport:
         if self.removed:
-            raise VaultError("you were removed from this vault; it can no longer be synced")
+            raise VaultError("you were removed from this vault; it can no longer be synced; to ask to come back, run `tgsync join` in this folder")
         with VaultLock(self.meta / "lock"):
             if self.history:
                 self.history.commit("local changes before sync")
             rep = await self.pull()
             if self.removed:
-                raise VaultError("you were removed from this vault; local files are left untouched")
+                raise VaultError("you were removed from this vault; local files are left untouched; to ask to come back, run `tgsync join` in this folder")
             if not self.keys:
                 raise VaultError("no vault keys; are you a member?")
             changes = self.scan_local(rep)
@@ -533,7 +533,7 @@ class Vault:
 
     def _check_member(self, rep: SyncReport) -> None:
         if self.removed:
-            raise VaultError("you were removed from this vault; local files are left untouched")
+            raise VaultError("you were removed from this vault; local files are left untouched; to ask to come back, run `tgsync join` in this folder")
         if not self.keys:
             raise VaultError("no vault keys; are you a member?")
 

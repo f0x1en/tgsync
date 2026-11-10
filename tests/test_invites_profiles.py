@@ -182,9 +182,14 @@ async def test_plain_join_reuses_remembered_code_and_folder(mk, monkeypatch):
     code = encode_invite(Invite("https://t.me/+x", vid, "ab"))
     cli.common._mem_save({"joins": {vid: {"code": code, "profile": "default", "folder": str(a.root)}}})
 
-    async def boom(*a, **k):
-        raise AssertionError("must not touch Telegram")
+    async def ready(profile, *a, **k):
+        return identity.load_identity(profile), None
 
-    monkeypatch.setattr(cli.common, "_ensure_ready", boom)
-    out = CliRunner().invoke(cli.main, ["join"])  # no code, no folder, no account question
+    async def transport(client, ref):
+        return a.transport, 1
+
+    monkeypatch.setattr(cli.common, "_ensure_ready", ready)
+    monkeypatch.setattr(cli.common, "_transport", transport)
+    # no code, no folder, no account question; still a member, so it says so and changes nothing
+    out = await asyncio.to_thread(CliRunner().invoke, cli.main, ["join"])
     assert out.exit_code != 0 and "already joined this vault" in out.output, out.output
