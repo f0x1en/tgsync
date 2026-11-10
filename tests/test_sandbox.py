@@ -55,6 +55,7 @@ def test_two_people_in_the_sandbox(tmp_path):
     assert (B / "while_out.md").read_text() == "written while bob was out\n"
     assert (B / "hello.md").read_text() == "hi bob\n"
     assert not out["report"]["conflicts"], out
+    assert out["report"]["pushed_paths"] == [], out           # files he already had are not uploaded again
     assert list((B / ".tgsync").glob("state.db.removed-*"))   # old state kept, not deleted
 
 

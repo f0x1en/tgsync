@@ -213,3 +213,20 @@ async def test_big_files_announce_themselves(pair, monkeypatch):
 def test_human_size():
     from tgsync.engine import human_size
     assert human_size(5) == "5 B" and human_size(2048) == "2.0 KB" and human_size(100_000_000) == "95.4 MB"
+
+
+async def test_joining_with_the_same_files_on_disk_uploads_nothing_again(pair, mk):
+    from tgsync.engine import Vault
+    a, _ = pair
+    a.write("same.md", "shared text")
+    a.write("other.md", "alice's version")
+    await a.vault.sync()
+    c = mk("carol")              # e.g. re-joined in her old folder: files are there, state is fresh
+    c.write("same.md", "shared text")
+    c.write("other.md", "carol's own edit")
+    await a.vault.add_member(c.ident.recipient, "carol")
+    c.vault = await Vault.join(c.root, c.ident, c.transport, a.vault.vault_id, use_git=False)
+    rep = await c.vault.sync()
+    assert "same.md" not in rep.pushed_paths          # identical to the vault: not uploaded again
+    assert "other.md" in rep.pushed_paths             # a real difference is still shared, not lost
+    assert c.read("same.md") == b"shared text"

@@ -291,7 +291,8 @@ class Vault:
             except OSError as e:
                 rep.skipped.append(f"{rel}: {e}")
                 continue
-            if prev and prev[0] == sha:
+            node = self.tree.get(rel)
+            if (prev and prev[0] == sha) or (node and node.sha == sha):  # already the vault's version
                 self.state.set_synced(rel, sha, st.st_size, st.st_mtime_ns)
                 continue
             changes.append({"op": "put", "path": rel, "base": prev[0] if prev else None,
