@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import asyncio
+
 import pytest
+from click.testing import CliRunner
 
 from tgsync import cli, identity, invites
 from tgsync.engine import Vault
@@ -134,3 +137,54 @@ async def test_readded_member_gets_all_history_including_while_removed(mk, pair)
     await a.vault.sync()
     await again.sync()
     assert fresh.read("later.md") == b"x"
+
+
+async def _vault_at(mk, name="alice"):
+    a = mk(name)
+    identity.init_identity("default")
+    a.vault = await Vault.create(a.root, identity.load_identity("default"), a.transport, name, use_git=False)
+    cli._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
+    vid = a.vault.vault_id
+    a.vault.close()
+    return a, vid
+
+
+async def test_not_a_vault_error_lists_known_vaults(mk, tmp_path):
+    a, _ = await _vault_at(mk)
+    CliRunner().invoke(cli.main, ["status", "-C", str(a.root)])  # using a vault remembers it
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    out = await asyncio.to_thread(CliRunner().invoke, cli.main, ["push", "-C", str(elsewhere)])
+    assert out.exit_code != 0
+    assert f"cd {a.root.resolve()} && tgsync push" in out.output
+    assert "tgsync join <invite line> ." in out.output and "tgsync new ." in out.output
+
+
+def test_join_without_code_and_nothing_pending_explains():
+    out = CliRunner().invoke(cli.main, ["join"])
+    assert out.exit_code != 0 and "Paste the invite line" in out.output
+
+
+async def test_new_in_existing_vault_fails_before_telegram(mk, monkeypatch):
+    a, _ = await _vault_at(mk)
+
+    async def boom(*a, **k):
+        raise AssertionError("must not touch Telegram")
+
+    monkeypatch.setattr(cli, "_ensure_ready", boom)
+    out = CliRunner().invoke(cli.main, ["new", str(a.root)])
+    assert out.exit_code != 0 and "already a tgsync vault" in out.output
+
+
+async def test_plain_join_reuses_remembered_code_and_folder(mk, monkeypatch):
+    from tgsync.invites import Invite, encode_invite
+    a, vid = await _vault_at(mk)
+    code = encode_invite(Invite("https://t.me/+x", vid, "ab"))
+    cli._mem_save({"joins": {vid: {"code": code, "profile": "default", "folder": str(a.root)}}})
+
+    async def boom(*a, **k):
+        raise AssertionError("must not touch Telegram")
+
+    monkeypatch.setattr(cli, "_ensure_ready", boom)
+    out = CliRunner().invoke(cli.main, ["join"])  # no code, no folder, no account question
+    assert out.exit_code != 0 and "already joined this vault" in out.output, out.output

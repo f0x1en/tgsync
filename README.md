@@ -73,8 +73,9 @@ tgsync new ~/vaults/team
    join request and prints a short code like `f17d-13fd`. They read the code to the owner.
 3. Owner: `tgsync accept f17d-13fd` (typing the code you were told is the confirmation;
    `tgsync members` shows who is waiting).
-4. Friend: whenever they like, however long it takes, run the same `tgsync join ...` line again;
-   the vault downloads.
+4. Friend: whenever they like, however long it takes, run plain `tgsync join`; the vault
+   downloads. (The invite line, account and folder from step 2 are remembered in
+   `~/.config/tgsync/remembered.json`, so nothing needs retyping.)
 
 The invite code carries the vault's key fingerprint, so the join is checked automatically.
 A join request alone grants nothing: only a member accepting it adds their key.

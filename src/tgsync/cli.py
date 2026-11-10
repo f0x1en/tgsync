@@ -31,9 +31,11 @@ from .identity import (
     init_identity,
     list_profiles,
     load_identity,
+    root_dir,
 )
 from .invites import Invite, decode_invite, encode_invite, short_code
 from .paths import INTERNAL_DIR
+from .state import State
 
 
 def run(coro):
@@ -48,10 +50,74 @@ def _cfg_path(vault: Path) -> Path:
 def _load_cfg(vault: Path) -> dict:
     p = _cfg_path(vault)
     if not p.exists():
-        raise click.ClickException(
-            f"{vault.resolve()} is not a tgsync vault. Go into your vault folder, or start one with "
-            "`tgsync new <folder>` / `tgsync join <invite code>`.")
+        raise _not_a_vault(vault)
+    _remember_vault(vault)
     return json.loads(p.read_text())
+
+
+# Things this computer remembers so you don't retype them: your vault folders, and join
+# requests you sent (invite line, account, folder) so a later `tgsync join` needs no arguments.
+def _mem_path() -> Path:
+    return root_dir() / "remembered.json"
+
+
+def _mem() -> dict:
+    try:
+        return json.loads(_mem_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _mem_save(m: dict) -> None:
+    _mem_path().write_text(json.dumps(m, indent=2))
+
+
+def _remember_vault(vault: Path) -> None:
+    m = _mem()
+    path = str(vault.resolve())
+    old = m.get("vaults", [])
+    m["vaults"] = [v for v in old if v != path and _cfg_path(Path(v)).exists()] + [path]
+    if m["vaults"] != old:
+        _mem_save(m)
+
+
+def _known_vaults() -> list[Path]:
+    return [Path(v) for v in _mem().get("vaults", []) if _cfg_path(Path(v)).exists()]
+
+
+def _short(p: Path) -> str:
+    """Path as you would type it: ~/x instead of /home/you/x."""
+    p = p.expanduser().resolve()
+    try:
+        return "~/" + p.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(p)
+
+
+def _vault_id_at(folder: Path) -> str | None:
+    db = folder / INTERNAL_DIR / "state.db"
+    if not db.exists():
+        return None
+    st = State(db)
+    try:
+        return st.get("vault_id")
+    finally:
+        st.close()
+
+
+def _not_a_vault(vault: Path) -> click.ClickException:
+    ctx = click.get_current_context(silent=True)
+    cmd = ctx.info_name if ctx and ctx.info_name not in (None, "main") else "sync"
+    lines = [f"{_short(vault)} is not a tgsync vault."]
+    known = _known_vaults()
+    if known:
+        lines.append("Your vaults on this computer:")
+        lines += [f"  cd {_short(v)} && tgsync {cmd}" for v in known]
+    if _mem().get("joins"):
+        lines.append("You asked to join a vault. When they have accepted you:  tgsync join")
+    lines.append("Join a friend's vault into this folder:  tgsync join <invite line> .")
+    lines.append("Start a new vault in this folder:        tgsync new .")
+    return click.ClickException("\n".join(lines))
 
 
 def _save_cfg(vault: Path, cfg: dict) -> None:
@@ -225,6 +291,9 @@ def main(ctx: click.Context) -> None:
 def new(folder: Path, chat: str | None, name: str, no_git: bool, api_id: int | None, api_hash: str | None,
         profile: str | None, proxy: str | None) -> None:
     """Start a new vault in FOLDER (makes a private Telegram group, key and login as needed)."""
+    if _cfg_path(folder).exists():  # check before making a Telegram group
+        raise click.ClickException(f"{_short(folder)} is already a tgsync vault. To use it:  cd {_short(folder)} && tgsync\n"
+                                   f"To start another vault, pick a new folder:  tgsync new ~/vaults/NAME")
     profile = _choose_profile(profile)
     api = (api_id, api_hash) if api_id and api_hash else None
 
@@ -244,12 +313,17 @@ def new(folder: Path, chat: str | None, name: str, no_git: bool, api_id: int | N
             if link:
                 cfg["invite"] = link
             _save_cfg(folder, cfg)
-            click.echo(f"Vault ready in {folder}")
+            _remember_vault(folder)
+            click.echo(f"Vault ready in {_short(folder)} (Telegram account '{profile}').\n")
+            click.echo(f"  cd {_short(folder)}")
+            click.echo("  tgsync          sync your changes (run it inside the folder)")
             if link:
                 code = encode_invite(Invite(link, v.vault_id, fingerprint(v.keys.key(1))))
                 click.echo("\nTo add a friend, send them this line:\n")
                 click.echo(f"  tgsync join {code}\n")
-                click.echo("They will read a short code back to you; then:  tgsync accept <code>")
+                click.echo("They get a short code like ab12-cd34 and tell it to you. Then, in the vault folder:\n"
+                           "  tgsync accept ab12-cd34\n"
+                           "(`tgsync invite` prints the line again later.)")
             else:
                 click.echo("Make an invite for friends with:  tgsync invite --link <group link>")
         finally:
@@ -259,7 +333,7 @@ def new(folder: Path, chat: str | None, name: str, no_git: bool, api_id: int | N
 
 
 @main.command("join")
-@click.argument("code")
+@click.argument("code", required=False)
 @click.argument("folder", required=False, type=click.Path(file_okay=False, path_type=Path))
 @click.option("--name", help="Name members will see (default: your account name).")
 @click.option("--no-git", is_flag=True)
@@ -267,12 +341,35 @@ def new(folder: Path, chat: str | None, name: str, no_git: bool, api_id: int | N
 @proxy_opt
 def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, profile: str | None,
              proxy: str | None) -> None:
-    """Join a vault from an invite code. Run it again after the owner accepts you."""
+    """Join a vault from an invite code. After they accept you, run plain `tgsync join` again."""
+    joins = _mem().get("joins", {})
+    if code is None:
+        if not joins:
+            raise click.ClickException("Paste the invite line your friend sent you, e.g.\n"
+                                       "  tgsync join tgsync1-...  [FOLDER]")
+        if len(joins) > 1:
+            raise click.ClickException("You are waiting on several vaults; run one of these:\n" + "\n".join(
+                f"  tgsync join {j['code']}" for j in joins.values()))
+        code = next(iter(joins.values()))["code"]
     try:
         inv = decode_invite(code)
     except TgSyncError as e:
         raise click.ClickException(str(e)) from e
-    profile = _choose_profile(profile)
+    saved = joins.get(inv.vault_id, {})
+    if folder is None and saved.get("folder"):
+        folder = Path(saved["folder"])
+    if folder is None:
+        here = Path.cwd()
+        default = "." if not any(here.iterdir()) else f"~/vaults/{inv.vault_id[:6]}"
+        folder = Path(click.prompt("Folder for the vault", default=default)).expanduser()
+    if _cfg_path(folder).exists():  # check before touching Telegram
+        if _vault_id_at(folder) == inv.vault_id:
+            raise click.ClickException(f"You already joined this vault in {_short(folder)}. To sync:  "
+                                       f"cd {_short(folder)} && tgsync")
+        raise click.ClickException(f"{_short(folder)} already holds a different tgsync vault. "
+                                   f"Pick an empty or new folder, e.g.:\n"
+                                   f"  tgsync join <invite line> ~/vaults/{inv.vault_id[:6]}")
+    profile = _choose_profile(profile or saved.get("profile"))
 
     async def go():
         from .telegram import TelethonTransport, peer_id, resolve_chat
@@ -285,19 +382,29 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
             if inv.vault_id not in found:
                 who = name or profile
                 await Vault.post_join_request(tr, ident, inv.vault_id, who)
-                click.echo(f"Join request sent as '{who}'.")
-                click.secho(f"Tell the person who invited you this code: {short_code(ident.recipient)}", bold=True)
-                click.echo("Once they accept it, run this same command again (any time, no hurry).")
+                m = _mem()
+                m.setdefault("joins", {})[inv.vault_id] = {
+                    "code": code, "profile": profile, "folder": str(folder.expanduser().resolve())}
+                _mem_save(m)
+                sc = short_code(ident.recipient)
+                click.echo(f"Join request sent as '{who}'. Files will go in {_short(folder)}.")
+                click.secho(f"Tell the person who invited you this code: {sc}", bold=True)
+                click.echo(f"They run:  tgsync accept {sc}")
+                click.echo("Then you run:  tgsync join     (no need to paste the line again; any time, no hurry)")
                 return
             if found[inv.vault_id][1].replace(" ", "") != inv.fingerprint.replace(" ", ""):
                 raise click.ClickException("KEY FINGERPRINT MISMATCH between the invite and the vault - refusing to join")
-            dest = folder or Path(click.prompt("Folder for the vault",
-                                               default=f"~/vaults/{inv.vault_id[:6]}")).expanduser()
+            dest = folder
             v = await Vault.join(dest, ident, tr, inv.vault_id, use_git=not no_git)
             v.notify = _say
             _save_cfg(dest, {"chat": peer_id(entity), "profile": profile, "git": not no_git, "invite": inv.link})
-            click.echo(f"Joined. Files go in {dest}")
+            _remember_vault(dest)
+            m = _mem()
+            if m.get("joins", {}).pop(inv.vault_id, None) is not None:
+                _mem_save(m)
+            click.echo(f"Joined. Files go in {_short(dest)}")
             _print_report(await v.sync())
+            click.echo(f"\nFrom now on:  cd {_short(dest)} && tgsync")
         finally:
             await tr.close()
 
@@ -378,7 +485,7 @@ def accept(code: str, name: str | None, vault_dir: Path) -> None:
                 raise click.ClickException(f"nobody is waiting with code {code!r} (see `tgsync members`)")
             r = hits[0]
             await v.accept_request(r, name)
-            click.echo(f"Accepted {name or r.name or r.code}. They can run `tgsync join` again now.")
+            click.echo(f"Accepted {name or r.name or r.code}. Tell them to run:  tgsync join")
         finally:
             await tr.close()
 

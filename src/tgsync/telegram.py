@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import re
 import sqlite3
@@ -24,6 +25,9 @@ from . import oplog
 from .errors import TransportError
 from .identity import TelegramCreds, app_dir
 from .transport import Message
+
+# Telethon prints every failed connect/reconnect attempt; tgsync reports one clear error instead.
+logging.getLogger("telethon").setLevel(logging.CRITICAL)
 
 # Telegram does not publish exact limits. Folklore: ~20 messages/minute and ~1/second per chat.
 # Defaults sit just under that; FloodWait handling below is the real safety net, and every
@@ -87,18 +91,34 @@ def make_client(profile: str, creds: TelegramCreds) -> TelegramClient:
                           proxy=parse_proxy(creds.proxy), connection_retries=3, timeout=15)
 
 
+def _unreachable(profile: str, creds: TelegramCreds, e: Exception) -> TransportError:
+    if creds.proxy:
+        return TransportError(
+            f"Can't reach Telegram through the proxy {creds.proxy} ({e}).\n"
+            f"Is the proxy running? Start it and run the same command again.\n"
+            f"(The proxy is saved in {TelegramCreds.path(profile)}.)")
+    return TransportError(f"Can't reach Telegram ({e}). Check your internet, or use a proxy: "
+                          f"add --proxy socks5://127.0.0.1:PORT to `tgsync new` / `tgsync join`.")
+
+
 async def interactive_login(profile: str, creds: TelegramCreds) -> str:
     client = make_client(profile, creds)
-    await client.start()  # prompts for phone, code and 2FA password on the terminal
+    try:
+        await client.start()
+    except ConnectionError as e:
+        raise _unreachable(profile, creds, e) from None  # prompts for phone, code and 2FA password on the terminal
     me = await client.get_me()
     await client.disconnect()
     return f"{me.first_name or ''} (@{me.username or me.id})"
 
 
 async def connect(profile: str) -> TelegramClient:
-    client = make_client(profile, TelegramCreds.load(profile))
+    creds = TelegramCreds.load(profile)
+    client = make_client(profile, creds)
     try:
         await client.connect()
+    except ConnectionError as e:
+        raise _unreachable(profile, creds, e) from None
     except sqlite3.OperationalError as e:
         if "locked" in str(e):
             raise TransportError(

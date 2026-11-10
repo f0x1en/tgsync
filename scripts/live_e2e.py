@@ -85,7 +85,7 @@ def main() -> int:
         print("\n== 2. friend asks to join (cannot read anything yet)")
         out = tg("join", code, str(B), "--profile", a.friend, "--name", "friend")
         c = re.search(r"code: ([0-9a-f]{4}-[0-9a-f]{4})", out)
-        check(bool(c) and "run this same command again" in out, "friend got a short code and is waiting")
+        check(bool(c) and "Then you run:  tgsync join" in out, "friend got a short code and is waiting")
         check(not B.exists() or not files(B), "friend has no files before approval")
         if not c:
             return 1
