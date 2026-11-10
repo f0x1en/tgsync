@@ -65,13 +65,13 @@ def test_creds_use_env_and_keep_proxy(monkeypatch):
     from tgsync.identity import TelegramCreds
     monkeypatch.setenv("TGSYNC_API_ID", "123")
     monkeypatch.setenv("TGSYNC_API_HASH", "abc")
-    c = cli._creds_for("default", "socks5://h:1", None)       # no prompts: env supplies the pair
+    c = cli.common._creds_for("default", "socks5://h:1", None)       # no prompts: env supplies the pair
     assert (c.api_id, c.api_hash, c.proxy) == (123, "abc", "socks5://h:1")
     monkeypatch.setenv("TGSYNC_API_ID", "456")
-    cli._creds_for("default", None, None)
+    cli.common._creds_for("default", None, None)
     saved = TelegramCreds.load("default")
     assert (saved.api_id, saved.proxy) == (456, "socks5://h:1")  # new pair, saved proxy kept
-    assert cli._creds_for("default", "none", None).proxy is None
+    assert cli.common._creds_for("default", "none", None).proxy is None
 
 
 def test_removed_commands_are_gone():
@@ -143,7 +143,7 @@ async def _vault_at(mk, name="alice"):
     a = mk(name)
     identity.init_identity("default")
     a.vault = await Vault.create(a.root, identity.load_identity("default"), a.transport, name, use_git=False)
-    cli._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
+    cli.common._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
     vid = a.vault.vault_id
     a.vault.close()
     return a, vid
@@ -156,7 +156,7 @@ async def test_not_a_vault_error_lists_known_vaults(mk, tmp_path):
     elsewhere.mkdir()
     out = await asyncio.to_thread(CliRunner().invoke, cli.main, ["push", "-C", str(elsewhere)])
     assert out.exit_code != 0
-    assert f"cd {a.root.resolve()} && tgsync push" in out.output
+    assert f"cd {cli.common._short(a.root)} && tgsync push" in out.output
     assert "tgsync join <invite line> ." in out.output and "tgsync new ." in out.output
 
 
@@ -171,7 +171,7 @@ async def test_new_in_existing_vault_fails_before_telegram(mk, monkeypatch):
     async def boom(*a, **k):
         raise AssertionError("must not touch Telegram")
 
-    monkeypatch.setattr(cli, "_ensure_ready", boom)
+    monkeypatch.setattr(cli.common, "_ensure_ready", boom)
     out = CliRunner().invoke(cli.main, ["new", str(a.root)])
     assert out.exit_code != 0 and "already a tgsync vault" in out.output
 
@@ -180,11 +180,11 @@ async def test_plain_join_reuses_remembered_code_and_folder(mk, monkeypatch):
     from tgsync.invites import Invite, encode_invite
     a, vid = await _vault_at(mk)
     code = encode_invite(Invite("https://t.me/+x", vid, "ab"))
-    cli._mem_save({"joins": {vid: {"code": code, "profile": "default", "folder": str(a.root)}}})
+    cli.common._mem_save({"joins": {vid: {"code": code, "profile": "default", "folder": str(a.root)}}})
 
     async def boom(*a, **k):
         raise AssertionError("must not touch Telegram")
 
-    monkeypatch.setattr(cli, "_ensure_ready", boom)
+    monkeypatch.setattr(cli.common, "_ensure_ready", boom)
     out = CliRunner().invoke(cli.main, ["join"])  # no code, no folder, no account question
     assert out.exit_code != 0 and "already joined this vault" in out.output, out.output

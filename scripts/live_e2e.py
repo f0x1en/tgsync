@@ -67,9 +67,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--owner", default="default")
     ap.add_argument("--friend", default="b")
+    ap.add_argument("--keep", type=Path, metavar="DIR",
+                    help="Put the test folders in DIR and keep them (the Telegram group is still deleted).")
     a = ap.parse_args()
 
-    tmp = Path(tempfile.mkdtemp(prefix="tgsync-e2e-"))
+    if a.keep:
+        a.keep.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="tgsync-e2e-", dir=a.keep))
     A, B, B2 = tmp / f"tgsync-e2e-{int(time.time())}", tmp / "friend", tmp / "friend_again"
     chat_id = None
     try:
@@ -181,7 +185,10 @@ def main() -> int:
                 asyncio.run(delete_group(a.owner, chat_id))
             except Exception as e:  # noqa: BLE001
                 print(f"  could not delete the throwaway group (delete it by hand): {e}")
-        shutil.rmtree(tmp, ignore_errors=True)
+        if a.keep:
+            print(f"  kept the test folders in {tmp}")
+        else:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     print(f"\n{'ALL PASSED' if not FAILS else str(len(FAILS)) + ' FAILED'}")
     for f in FAILS:

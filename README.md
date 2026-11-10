@@ -111,10 +111,12 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 
 ```bash
 uv venv && uv pip install -e ".[dev]"      # test/lint environment
-pytest && ruff check src tests && mypy src
+make check                                 # ruff + mypy + pytest
 pipx install --editable .                  # optional: a global `tgsync` that follows your edits
-python scripts/live_e2e.py     # optional: full two-person test on real Telegram (needs two logged-in accounts)
 ```
+Try it offline with two people, no Telegram: `export TGSYNC_SANDBOX=~/tgs TGSYNC_PROFILE=alice`
+(and `bob` in a second terminal). Code map, sandbox walkthrough, `--json` output for scripts and
+plugins: see [HACKING.md](HACKING.md).
 
 ## License
 

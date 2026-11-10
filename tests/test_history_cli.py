@@ -34,7 +34,7 @@ async def test_cli_status_offline(mk, monkeypatch, tmp_path):
     ident = identity.load_identity("default")
     a.ident = ident
     a.vault = await Vault.create(a.root, ident, a.transport, "alice", use_git=False)
-    cli._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
+    cli.common._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
     a.write("x.md", "hi")
     a.vault.close()
     r = CliRunner().invoke(cli.main, ["status", "-C", str(a.root)])
@@ -104,7 +104,7 @@ async def test_restore_flows(mk):
 def test_bare_command_outside_a_vault_shows_help(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     out = CliRunner().invoke(cli.main, [])
-    assert out.exit_code == 0 and "Commands:" in out.output and "New here?" in out.output
+    assert out.exit_code == 0 and "Commands:" in out.output and "tgsync new ." in out.output
 
 
 async def test_bare_command_inside_a_vault_syncs(mk, monkeypatch):
@@ -112,14 +112,14 @@ async def test_bare_command_inside_a_vault_syncs(mk, monkeypatch):
     identity.init_identity("default")
     ident = identity.load_identity("default")
     a.vault = await Vault.create(a.root, ident, a.transport, "alice", use_git=False)
-    cli._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
+    cli.common._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
     a.write("x.md", "hi")
     a.vault.close()
 
     async def fake_open(vault_dir):  # runs inside the CLI's own event loop/thread, like the real one
         return Vault(a.root, ident, a.transport, use_git=False), a.transport
 
-    monkeypatch.setattr(cli, "_open", fake_open)
+    monkeypatch.setattr(cli.common, "_open", fake_open)
     monkeypatch.chdir(a.root)
     # the CLI runs its own event loop, so call it from a worker thread
     import asyncio
@@ -133,7 +133,7 @@ async def test_status_shows_account_and_changes(mk):
     identity.init_identity("default")
     ident = identity.load_identity("default")
     a.vault = await Vault.create(a.root, ident, a.transport, "alice", use_git=False)
-    cli._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
+    cli.common._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
     a.write("x.md", "hi")
     a.vault.close()
     out = CliRunner().invoke(cli.main, ["status", "-C", str(a.root)])

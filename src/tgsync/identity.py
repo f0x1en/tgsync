@@ -18,7 +18,13 @@ from .errors import KeyError_
 
 def root_dir() -> Path:
     base = os.environ.get("TGSYNC_HOME")
-    d = Path(base) if base else Path(platformdirs.user_config_dir("tgsync", appauthor=False))
+    sandbox = os.environ.get("TGSYNC_SANDBOX")
+    if base:
+        d = Path(base)
+    elif sandbox:  # sandbox keys and profiles never mix with your real ones
+        d = Path(sandbox).expanduser() / "config"
+    else:
+        d = Path(platformdirs.user_config_dir("tgsync", appauthor=False))
     d.mkdir(parents=True, exist_ok=True)
     return d
 
