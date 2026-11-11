@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The tgsync command line, on the TypeScript engine. Same commands, output and --json contract
-// as the Python CLI (HACKING.md). Telegram itself comes next; until then only sandbox groups work.
+// as the Python CLI (HACKING.md). Talks to Telegram, or to a sandbox group (TGSYNC_SANDBOX).
 //
 //   tgsync              what changed, yours and others' (same as `tgsync status`)
 //   tgsync pull / push  download others' changes / upload yours
@@ -26,6 +26,11 @@ import {
   newSandboxGroup, sandboxRoot,
 } from "../node/home.ts";
 import { DirTransport, PREFIX } from "../node/sandbox.ts";
+import {
+  NotLoggedIn, TelegramTransport, connect, createGroup, exportInvite, interactiveLogin, loadCreds, parseProxy,
+  resolveChat, saveCreds, type Creds, type LoginPrompts,
+} from "../node/telegram.ts";
+import type { TelegramClient } from "@mtcute/core/client.js";
 
 const VERSION = "0.3.0";
 
@@ -143,35 +148,116 @@ function notAVault(vault: string, cmd = "status"): CliError {
 
 // ------------------------------------------------------------------ Telegram or sandbox
 // Everything that connects goes through here, so commands never care which one they talk to.
-const NO_TELEGRAM = "Telegram is not in the Node CLI yet (only sandbox groups, TGSYNC_SANDBOX). " +
-  "Use the Python `tgsync` for real groups for now.";
+const OPEN: Transport[] = []; // closed when the command ends
 
-function transportFor(ref: string): Transport {
-  if (!isSandboxLink(ref)) throw new CliError(NO_TELEGRAM);
-  if (sandboxRoot() === null) { // its keys live in the sandbox config dir
-    const base = resolve(ref.slice(PREFIX.length), "..", "..");
-    throw new CliError(`This is a sandbox vault. First run:  export TGSYNC_SANDBOX=${base}`);
+async function hidden(question: string): Promise<string> {
+  if (!process.stdin.isTTY || lines) return ask(question, "a terminal");
+  process.stdout.write(`${question}: `);
+  return new Promise((ok, no) => {
+    let buf = "";
+    const onData = (d: Buffer) => {
+      for (const ch of d.toString("utf8")) {
+        if (ch === "\r" || ch === "\n") { done(); ok(buf); return; }
+        if (ch === "\u0003") { done(); no(new CliError("Aborted!")); return; }
+        if (ch === "\u007f" || ch === "\b") buf = buf.slice(0, -1);
+        else buf += ch;
+      }
+    };
+    const done = () => { process.stdin.off("data", onData); process.stdin.setRawMode(false); process.stdin.pause(); echo(); };
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on("data", onData);
+  });
+}
+
+const LOGIN: LoginPrompts = {
+  phone: () => ask("Your phone number (international format, e.g. +491701234567)", "a terminal"),
+  code: () => ask("The login code Telegram just sent you (in the Telegram app)", "a terminal"),
+  password: () => hidden("Your Telegram 2FA password"),
+};
+
+/** Connect; if the Telegram session is missing or revoked, log in again right here (terminal only). */
+async function connectOrRelogin(profile: string): Promise<TelegramClient> {
+  try {
+    return await connect(profile);
+  } catch (e) {
+    if (!(e instanceof NotLoggedIn) || JSON_MODE || !process.stdin.isTTY) throw e;
+    info("Your Telegram session is missing or expired; logging in again.");
+    info("Logged in as " + await interactiveLogin(profile, loadCreds(profile)!, LOGIN));
+    return connect(profile);
   }
-  if (!existsSync(ref.slice(PREFIX.length))) throw new CliError(`sandbox group ${ref.slice(PREFIX.length)} does not exist (was the sandbox deleted?)`);
-  return new DirTransport(ref);
+}
+
+/** The group behind a link, real or sandbox. `tg` is null in the sandbox. */
+async function transportFor(ref: string, tg: TelegramClient | null): Promise<Transport> {
+  let tr: Transport;
+  if (isSandboxLink(ref)) {
+    if (sandboxRoot() === null) { // its keys live in the sandbox config dir
+      const base = resolve(ref.slice(PREFIX.length), "..", "..");
+      throw new CliError(`This is a sandbox vault. First run:  export TGSYNC_SANDBOX=${base}`);
+    }
+    if (!existsSync(ref.slice(PREFIX.length))) throw new CliError(`sandbox group ${ref.slice(PREFIX.length)} does not exist (was the sandbox deleted?)`);
+    tr = new DirTransport(ref);
+  } else {
+    if (!tg) throw new CliError("this vault's group is on Telegram, but TGSYNC_SANDBOX is set; unset it first");
+    const t = new TelegramTransport(tg, await resolveChat(tg, ref));
+    t.log = err;
+    tr = t;
+  }
+  OPEN.push(tr);
+  return tr;
 }
 
 async function openVault(vault: string, cmd: string): Promise<[Vault, Cfg]> {
   const cfg = loadCfg(vault, cmd);
-  const v = await Vault.open(new NodeFiles(resolve(vault)), await loadIdentity(cfg.profile ?? "default"), transportFor(String(cfg.chat)));
+  const profile = cfg.profile ?? "default";
+  const chat = String(cfg.chat);
+  const tg = isSandboxLink(chat) ? null : await connectOrRelogin(profile);
+  const v = await Vault.open(new NodeFiles(resolve(vault)), await loadIdentity(profile), await transportFor(chat, tg));
   v.notify = say;
   return [v, cfg];
 }
 
-/** Make sure the profile has a key (and, for Telegram, a login). */
-async function ensureReady(profile: string): Promise<Identity> {
+/** Load or collect Telegram API credentials for a profile and save them (with the proxy). */
+async function credsFor(profile: string, proxy?: string, api?: [number, string] | null): Promise<Creds> {
+  const saved = loadCreds(profile);
+  if (!api && process.env.TGSYNC_API_ID && process.env.TGSYNC_API_HASH) api = [Number(process.env.TGSYNC_API_ID), process.env.TGSYNC_API_HASH];
+  let creds: Creds;
+  if (api) creds = { api_id: api[0], api_hash: api[1].trim(), proxy: saved?.proxy ?? null };
+  else if (saved) creds = saved;
+  else {
+    if (!JSON_MODE) {
+      echo("Ask a teammate for their api_id/api_hash (the same pair works for everyone),\n" +
+           "or create one at https://my.telegram.org -> API development tools");
+    }
+    const id = Number(await ask("api_id", "--api-id/--api-hash or TGSYNC_API_ID/TGSYNC_API_HASH"));
+    if (!Number.isInteger(id) || id <= 0) throw new CliError("api_id is a number");
+    creds = { api_id: id, api_hash: (await ask("api_hash", "--api-hash")).trim(), proxy: null };
+  }
+  if (proxy !== undefined) creds.proxy = proxy.toLowerCase() === "none" ? null : proxy;
+  parseProxy(creds.proxy); // fails early on a bad proxy
+  saveCreds(profile, creds);
+  return creds;
+}
+
+/** Make sure the profile has a key (and, for Telegram, credentials and a login). Client is null in the sandbox. */
+async function ensureReady(profile: string, api: [number, string] | null, proxy?: string): Promise<[Identity, TelegramClient | null]> {
   let ident: Identity;
   try { ident = await loadIdentity(profile); } catch {
     ident = await initIdentity(profile);
     info(`Created a new key for account '${profile}'.`);
   }
-  if (sandboxRoot() === null) throw new CliError(NO_TELEGRAM);
-  return ident;
+  if (sandboxRoot() !== null) return [ident, null];
+  const creds = await credsFor(profile, proxy, api);
+  try {
+    return [ident, await connect(profile)];
+  } catch (e) {
+    if (!(e instanceof NotLoggedIn)) throw e;
+    if (JSON_MODE) throw new CliError(`Telegram login needed for account '${profile}'; run the same command once in a terminal without --json`);
+    info(`Logging in to Telegram for account '${profile}'...`);
+    info("Logged in as " + await interactiveLogin(profile, creds, LOGIN));
+    return [ident, await connect(profile)];
+  }
 }
 
 /** Pick the account for new/join: explicit > TGSYNC_PROFILE > only one saved > ask > 'default'. */
@@ -227,11 +313,13 @@ const COMMANDS: { [name: string]: Command } = {
           "To start another vault, pick a new folder:  tgsync new ~/vaults/NAME");
       }
       const profile = await chooseProfile(o.profile as string | undefined);
-      const ident = await ensureReady(profile);
+      const api: [number, string] | null = o["api-id"] && o["api-hash"] ? [Number(o["api-id"]), o["api-hash"] as string] : null;
+      const [ident, tg] = await ensureReady(profile, api, o.proxy as string | undefined);
       let chat: string, link: string | null = null;
       if (o.chat) chat = o.chat as string;
-      else chat = link = newSandboxGroup();
-      const tr = transportFor(chat);
+      else if (!tg) chat = link = newSandboxGroup();
+      else chat = link = (await createGroup(tg, basename(resolve(folder)) || "tgsync vault"))[1];
+      const tr = await transportFor(chat, tg); // the group is found by its link from now on
       mkdirSync(folder, { recursive: true });
       const v = await Vault.create(new NodeFiles(resolve(folder)), ident, tr, (o.name as string) || profile);
       const cfg: Cfg = { chat, profile };
@@ -286,8 +374,8 @@ const COMMANDS: { [name: string]: Command } = {
           `  tgsync join <invite line> ~/vaults/${inv.vaultId.slice(0, 6)}`);
       }
       const profile = await chooseProfile((o.profile as string | undefined) ?? saved?.profile);
-      const ident = await ensureReady(profile);
-      const tr = transportFor(inv.link);
+      const [ident, tg] = await ensureReady(profile, inv.api, o.proxy as string | undefined);
+      const tr = await transportFor(inv.link, tg);
       let rejoin = false;
       if (same) { // catch up first: this folder may not know yet that we were removed
         const old = await Vault.open(new NodeFiles(resolve(folder)), ident, tr);
@@ -341,11 +429,18 @@ const COMMANDS: { [name: string]: Command } = {
     async run(_a, o) {
       const [v, cfg] = await openVault(o.vault as string, "invite");
       await v.pull();
-      const use = (o.link as string | undefined) ?? cfg.invite;
-      if (!use) throw new CliError(NO_TELEGRAM);
+      const tr = v.transport;
+      const use = (o.link as string | undefined) ?? cfg.invite ??
+        (tr instanceof TelegramTransport ? await exportInvite(tr.tg, tr.chat) : String(cfg.chat));
       if (cfg.invite !== use) { cfg.invite = use; saveCfg(o.vault as string, cfg); }
-      if (o["include-api"]) throw new CliError(NO_TELEGRAM);
-      const code = encodeInvite({ link: use, vaultId: v.vaultId!, fingerprint: await fingerprint(v.keys.key(1)), api: null });
+      let api: [number, string] | null = null;
+      if (o["include-api"]) {
+        const creds = loadCreds(cfg.profile ?? "default");
+        if (!creds) throw new CliError("this account has no Telegram api_id/api_hash saved");
+        api = [creds.api_id, creds.api_hash];
+        info(yellow("This code contains your api_id/api_hash: only share it with people you trust."));
+      }
+      const code = encodeInvite({ link: use, vaultId: v.vaultId!, fingerprint: await fingerprint(v.keys.key(1)), api });
       emit({ invite: code }, () => {
         echo(`\n  tgsync join ${code}\n`);
         echo("They read you a short code; then:  tgsync accept <code>");
@@ -425,7 +520,13 @@ const COMMANDS: { [name: string]: Command } = {
       const ident = await loadIdentity(profile);
       let tr: Transport | null = null;
       let onlineError: string | null = null;
-      try { tr = transportFor(String(cfg.chat)); } catch (e) { onlineError = (e as Error).message; }
+      const chat = String(cfg.chat);
+      if (!o.offline || o.check) {
+        try {
+          const tg = isSandboxLink(chat) ? null : await withTimeout(connectOrRelogin(profile), 60_000);
+          tr = await withTimeout(transportFor(chat, tg), 60_000);
+        } catch (e) { onlineError = (e as Error).message || String(e); }
+      }
       const v = await Vault.open(new NodeFiles(resolve(dir)), ident, tr ?? (null as unknown as Transport));
       if (!o.offline && tr) {
         try { // reads only the small change messages; your files are not touched
@@ -434,7 +535,7 @@ const COMMANDS: { [name: string]: Command } = {
       }
       const s = await v.status();
       const incoming: Incoming[] = o.offline ? [] : await v.incoming();
-      const checks = o.check ? await check(v, tr) : null;
+      const checks = o.check ? await check(v, tr, chat, profile, onlineError) : null;
       const ok = checks === null || checks.every((x) => x.ok);
       emit({
         vault_id: s.vault_id, epoch: s.epoch, fingerprint: s.fingerprint, profile,
@@ -546,10 +647,19 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 /** Online health check; stops at the first check that blocks the rest. */
-async function check(v: Vault, tr: Transport | null) {
+async function check(v: Vault, tr: Transport | null, chat: string, profile: string, connectError: string | null) {
   const out: { ok: boolean; what: string; detail: string }[] = [];
   const line = (ok: boolean, what: string, detail = "") => out.push({ ok, what, detail });
-  if (!tr) { line(false, "connect + group access", NO_TELEGRAM); return out; }
+  if (!isSandboxLink(chat)) {
+    const creds = loadCreds(profile);
+    line(!!creds, "Telegram credentials", creds ? `proxy: ${creds.proxy ?? "none"}` : "none saved; run `tgsync join` or `tgsync new`");
+    if (!creds) return out;
+  }
+  if (!tr) { line(false, "connect + group access", connectError ?? "not connected"); return out; }
+  if (tr instanceof TelegramTransport) {
+    const me = await tr.tg.getMe();
+    line(true, "Telegram account", `${me.firstName ?? ""} ${me.lastName ?? ""} id ${me.id}`.replace(/\s+/g, " ").trim());
+  }
   let rep: Report;
   try { rep = await v.pull(); } catch (e) { line(false, "connect + group access", (e as Error).message); return out; }
   line(!v.removed && v.keys.size > 0, "vault membership", v.removed ? "removed" : v.keys.size ? `key epoch ${v.keys.current}` : "no keys");
@@ -604,6 +714,7 @@ export async function main(argv: string[]): Promise<number> {
     return 1;
   } finally {
     if (lines) process.stdin.destroy(); // a question left stdin open
+    for (const tr of OPEN.splice(0)) await tr.close().catch(() => {});
   }
 }
 

@@ -57,7 +57,7 @@ export function listProfiles(): string[] {
 
 export const currentProfile = () => checkProfileName(process.env.TGSYNC_PROFILE || "default");
 
-function appDir(profile: string): string {
+export function appDir(profile: string): string {
   const d = join(rootDir(), checkProfileName(profile));
   mkdirSync(d, { recursive: true, mode: 0o700 });
   try { chmodSync(d, 0o700); } catch { /* Windows: per-user ACLs */ }

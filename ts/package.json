@@ -5,14 +5,17 @@
   "description": "tgsync: end-to-end encrypted shared folders through a Telegram group (engine + CLI)",
   "license": "AGPL-3.0-or-later",
   "type": "module",
-  "bin": { "tgsync": "dist/tgsync.mjs" },
+  "bin": {
+    "tgsync": "dist/tgsync.mjs"
+  },
   "scripts": {
-    "build": "esbuild src/cli/main.ts --bundle --platform=node --format=esm --outfile=dist/tgsync.mjs --banner:js='#!/usr/bin/env node' --log-level=warning && chmod +x dist/tgsync.mjs",
+    "build": "esbuild src/cli/main.ts --bundle --platform=node --format=esm --outfile=dist/tgsync.mjs --target=node20 --loader:.wasm=binary --banner:js='#!/usr/bin/env node' --log-level=warning && chmod +x dist/tgsync.mjs",
     "test": "npm run build --silent && esbuild test/*.test.ts --bundle --platform=node --format=esm --outdir=.test-out --packages=external --log-level=warning && node --test .test-out/*.test.js",
     "typecheck": "tsc --noEmit",
     "bench": "esbuild scripts/bench.ts --bundle --platform=node --format=esm --outfile=.test-out/bench.mjs --packages=external --log-level=warning && node .test-out/bench.mjs"
   },
   "dependencies": {
+    "@mtcute/node": "0.32.8",
     "@noble/hashes": "2.4.0",
     "age-encryption": "0.3.1",
     "ignore": "7.0.14"

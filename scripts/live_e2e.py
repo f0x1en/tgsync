@@ -7,6 +7,9 @@ approval, sync, conflict, delete-vs-edit, removal, re-join) with tiny files, the
 
     python scripts/live_e2e.py                      # profiles: default (owner) and b (friend)
     python scripts/live_e2e.py --owner me --friend you
+    TGSYNC_CLI="node ts/dist/tgsync.mjs" python scripts/live_e2e.py   # the Node CLI instead
+
+The group is deleted at the end through the Python login of the owner profile.
 
 Not part of CI (needs real accounts). Takes a few minutes because the rate limiter spaces sends.
 """
@@ -16,7 +19,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,10 +30,11 @@ import time
 from pathlib import Path
 
 FAILS: list[str] = []
+CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
 
 
 def tg(*args: str, expect_ok: bool = True) -> str:
-    cmd = [sys.executable, "-m", "tgsync.cli", *args]
+    cmd = [*CLI, *args]
     t = time.monotonic()
     r = subprocess.run(cmd, capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
@@ -54,7 +60,7 @@ def files(d: Path) -> dict[str, str]:
             if p.is_file() and ".tgsync" not in p.parts and p.name != ".tgsyncignore"}
 
 
-async def delete_group(profile: str, chat_id: int) -> None:
+async def delete_group(profile: str, chat_id: int | str) -> None:
     from telethon.tl import functions
 
     from tgsync.telegram import connect, resolve_chat
