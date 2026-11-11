@@ -155,6 +155,7 @@ def replay_vector() -> dict:
         {"msg_id": 17, "author": B, "ts": 1762850420.0, "entries": [{"op": "mkdir", "path": "n.md"}, {"op": "rmdir", "path": "dir"},
                                                                      {"op": "put", "path": "../evil", "sha": s1}, {"op": "bogus", "path": "x"}]},
         {"msg_id": 18, "author": A, "ts": 1762850150.0, "entries": [put("n.md", s3, s1)]},  # same minute as msg 12: name taken -> "aaaaa2"
+        {"msg_id": 19, "author": B, "ts": 1762850500.0, "entries": [put("Straße.md", s1), put("STRASSE.md", s2), put("ΣΊΣΥΦΟΣ.md", s1), put("σίσυφος.md", s2)]},  # lower(), not casefold
     ]
     t = Tree()
     results = []

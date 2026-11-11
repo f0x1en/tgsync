@@ -56,17 +56,17 @@ class Tree:
 
     def _set(self, node: Node) -> None:
         self.nodes[node.path] = node
-        self._fold[node.path.casefold()] = node.path
+        self._fold[node.path.lower()] = node.path
 
     def _remove(self, path: str) -> None:
         self.nodes.pop(path, None)
-        if self._fold.get(path.casefold()) == path:
-            del self._fold[path.casefold()]
+        if self._fold.get(path.lower()) == path:
+            del self._fold[path.lower()]
 
     def _free_conflict_path(self, path: str, author: str, ts: float) -> str:
         cand = conflict_name(path, author, ts)
         n = 2
-        while cand.casefold() in self._fold:
+        while cand.lower() in self._fold:
             cand = conflict_name(path, f"{author[:5]}{n}", ts)
             n += 1
         return cand
@@ -79,7 +79,7 @@ class Tree:
         except (KeyError, PathError, TypeError):
             return None  # malformed/unsafe entries from a buggy peer are skipped, never applied
         cur = self.nodes.get(path)
-        clash = self._fold.get(path.casefold())
+        clash = self._fold.get(path.lower())
         if op == "put":
             try:
                 node = Node(path, entry["sha"], int(entry["size"]), float(entry.get("mtime", ts)),

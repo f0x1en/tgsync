@@ -160,7 +160,7 @@ any case); the first component is `.tgsync` or `.git`; it ends with `.tgsync-tmp
 **Conflict copy name** for `path` written by `author` (member id) at `ts`:
 `<dir>/<stem> (conflict <author[:6]> <YYYY-MM-DD HHMM in UTC of ts>)<ext>`, where ext is the last
 `.xxx` of the file name (none if no dot, and a leading dot does not count, as Python `splitext`).
-If that name is taken (case-insensitive), use `author[:5] + "2"`, then `"3"`, ... in place of `author[:6]`.
+If that name is taken (lowercase comparison, section 9), use `author[:5] + "2"`, then `"3"`, ... in place of `author[:6]`.
 
 **Ignore rules** (gitignore syntax, not synced): the built-in list in `src/tgsync/paths.py`
 (`DEFAULT_IGNORE`) plus the vault's `.tgsyncignore` file. `.tgsyncignore` itself is synced.
@@ -169,7 +169,8 @@ If that name is taken (case-insensitive), use `author[:5] + "2"`, then `"3"`, ..
 
 Every client applies the same messages in the same order, so all reach the same tree,
 including the same conflict-copy names. The tree maps path -> node `{sha, size, mtime, blob, author, msg_id}`;
-folders are nodes with `sha = "dir"`. Path clashes are checked case-insensitively.
+folders are nodes with `sha = "dir"`. Path clashes are checked case-insensitively, meaning
+**Unicode lowercase** (Python `str.lower()`, JavaScript `toLowerCase()`; not `casefold`, so `ß` and `ss` differ).
 
 For each message after the last processed id:
 - **`d`:** accept (section 4). Excludes us and we already used this vault -> we were removed: stop
