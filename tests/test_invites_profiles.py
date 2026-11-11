@@ -151,7 +151,7 @@ async def _vault_at(mk, name="alice"):
 
 async def test_not_a_vault_error_lists_known_vaults(mk, tmp_path):
     a, _ = await _vault_at(mk)
-    CliRunner().invoke(cli.main, ["status", "-C", str(a.root)])  # using a vault remembers it
+    CliRunner().invoke(cli.main, ["status", "--offline", "-C", str(a.root)])  # using a vault remembers it
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     out = await asyncio.to_thread(CliRunner().invoke, cli.main, ["push", "-C", str(elsewhere)])

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -87,16 +88,33 @@ async def _check(vault_dir: Path) -> list[dict]:
     return out
 
 
+async def _fetch(vault_dir: Path) -> None:
+    v, tr = await c._open(vault_dir)
+    try:
+        await v.fetch()
+    finally:
+        v.close()
+        await tr.close()
+
+
 @main.command()
-@click.option("--check", is_flag=True, help="Also test Telegram access and vault health (needs network).")
+@click.option("--check", is_flag=True, help="Also test Telegram access and vault health.")
+@click.option("--offline", is_flag=True, help="Do not look at the group; show only your own changes.")
 @vault_opt
-def status(check: bool, vault_dir: Path) -> None:
-    """What changed locally (works offline)."""
+def status(check: bool, offline: bool, vault_dir: Path) -> None:
+    """What you changed, and what others changed that you don't have yet."""
     cfg = c._load_cfg(vault_dir)
     profile = cfg.get("profile", "default")
     ident = load_identity(profile)
+    online_error = None
+    if not offline:
+        try:  # reads only the small change messages; your files are not touched
+            c.run(asyncio.wait_for(_fetch(vault_dir), 60))
+        except Exception as e:  # noqa: BLE001  (status must still work offline)
+            online_error = str(e) or type(e).__name__
     v = Vault(vault_dir, ident, None, use_git=False)  # type: ignore[arg-type]
     s = v.status()
+    incoming = [] if offline else v.incoming()
     v.close()
     checks = c._guard(lambda: c.run(_check(vault_dir))) if check else None
     ok = checks is None or all(x["ok"] for x in checks)
@@ -105,10 +123,27 @@ def status(check: bool, vault_dir: Path) -> None:
         click.echo(f"vault {s['vault_id']}  key epoch {s['epoch']}  fingerprint {s['fingerprint']}")
         click.echo(f"you: account '{profile}', key {ident.recipient[:14]}...   "
                    f"members: " + ", ".join(n or r[:12] for n, r in s["members"]))
+        if s["pending"]:
+            click.echo("your changes, not uploaded yet:")
         for op, path in s["pending"]:
             click.echo(f"  {'M' if op in ('put', 'mkdir') else 'D'} {path}{'/' if op in ('mkdir', 'rmdir') else ''}")
         if not s["pending"]:
             click.echo("  nothing to upload")
+        if offline:
+            pass
+        elif online_error:
+            click.secho(f"  could not check the group ({online_error}); others' changes not shown", fg="yellow")
+        elif incoming:
+            click.echo("changed by others, not in your folder yet:")
+            for x in incoming:
+                mark = "D" if x["op"] in ("delete", "rmdir") else "M"
+                slash = "/" if x["op"] in ("mkdir", "rmdir") else ""
+                click.echo(f"  {mark} {x['path']}{slash}   ({x['who']})")
+                if x["also_local"]:
+                    click.secho("      you changed this too: `tgsync` keeps both versions (a conflict copy)", fg="yellow")
+            click.echo("get them:  tgsync pull")
+        else:
+            click.echo("  nothing new from others")
         for _, what in s["problems"]:
             click.secho(f"  problem: {what}", fg="red")
         if checks is not None:
@@ -120,6 +155,7 @@ def status(check: bool, vault_dir: Path) -> None:
     c.emit({"vault_id": s["vault_id"], "epoch": s["epoch"], "fingerprint": s["fingerprint"], "profile": profile,
             "members": [n or r[:12] for n, r in s["members"]],
             "pending": [{"op": op, "path": p} for op, p in s["pending"]],
+            "incoming": None if offline or online_error else incoming, "online_error": online_error,
             "problems": [what for _, what in s["problems"]], "checks": checks}, text)
     if not ok:
         sys.exit(1)

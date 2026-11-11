@@ -35,7 +35,8 @@ cd ~/vaults/team
 tgsync            # sync: download others' changes AND upload yours, list what moved
 tgsync pull       # only download (safe while you are mid-edit: publishes nothing)
 tgsync push       # only upload (never touches your local files)
-tgsync status     # what changed locally (works offline); `--check` also tests Telegram
+tgsync status     # your changes + what others changed that you don't have yet (warns if you both
+                  # edited the same file); reads only small messages, touches no files. `--offline`
 tgsync log        # who changed what and when (works offline); `tgsync log notes/x.md` for one file
 tgsync restore    # bring back an older version of a file (it asks which)
 ```

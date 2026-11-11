@@ -64,3 +64,27 @@ def test_json_errors_are_json_and_never_ask(tmp_path):
     assert rc == 1 and out["ok"] is False and "not a tgsync vault" in out["error"]
     out, rc = _tg(tmp_path / "sb", "alice", "join")
     assert rc == 1 and "Paste the invite line" in out["error"]
+
+
+def test_status_warns_when_someone_else_changed_your_file(tmp_path):
+    sb, A, B = tmp_path / "sb", tmp_path / "alice", tmp_path / "bob"
+    inv = _tg(sb, "alice", "new", str(A), "--no-git")[0]["invite"]
+    code = _tg(sb, "bob", "join", inv, str(B), "--no-git")[0]["code"]
+    _tg(sb, "alice", "accept", code, "-C", str(A))
+    _tg(sb, "bob", "join")
+    (A / "plan.md").write_text("v1\n")
+    _tg(sb, "alice", "push", "-C", str(A))
+    _tg(sb, "bob", "pull", "-C", str(B))
+
+    (B / "plan.md").write_text("bob's idea\n")        # bob edits, not uploaded yet
+    (A / "plan.md").write_text("alice's idea\n")      # meanwhile alice uploads her edit
+    _tg(sb, "alice", "push", "-C", str(A))
+
+    out, rc = _tg(sb, "bob", "status", "-C", str(B))
+    assert rc == 0 and out["online_error"] is None, out
+    assert out["incoming"] == [{"op": "put", "path": "plan.md", "who": "alice", "also_local": True}]
+    assert out["pending"] == [{"op": "put", "path": "plan.md"}]
+    assert (B / "plan.md").read_text() == "bob's idea\n"   # status never touches files
+
+    out, _ = _tg(sb, "bob", "status", "--offline", "-C", str(B))
+    assert out["incoming"] is None

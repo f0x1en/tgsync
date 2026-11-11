@@ -37,7 +37,7 @@ async def test_cli_status_offline(mk, monkeypatch, tmp_path):
     cli.common._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
     a.write("x.md", "hi")
     a.vault.close()
-    r = CliRunner().invoke(cli.main, ["status", "-C", str(a.root)])
+    r = CliRunner().invoke(cli.main, ["status", "--offline", "-C", str(a.root)])
     assert r.exit_code == 0, r.output
     assert "M x.md" in r.output
 
@@ -136,7 +136,7 @@ async def test_status_shows_account_and_changes(mk):
     cli.common._save_cfg(a.root, {"chat": 1, "profile": "default", "git": False})
     a.write("x.md", "hi")
     a.vault.close()
-    out = CliRunner().invoke(cli.main, ["status", "-C", str(a.root)])
+    out = CliRunner().invoke(cli.main, ["status", "--offline", "-C", str(a.root)])
     assert out.exit_code == 0 and "account 'default'" in out.output and "M x.md" in out.output
 
 

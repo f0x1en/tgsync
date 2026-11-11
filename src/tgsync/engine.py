@@ -550,6 +550,34 @@ class Vault:
                 self._mark_pushed_synced(changes)
             return rep
 
+    async def fetch(self) -> SyncReport:
+        """Read what others posted (like `git fetch`): updates the vault's view, touches no files."""
+        with VaultLock(self.meta / "lock"):
+            rep = await self.pull()
+            self._check_member(rep)
+            return rep
+
+    def incoming(self) -> list[dict]:
+        """Others' changes that are not in your folder yet. `also_local`: you changed that file too."""
+        synced = self.state.synced()
+        local = {c["path"] for c in self.scan_local(SyncReport())}
+        names = {m.id: m.name or m.recipient[:12] for m in self.members}
+
+        def who(path: str) -> str:
+            rows = self.state.log(path, 1)
+            return names.get(rows[0][1], rows[0][1][:8]) if rows else "?"
+
+        out = []
+        for path, node in sorted(self.tree.nodes.items()):
+            if (synced[path][0] if path in synced else None) != node.sha:
+                out.append({"op": "mkdir" if node.sha == DIR else "put", "path": path, "who": who(path),
+                            "also_local": path in local})
+        for path, (sha, _, _) in sorted(synced.items()):
+            if path not in self.tree.nodes:
+                out.append({"op": "rmdir" if sha == DIR else "delete", "path": path, "who": who(path),
+                            "also_local": path in local})
+        return out
+
     def _mark_pushed_synced(self, changes: list[dict]) -> None:
         """After a push, files whose content is now the accepted tree version count as synced."""
         for ch in changes:

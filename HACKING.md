@@ -88,7 +88,9 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
 - If an answer is missing (account, folder, login), it fails and names the flag to pass.
 - `sync` / `pull` / `push`: `{"ok": true, "report": {"pushed_paths": [], "written": [], "deleted": [],
   "conflicts": [[path, copy]], "skipped": [], "problems": [], ...}}`
-- `status`: `vault_id`, `epoch`, `fingerprint`, `profile`, `members`, `pending` (`[{op, path}]`), `problems`,
+- `status`: `vault_id`, `epoch`, `fingerprint`, `profile`, `members`, `pending` (`[{op, path}]`),
+  `incoming` (others' changes not in your folder: `[{op, path, who, also_local}]`; null with `--offline` or when
+  the group could not be reached), `online_error`, `problems`,
   `checks` (with `--check`: `[{ok, what, detail}]`, else null).
 - `members`: `members` (`[{name, id, you}]`), `waiting` (`[{code, name}]`).
 - `new`: `folder`, `profile`, `vault_id`, `invite`. `join`: `state` (`"waiting"` + `code`, or `"joined"` + `report`).
