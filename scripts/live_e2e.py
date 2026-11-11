@@ -38,6 +38,11 @@ def tg(*args: str, expect_ok: bool = True) -> str:
     return out
 
 
+def sync(folder: Path) -> str:
+    """What the old `tgsync sync` did: upload yours, then download others'."""
+    return tg("push", "-C", str(folder)) + "\n" + tg("pull", "-C", str(folder))
+
+
 def check(cond: bool, what: str) -> None:
     print(f"  {'PASS' if cond else 'FAIL'}  {what}")
     if not cond:
@@ -108,8 +113,8 @@ def main() -> int:
         (A / "welcome.md").write_text("hello friend\n")
         (A / "notes").mkdir()
         (A / "notes" / "idea.md").write_text("an idea\n")
-        out = tg("sync", "-C", str(A))
-        check("^ welcome.md" in out, "sync lists the uploaded files")
+        out = sync(A)
+        check("^ welcome.md" in out, "push lists the uploaded files")
         out = tg("join", code, str(B), "--profile", a.friend)
         check("Joined" in out, "friend finishes joining after approval")
         check(files(B) == files(A), "friend received exactly the owner's files")
@@ -132,27 +137,27 @@ def main() -> int:
 
         print("\n== 5. both edit the same note: nothing is lost")
         (A / "shared.md").write_text("base\n")
-        tg("sync", "-C", str(A))
-        tg("sync", "-C", str(B))
+        sync(A)
+        sync(B)
         (A / "shared.md").write_text("owner edit\n")
         (B / "shared.md").write_text("friend edit\n")
-        tg("sync", "-C", str(A))
-        out = tg("sync", "-C", str(B))
-        tg("sync", "-C", str(A))
-        check("conflict" in out, "friend's sync reports a conflict")
+        sync(A)
+        out = sync(B)
+        sync(A)
+        check("conflict" in out, "friend's push/pull reports a conflict")
         check(files(A) == files(B), "both folders are identical after syncing")
         both = " ".join(files(A).values())
         check("owner edit" in both and "friend edit" in both, "both versions survive")
 
         print("\n== 6. owner deletes a note while friend edits it: the edit wins")
         (A / "keep.md").write_text("v1\n")
-        tg("sync", "-C", str(A))
-        tg("sync", "-C", str(B))
+        sync(A)
+        sync(B)
         (A / "keep.md").unlink()
         (B / "keep.md").write_text("friend kept working\n")
-        tg("sync", "-C", str(A))
-        tg("sync", "-C", str(B))
-        tg("sync", "-C", str(A))
+        sync(A)
+        sync(B)
+        sync(A)
         check((A / "keep.md").exists() and (A / "keep.md").read_text() == "friend kept working\n",
               "edited note survived the delete on the owner's side")
         check(files(A) == files(B), "folders identical again")
@@ -160,9 +165,9 @@ def main() -> int:
         print("\n== 7. owner removes the friend: new files stay private")
         tg("remove", "friend", "--yes", "-C", str(A))
         (A / "secret.md").write_text("after removal\n")
-        tg("sync", "-C", str(A))
-        out = tg("sync", "-C", str(B), expect_ok=False)
-        check("removed" in out, "friend's sync is refused with a clear message")
+        sync(A)
+        out = tg("pull", "-C", str(B), expect_ok=False)
+        check("removed" in out, "friend's pull is refused with a clear message")
         check(not (B / "secret.md").exists(), "friend never received the new file")
 
         print("\n== 8. friend asks again and is let back in with full history")

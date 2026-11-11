@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Command-line interface: a button that syncs a folder with a Telegram group.
 
-    tgsync              sync this folder (pull + push), same as `tgsync sync`
-    tgsync pull / push  only download / only upload
-    tgsync status       what changed locally (add --check to test Telegram access)
+    tgsync              what changed, yours and others' (same as `tgsync status`)
+    tgsync pull         download others' changes
+    tgsync push         upload yours
     tgsync log          who changed what and when
     tgsync restore      bring back an older version of a file
     tgsync new DIR      start a vault        tgsync join CODE   join one

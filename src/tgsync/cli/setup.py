@@ -130,7 +130,7 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
                 finally:
                     old.close()
                 if not rejoin:
-                    raise click.ClickException(f"You already joined this vault in {c._short(folder)}. To sync:  "
+                    raise click.ClickException(f"You already joined this vault in {c._short(folder)}. To use it:  "
                                                f"cd {c._short(folder)} && tgsync")
             found = await Vault.discover(tr, ident)
             if inv.vault_id not in found:
@@ -163,12 +163,12 @@ def join_cmd(code: str, folder: Path | None, name: str | None, no_git: bool, pro
             m = c._mem()
             if m.get("joins", {}).pop(inv.vault_id, None) is not None:
                 c._mem_save(m)
-            rep = await v.sync()
+            rep = await v.pull_changes()
 
             def joined() -> None:
                 click.echo(f"Joined. Files go in {c._short(folder)}")
                 c._print_report(rep)
-                click.echo(f"\nFrom now on:  cd {c._short(folder)} && tgsync")
+                click.echo(f"\nFrom now on, in {c._short(folder)}:  tgsync (what changed)   tgsync pull   tgsync push")
 
             c.emit({"state": "joined", "folder": str(folder.resolve()), "report": c.report_dict(rep)}, joined)
         finally:

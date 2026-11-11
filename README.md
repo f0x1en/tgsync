@@ -28,22 +28,22 @@ Telegram account. Linux, Windows, macOS; a small CLI, no GUI: your editor and fi
 ## Daily use
 
 Open your vault folder in any editor (nvim, VS Code, Obsidian...) and just work. Swap/backup
-files from editors are ignored automatically. When you want to share or fetch, it's one button:
+files from editors are ignored automatically. Nothing moves until you say so:
 
 ```bash
 cd ~/vaults/team
-tgsync            # sync: download others' changes AND upload yours, list what moved
-tgsync pull       # only download (safe while you are mid-edit: publishes nothing)
-tgsync push       # only upload (never touches your local files)
-tgsync status     # your changes + what others changed that you don't have yet (warns if you both
-                  # edited the same file); reads only small messages, touches no files. `--offline`
+tgsync            # what changed: yours, and others' that you don't have yet; warns if you both
+                  # edited the same file. Touches no files (same as `tgsync status`; `--offline`)
+tgsync pull       # download others' changes (publishes nothing)
+tgsync push       # upload yours (never touches your local files)
 tgsync log        # who changed what and when (works offline); `tgsync log notes/x.md` for one file
 tgsync restore    # bring back an older version of a file (it asks which)
 ```
 
-tgsync never runs in the background: it does something only when you run it. If two people
-change the same note, nothing is lost: the later one is kept as `note (conflict ...).md` next to
-it. Big files print a heads-up ("downloading ... big files take a while") and appear in your
+tgsync never runs in the background: it does something only when you run it. Run plain `tgsync`
+before you start editing to see if someone changed the same notes. If two people change the same
+note anyway, nothing is lost: after `tgsync push` and `tgsync pull` the later one is kept as
+`note (conflict ...).md` next to it. Big files print a heads-up ("downloading ... big files take a while") and appear in your
 folder only once they have fully arrived.
 
 ## Setup
@@ -76,7 +76,7 @@ tgsync new ~/vaults/team
 3. Owner: `tgsync accept f17d-13fd` (typing the code you were told is the confirmation;
    `tgsync members` shows who is waiting).
 4. Friend: whenever they like, however long it takes, run plain `tgsync join`; the vault
-   downloads. (The invite line, account and folder from step 2 are remembered in
+   downloads. Files already in their folder are not uploaded until they run `tgsync push`. (The invite line, account and folder from step 2 are remembered in
    `~/.config/tgsync/remembered.json`, so nothing needs retyping.)
 
 The invite code carries the vault's key fingerprint, so the join is checked automatically.

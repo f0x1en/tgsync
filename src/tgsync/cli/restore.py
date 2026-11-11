@@ -42,7 +42,7 @@ def restore(path: str | None, rev: str | None, vault_dir: Path) -> None:
     vault = vault_dir.resolve()
     h = History(vault)
     if not (vault / INTERNAL_DIR / "history.git").exists():
-        raise click.ClickException("this vault has no local history yet (run `tgsync` first)")
+        raise click.ClickException("this vault has no local history yet (run `tgsync pull` or `tgsync push` first)")
     if path and rev is None and not (vault / path).exists() and h.is_commit(path):
         path, rev = None, path  # a lone argument that is a snapshot id means "this snapshot"
     if rev is not None and not h.is_commit(rev):
@@ -74,7 +74,7 @@ def restore(path: str | None, rev: str | None, vault_dir: Path) -> None:
     dest.write_bytes(data)
     c.emit({"restored": path, "rev": rev},
            lambda: click.echo(f"Restored {path} as of {rev}. Your previous version is saved in history. "
-                              f"Run `tgsync` to share it."))
+                              f"To share it:  tgsync push"))
 
 
 _WORDS = {"put": "wrote", "delete": "deleted", "conflict": "conflict", "mkdir": "made folder",
@@ -94,7 +94,7 @@ def log(path: str | None, limit: int, vault_dir: Path) -> None:
 
     def text() -> None:
         if not rows:
-            click.echo("No changes recorded yet. Changes show up here after the next `tgsync`.")
+            click.echo("No changes recorded yet. They show up here after the next `tgsync pull` or `tgsync push`.")
             return
         for r in rows:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))

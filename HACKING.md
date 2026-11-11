@@ -20,7 +20,7 @@ tgsync new ~/tgs/alice                              mkdir ~/tgs/bob && cd ~/tgs/
                                                     tgsync join tgsync1-... .     # prints a code
 cd ~/tgs/alice && tgsync accept <code>
                                                     tgsync join
-echo hi > a.md && tgsync                            tgsync pull && cat a.md
+echo hi > a.md && tgsync push                       tgsync && tgsync pull && cat a.md
 ```
 
 Delete `~/tgs` to start over.
@@ -38,7 +38,7 @@ The Obsidian plugin must pass the same vectors. Plugin code: `obsidian/` (`cd ob
 | `cli/common.py` | The `tgsync` group, `--json` mode, vault config, remembered input, and the one place that picks Telegram or sandbox (`_transport`, `_new_group`, `_open`, `_ensure_ready`). |
 | `cli/setup.py` | `new`, `join` |
 | `cli/people.py` | `invite`, `members`, `accept`, `remove` |
-| `cli/syncing.py` | `sync`, `pull`, `push`, `status` |
+| `cli/syncing.py` | `pull`, `push`, `status` (also plain `tgsync`) |
 | `cli/restore.py` | `log`, `restore` (offline) |
 | `engine.py` | `Vault`: create/join, pull (replay the log), push (scan + upload), materialize (write files), members. No printing, no prompts. |
 | `oplog.py` | Message formats: records (batched file ops), chunks (big files). |
@@ -53,12 +53,14 @@ The Obsidian plugin must pass the same vectors. Plugin code: `obsidian/` (`cd ob
 | `telegram.py` | Real transport (Telethon), login, rate limiting. |
 | `sandbox.py` | Folder-on-disk transport (`TGSYNC_SANDBOX`). |
 
-## How a `tgsync` (sync) flows
+## How `tgsync pull` / `push` / `status` flow
 
-`cli/syncing.sync` -> `common._open` (load `.tgsync/config.json`, connect, build `Vault`) ->
-`Vault.sync()`: pull (read new messages after the cursor, verify, apply to the tree) ->
-scan local folder -> push changed files as records/chunks -> materialize -> `SyncReport` ->
-`common.emit_report` prints text or JSON.
+`cli/syncing.pull` -> `common._open` (load `.tgsync/config.json`, connect, build `Vault`) ->
+`Vault.pull_changes()`: `pull()` (read new messages after the cursor, verify, apply to the tree) ->
+`materialize()` (write the tree to disk) -> `SyncReport` -> `common.emit_report` prints text or JSON.
+`push`: `Vault.push_changes()`: `pull()` (log only) -> `scan_local()` -> `push()` (records/chunks) -> `pull()`.
+`status`: `Vault.fetch()` (log only) -> `status()` (your changes) + `incoming()` (others' changes).
+`Vault.sync()` (all of it at once) remains for tests; the CLI has no `sync` command.
 
 ## Where to change what
 
@@ -86,7 +88,7 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
 
 - Success: `{"ok": true, ...}`. Failure: `{"ok": false, "error": "<message with the fix>"}`.
 - If an answer is missing (account, folder, login), it fails and names the flag to pass.
-- `sync` / `pull` / `push`: `{"ok": true, "report": {"pushed_paths": [], "written": [], "deleted": [],
+- `pull` / `push`: `{"ok": true, "report": {"pushed_paths": [], "written": [], "deleted": [],
   "conflicts": [[path, copy]], "skipped": [], "problems": [], ...}}`
 - `status`: `vault_id`, `epoch`, `fingerprint`, `profile`, `members`, `pending` (`[{op, path}]`),
   `incoming` (others' changes not in your folder: `[{op, path, who, also_local}]`; null with `--offline` or when
@@ -97,6 +99,6 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
 - `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev`.
 - `log`: `log` (`[{ts, who, op, path, copy}]`, newest first; op is `put`, `delete`, `conflict`, `mkdir`, `rmdir`).
 
-A plugin would run e.g. `tgsync --json sync -C <vault>` and read stdout. Desktop only: Obsidian
+A script can run e.g. `tgsync --json status -C <vault>` and read stdout. Desktop only: Obsidian
 mobile cannot start processes, so a mobile plugin would need the sync logic itself.
 Add fields freely; don't rename or remove them without bumping the version.

@@ -138,7 +138,7 @@ def _vault_at(folder: Path) -> tuple[str | None, bool]:
 
 def _not_a_vault(vault: Path) -> click.ClickException:
     ctx = click.get_current_context(silent=True)
-    cmd = ctx.info_name if ctx and ctx.info_name not in (None, "main", "tgsync") else "sync"
+    cmd = ctx.info_name if ctx and ctx.info_name not in (None, "main", "tgsync") else "status"
     lines = [f"{_short(vault)} is not a tgsync vault."]
     known = _known_vaults()
     if known:
@@ -351,15 +351,16 @@ class _Group(click.Group):
 @click.version_option(__version__)
 @click.pass_context
 def main(ctx: click.Context, as_json: bool) -> None:
-    """Sync this folder with your Telegram group, end-to-end encrypted.
+    """Share this folder through your Telegram group, end-to-end encrypted.
 
-    Run with no command inside a vault folder to sync it.
+    Inside a vault folder, plain `tgsync` shows what changed (same as `tgsync status`).
+    Nothing moves until you run `tgsync pull` (download) or `tgsync push` (upload).
     """
     ctx.meta["json"] = as_json
     if ctx.invoked_subcommand is not None:
         return
     if _cfg_path(Path.cwd()).exists():
-        ctx.invoke(main.commands["sync"], vault_dir=Path.cwd())
+        ctx.invoke(main.commands["status"], vault_dir=Path.cwd())
     elif as_json:
         raise _not_a_vault(Path.cwd())
     else:

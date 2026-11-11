@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Moving files: `sync`, `pull`, `push`, and `status`."""
+"""Moving files: `pull`, `push`, and `status` (also plain `tgsync`)."""
 
 from __future__ import annotations
 
@@ -27,13 +27,6 @@ def _run_report(vault_dir: Path, what: str) -> None:
             await tr.close()
 
     c._guard(lambda: c.run(go()))
-
-
-@main.command()
-@vault_opt
-def sync(vault_dir: Path) -> None:
-    """Download others' changes AND upload yours (this is also what plain `tgsync` does)."""
-    _run_report(vault_dir, "sync")
 
 
 @main.command()
@@ -140,7 +133,7 @@ def status(check: bool, offline: bool, vault_dir: Path) -> None:
                 slash = "/" if x["op"] in ("mkdir", "rmdir") else ""
                 click.echo(f"  {mark} {x['path']}{slash}   ({x['who']})")
                 if x["also_local"]:
-                    click.secho("      you changed this too: `tgsync` keeps both versions (a conflict copy)", fg="yellow")
+                    click.secho("      you changed this too: `tgsync push` then `tgsync pull` keeps both versions (a conflict copy)", fg="yellow")
             click.echo("get them:  tgsync pull")
         else:
             click.echo("  nothing new from others")

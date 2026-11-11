@@ -107,7 +107,7 @@ def test_bare_command_outside_a_vault_shows_help(tmp_path, monkeypatch):
     assert out.exit_code == 0 and "Commands:" in out.output and "tgsync new ." in out.output
 
 
-async def test_bare_command_inside_a_vault_syncs(mk, monkeypatch):
+async def test_bare_command_inside_a_vault_shows_status(mk, monkeypatch):
     a = mk("alice")
     identity.init_identity("default")
     ident = identity.load_identity("default")
@@ -125,7 +125,8 @@ async def test_bare_command_inside_a_vault_syncs(mk, monkeypatch):
     import asyncio
     out = await asyncio.to_thread(CliRunner().invoke, cli.main, [])
     assert out.exit_code == 0, out.output
-    assert "^ x.md" in out.output          # plain `tgsync` uploaded the new file
+    assert "M x.md" in out.output                                                   # shows the change...
+    assert all(k != "r" for k, _ in a.transport.ch.messages.values())                # ...but uploads nothing
 
 
 async def test_status_shows_account_and_changes(mk):

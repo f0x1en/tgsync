@@ -458,7 +458,7 @@ class Vault:
                 continue
             prev = synced.get(path)
             if disk_sha is not None and disk_sha != (prev[0] if prev else None) and disk_sha not in preserved:
-                rep.skipped.append(f"{path}: local edits not yet pushed; will reconcile on next sync")
+                rep.skipped.append(f"{path}: you changed it and so did someone else; run `tgsync push`, then `tgsync pull` to get both versions")
                 continue
             try:
                 await self._write_node(node, dest)

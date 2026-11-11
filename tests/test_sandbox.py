@@ -44,8 +44,8 @@ def test_two_people_in_the_sandbox(tmp_path):
     out, rc = _tg(sb, "alice", "remove", "bob", "--yes", "-C", str(A))
     assert rc == 0, out
     (A / "while_out.md").write_text("written while bob was out\n")
-    _tg(sb, "alice", "sync", "-C", str(A))
-    out, rc = _tg(sb, "bob", "sync", "-C", str(B))
+    _tg(sb, "alice", "push", "-C", str(A))
+    out, rc = _tg(sb, "bob", "pull", "-C", str(B))
     assert rc == 1 and "tgsync join" in out["error"], out
     out, _ = _tg(sb, "bob", "join", cwd=B)
     assert out["state"] == "waiting", out

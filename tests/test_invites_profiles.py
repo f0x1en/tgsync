@@ -76,7 +76,7 @@ def test_creds_use_env_and_keep_proxy(monkeypatch):
 
 def test_removed_commands_are_gone():
     names = set(cli.main.commands)
-    assert names == {"new", "join", "invite", "members", "accept", "remove", "sync", "pull", "push", "status", "restore", "log"}
+    assert names == {"new", "join", "invite", "members", "accept", "remove", "pull", "push", "status", "restore", "log"}
 
 
 def test_profile_names_are_safe():
