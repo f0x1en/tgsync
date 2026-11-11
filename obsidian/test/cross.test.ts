@@ -21,7 +21,7 @@ test("Python CLI and TS engine on one sandbox group", { skip: !existsSync(PY) &&
   const tmp = await mkdtemp(join(tmpdir(), "tgsync-cross-"));
   const sb = join(tmp, "sb"), A = join(tmp, "alice"), B = join(tmp, "bob");
   const py = (...args: string[]) => {
-    const env = { ...process.env, TGSYNC_SANDBOX: sb, TGSYNC_PROFILE: "alice" };
+    const env: NodeJS.ProcessEnv = { ...process.env, TGSYNC_SANDBOX: sb, TGSYNC_PROFILE: "alice" };
     delete env.TGSYNC_HOME;
     let out: string;
     try { out = execFileSync(PY, ["-m", "tgsync.cli", "--json", ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
