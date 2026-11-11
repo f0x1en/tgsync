@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Vault path rules and conflict-copy names (PROTOCOL.md section 8).
+// Vault path rules, ignore rules and conflict-copy names (PROTOCOL.md section 8).
+import ignore from "ignore";
 
 export const INTERNAL_DIR = ".tgsync";
 export const TMP_SUFFIX = ".tgsync-tmp";
@@ -43,4 +44,13 @@ export function conflictName(path: string, author: string, ts: number): string {
   const [stem, ext] = splitext(path.slice(slash + 1));
   const name = `${stem} (conflict ${author.slice(0, 6)} ${stamp})${ext}`;
   return dir ? `${dir}/${name}` : name;
+}
+
+/** Built-in ignore rules; must equal DEFAULT_IGNORE in src/tgsync/paths.py (checked by the vector tests). */
+export const DEFAULT_IGNORE = "\n# tgsync ignore rules (gitignore syntax)\n.tgsync/\n.git/\n*.tgsync-tmp\n.DS_Store\nThumbs.db\ndesktop.ini\n# editor scratch files (vim/nvim swap + backup, emacs locks/autosaves, nvim's write probe)\n*.swp\n*.swo\n*.swx\n*~\n.#*\n\\#*#\n4913\n.netrwhist\n# Obsidian: per-device UI state churns constantly and conflicts for no reason\n.obsidian/workspace.json\n.obsidian/workspaces.json\n.obsidian/cache\n.trash/\n";
+
+/** gitignore matcher for the built-in rules plus a vault's .tgsyncignore text. Folders end with "/". */
+export function makeIgnore(extra = ""): (rel: string) => boolean {
+  const ig = ignore().add(DEFAULT_IGNORE).add(extra);
+  return (rel) => ig.ignores(rel);
 }

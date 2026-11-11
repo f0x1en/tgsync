@@ -108,24 +108,24 @@
  ],
  "identities": {
   "alice": {
-   "secret": "AGE-SECRET-KEY-1PYUGHT74S668XQY52T4LH4L55AVFHKHT0E4RPGJLNXXFYJDXLTSQ5DFQ0Z",
-   "recipient": "age1p9t204lwp83teuu2385sv9jdws62vhuyuqquld9rjd9h5y2xgvmqtw80sv",
-   "id": "63319eff29913dea",
-   "short_code": "6331-9eff"
+   "secret": "AGE-SECRET-KEY-1KD8F8P48UN5LQ5XSLD53JG4VKWGRTLEJEATPHUGEDWCCFHH6VFTSLEH6NX",
+   "recipient": "age1zcs8p5j3g6uugec6sdje7zq35r8x5eqapfeqclr08gu0hq8r8vgq07q0v5",
+   "id": "5026632a708f11ce",
+   "short_code": "5026-632a"
   },
   "bob": {
-   "secret": "AGE-SECRET-KEY-1ZT3C28E9GCYSMKZLC5GGMF9F5AWH8V4ZWDN9YRNZY6UERL30ZHTQVCP34V",
-   "recipient": "age1wykj7hh08rgxme8j8n5x2uk8antxu6nyfxa9x8ftk0yekhqmqyvsqd3l27",
-   "id": "b6443fd1a060f96b",
-   "short_code": "b644-3fd1"
+   "secret": "AGE-SECRET-KEY-1Y7N944K2CWG3YAJ0PHWUS8GU77442XTGPRZZRFX6QLYSMX3EP8JSXVXUWE",
+   "recipient": "age1w7nlm8en5aael9hm7ls4q7623ajus8vhv4y3a6lkgy9rglg4wd6s3ypwk0",
+   "id": "69d67e29ada74fac",
+   "short_code": "69d6-7e29"
   }
  },
  "descriptors": {
   "vault_id": "a1b2c3d4e5f60718",
   "sequence": [
-   "{\"created\":1794381754,\"epoch\":1,\"keycheck\":\"25c9421d26db4db81db0eb73beb8ad37161bafd4dcee9b8b007bc2ddbee2fd6b\",\"members\":[{\"id\":\"63319eff29913dea\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBpeFNsSTVYdnNRSlhwU1BxTkE1eCs5Sm03N0E1SUVkT3RGZkEzTmZSdEhFCmZiV0RWQUk1Rkhpbk1mVHl5bktqeVoxM2prVSszN2JYdUROR05BOEEzdWcKLT4gXF91RH4tZ3JlYXNlCm5aUQotLS0geEZDUHg4bFkxVm1FcGVLMTFvRVFGdlZaVGRBU3NMRXFBMThLYVB5dUp2ZwozlvdiPEnCx1GdnlhS8oNnS+Vz62NsvOuZrqUYZ5naTp6+WQHCDWun3eK3E43yOzjakMc2gzMrPNkCsYyTII5ZfgMNdsIwcKbEu/Q2DwTCB+TLp+vMwLEM2gWWiNP0fw==\"}],\"proof\":\"VEdTMQAAAAEtuFIWWpDGeyh8qIKRQH7P5DFffxwne5UOYNXnSgQb1krHtM+MQ3RPQpb/DH6zjWypjRCtePJw4uslqrM=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAGhAjO8pqAyvP91dZ5griUngD3nnkPpNhza1u6EnJtmcioRvFx7/2b/IdaSBMwFo7o8o9sVn5TnT/J52/x++gskmuoKU9JwbdkJyXzxTs3it7MyYOmHQrU2mXv+q8u0IpPmzr7zkwoFf9hQ8O187jqWubLPCW7h0VFS4Mryq0eMIQHlVNpr0euVWKN3Hw1OZ3rYyKwRZGK6Ig==\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}",
-   "{\"created\":1794381754,\"epoch\":1,\"keycheck\":\"25c9421d26db4db81db0eb73beb8ad37161bafd4dcee9b8b007bc2ddbee2fd6b\",\"members\":[{\"id\":\"63319eff29913dea\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB0enhDT3d1YkZIc2RqRW80cEtiREhjdGlxaXgrNkFhVWIvdWhXRFJhZTM4CmJERW8wYW9GVHlVcnEwNlVMZXIwRDJ3NHM5OWxPeGpwbGtHZ0xzTjFzcjgKLT4gYUpzdGUtZ3JlYXNlIHU/I3BHVzE5IFBVSFRzaFEgXVhfIUpyIFlPQj8iQ2ZdCllZYjJLcElwRVgwQkdKNXdENFZab0xSWmNLczdlWmdRajRrUXJNUy9XS05vajYvcVFpaWhqVlkKLS0tIEdJR1pBYk93eTBwZVYzQWM4Vzcyd015Y0h2NVQxWWJvN1JjUGRod0lxaUEK9ppNCNlgjqky9VOgSFakQV89KhIMypmoOT2LNVQo11aHtGwdr4OKeznNI/hIW0iZwsfJwA4fkLM3u1ORnosegSHaBZ7kmiuo4IwVj9SAF/9ag4XA3RNtlCbL78nVWa8=\"},{\"id\":\"b6443fd1a060f96b\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhemFNNTQ0dUNCMkhYRXNwekFPVVpoL1hHR0h6VXlRWm5WZEc4N2Vib2g4CnFiaXp1U1M4cnQ0a05zQkdYZHJBNmtDTW10VFJFZjJUa2N0elN4L3BxMncKLT4gNi1ncmVhc2UKTlQ3ZVJCeGVwYUdHRGUzUEw0cEt2d0w4ZmwrRDhxZ2NVb0dDeHhqeVlzL3NVdGZ0WTJoNCthRW1yd3lVa0JaQgpkeUUzMUVUSGVkSEg4aW1wTXAzcy9CMmpwTE4xNlFFVDltM2E5WTZXMFpkVno3NAotLS0gb2RUampQUWphUUVTaTZVdURLdzdHWFRRbVhMamZSeU9MNGRjcmMyVUdwRQp76tcAOaB17q7wD8FNyJoh5B4h0QeVTgrMHNEHibqTXZAcPPnvmvEKqmELF8x1JPwQrRVSH7GPVWvUGHmoRwOPqE1ORwBrBGkmw7L79UaYpGILr8oCoGCo4kQ18Mm1Cg==\"}],\"proof\":\"VEdTMQAAAAEP5kz6MsCi8bD6xSLnxSaqizmbig9F+WJFSjBj3A3aPAw2Zg+POuJWlMFa9agAJFLCml/9jMkGvD3cFQw=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAGbUiDhDMjU8E8Pc4bGmIp1JfhkI4rrRVzid35x4OyaJnAzAEc0koUwbAH8+vQuprrg97yntgzSd4w/wrM+oDA/Fm0qsWSLwDTrnn4e6fCwDuCGhjAi2eTf424r+HM1S8QuqEVDzQXTgJb11fBuhaE331maSzrTnxt06Nds0zp3A01qfmhofsSXjUyTGRUE/cHMqX+zfgwrK4SlEubL0u9yn6iskH8iIDbJ2idQmC/UWuqC/vKzPohZZqdFzJIUTXJHyCVc/IPuf7bG1OkfPnfQX2XXP6wBgGFP2UIZVmwIk4QqXOu/q44apqEa6fww60RLv1mO7KNvoBY9n5YLDH5lJe/J5a9O6U/WbKI3aTPZJfgZ\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}",
-   "{\"created\":1794381754,\"epoch\":2,\"keycheck\":\"47953ba57670b253e226b843eb6cb74338b3d7173ddf00f3abc00bcc47bfcc74\",\"members\":[{\"id\":\"63319eff29913dea\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBpZlAra2YvajNpVUNJVm0rMFhLelhNbktCTTdydzZCU0VFTnU0UUtnckM0Ci9HNElENnNaY0ZiYXlaY1E1UzhYY1ZtNmxrV3Qvak5YcnVyMmdHQkdlYmsKLT4gOzR+ZDpLPy1ncmVhc2UgUSBqcyAqcQpPa0NoNHUxWVFUTm5YL2tHUmcxQ0w1OGIwVlZORUpiTDlWQkkvQVZSMlFNSEF3cTl4WkhVWG1aVSs0S0llRWNxClhtdmx3NGJoMkt1aUdobmxvUkxDL2pjMGJnCi0tLSB3cG1lSXV3eWFHdVUvRTFOLzJYRU40djZYT3BhVHFDUzZTQUFZNzRQWm9rCtaCHohKdRG0VOsFH5PtwHsvxV9ywopxSMsW2K8cn1zdA/GIS2bCEIG/BEB9yXdvWBLjk8f9FECq5ofukEPJ6KG0Ti7tJSIdGTgKVHVHZG7mrA78YYIiyI3NO0eQYa5K7R77vVnawhqnP1UoCWlxP5YKZznNTb3jJUq2znQ1vWwy1XcRysJ5LDmO+meiRVdmkAY3suo=\"}],\"proof\":\"VEdTMQAAAAFr2sY6Uyab45O6a72/4797BbpSsPd90qQoSxbJWA23D4JuhzEN/7EqKUlAt72WiGRY5Gn6PnE9cRo8/ow=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAL9U6EtcpOie3NT6shG/zBYMp5oz0e/8Exd4/rO8WrzAY90LTHSLX8Rea/FdxxkwVKyV+fnBuQ4xBvmyk+xm25StnbXjk/I/bDRl0NpAw4f3krFZ+io5qGQDXLyU5J55rjUs+0maQRQa9HnNEP9hUkB+fLu6m3ZkdAsfieJ5KOYNaw6nDHIy4Tp9XEDGKS7Lwy+/DM/zeSQCg==\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}"
+   "{\"created\":1794384435,\"epoch\":1,\"keycheck\":\"25c9421d26db4db81db0eb73beb8ad37161bafd4dcee9b8b007bc2ddbee2fd6b\",\"members\":[{\"id\":\"5026632a708f11ce\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBKTGhFa0xFd2o3dkU0UkkrOFN5YlBxY2wzUjRPbFpzKzEydHZpMjhLbkc0CmlaWmtNYjBVYnNmdlF4U2lFNXh2UDREYkRYMlFkSTVTdTFhN2VFQXRZSTQKLT4gQXojLWdyZWFzZSA3JFA0IFg6XC8oCmUrNEtua0hHZkdEVXJXVGdta0h5eG1pTzg2QjJNOEdBQmVlRGNvV1pha0pIa2ViTWlIR2FJcmgyRkpieHIyTG0KamdVCi0tLSBZOGdPSFhUMXljeUlLcHpZR2VYS1Y0a0xCKy9TNjdad1pYbmFpWjBsMW1RCpQo2IBItQtLvAl+8+scsTUuEpXzkZqXlZzJvg3YJkMRfQtROGjzHRQLk9cP/+83zj9erss6x/PO2cec9NSGLsA3DKY2uJtlmyb4DKesM5ClFk404gQaBNMyuD60qU0p\"}],\"proof\":\"VEdTMQAAAAEr7+5gmVx1k3hHu5n8lIzOYd4eOwiaatMHRonkVAcR29WWtbijLeEZdEP/faETd/sv1T0yPS+cV8kC6i4=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAHOK14Dwuoq29MNmYH31usHjq/DshN9pPEUPYaAJy7qHCw9pl3FCsxJAH0CyDaiNrsRfXUYe8uUglu33x+EOY+b2CTxWtDKckeT+i3tQyZpXHJ+dOH33ygP1oTnzKcc8otMN//F8z/08+aCIyeIt2jWHNQJbN9ILDVo1HgKBq0/wUQXAJCBDm79rS/dGHBzCT2uplr3SBdqrQ==\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}",
+   "{\"created\":1794384435,\"epoch\":1,\"keycheck\":\"25c9421d26db4db81db0eb73beb8ad37161bafd4dcee9b8b007bc2ddbee2fd6b\",\"members\":[{\"id\":\"5026632a708f11ce\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBqYU5CcWp0VjFMYjBySEx1WGhkYnhRV1ZFWmtiRERWN2wzeG9aNHdrdlY0CjNpVWt2dE5hRzBlK2EwQnlGWDVxYXpzZ1I0MEtJWjk1MG00bVZLQW5jQkUKLT4gP0U2LWdyZWFzZSBXWyBZKHlzIC9nU1Y3UiBdPjVuCjRhVmIzejhiY0h5SlVPaDNEYjVIS3RQL2NGQmwwK3RMcGxjRGE1dExkQzM3OS9PU0FzVWNUcnFPdEJldVArZXUKc2I5L3VBNWhGQ3pJTVdsN0EvR2ZqNGcKLS0tIHNXdU42TGJBa0ZJRVRPTk5WaUpzcEtNTW5renpuK3EybGVvM0hmMzJ6c3cK0Bq6AbCIfciC/lmimWIa7S+XiT+ZXl/79AyDvaiBZftnVPFDis2qfEd1g5qjpxNv/18WcJzF2e4rEaQyjGCRqR4RETBUY9soTxmXJUmGnWowukC3PEO5NRxEbEuOmeg=\"},{\"id\":\"69d67e29ada74fac\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBHSmdseVVXdFBkUFIyeW9WejNTdW5zS2JITDV2UjhrY1pvVGxSakhJdDFBCk1pa0FKZUhLMlFQSHZPdHlTZ29melZLdkYvVHBRVEsxcHpKWFpFaWNwamcKLT4gLDFIKCV2P14tZ3JlYXNlIEAuRzBtJCEsIFBJLSB3fDcyWEMgWSstJjgKZnZRc2pxekFMQklUOUl4NmdrenVxR3QrUWU3aEZCV0hkRC9SR3R3cENKKzA1dDNKbDZUb2x2dERzZ1ozUDExRQpIQ05kVWJNejZhYkFRUjR3TjRnCi0tLSBOeTFEcEVUWkJHRkNESVNUdWJjaVNFOFNzTkRpR1diL1lidjQ0cDhKVW5RCiVIaHmPsDG+6JaWYynZtxxwA3gBt3SLF63ThQgKiJ84qfW+53aWnAyKkfM8psf68b2ptgueHa+ZJjDzg0UbZr0Ayg+3T3ffKx0Pxkofypaus0aA5xlVriJrfj2kS8c1\"}],\"proof\":\"VEdTMQAAAAHzowChYU3XyV4lO5rtZjvgcLRFW74WItU3blJcRM1bIBOyTdAE15Ib+ea4s4of/3L9kp8j99lTVhzz5FM=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAFUd+JBYQbJBjXXo8aC7apQAun90k2EmLg0E8FCdQ5/B9XxOeCDHvfUur83jEa+uZzQ5XGh4VsSWe83mi+un/6s+ng2DC9spkvL8/MU1eIUhpVvGOwnuPn/hHN1x9mamibuHyqU6XNMrfu62QrpR09s3jemwJ4TYwWZnmTX8/T1pRQkUK2L+824Nopm3FaZRX56PqfkxFTPmQFbjWFleviyDEIkbQ18Nuxu5pUoR87dNF09aEBzcfpF2mMIJI1apwkHkhPe3g8d6HTfb9vMSPCGcwyqWxibAYgkG3WvND0xhYb8PsjYplKhVjIMjp5lCzHOKLUq0NKigKsQDzcDHMJFtRi9gqXntrdFWLnIo0fsqF6r\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}",
+   "{\"created\":1794384435,\"epoch\":2,\"keycheck\":\"98689b44a84f7895b6ddf89c8b456a7ca3dfc3ff4d2a93750ef961713fbcb1cb\",\"members\":[{\"id\":\"5026632a708f11ce\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBQRUpLM0FjbC92T3pNL2ZTU3d2OXZYRC9XQ3ZsVEpmMklwM0NKMTZ3SVdNCnhIUGl3Y1p2UFZLTksySDRXSnJXYUppY3puYS9NdzNmT3Jsa0tRSEthSTQKLT4gbX0mPlBRLWdyZWFzZSBMK2xfWSN9KwpmVlo4TG01WWZwc3pQdm1jaDY1WlVZenFUL3VLTVN1NVNncW9sMDNXM09yNzZncnMyem9uaGhwL0tKWlJNcTczCm1ManlqZmN1OFlXMFQzN29Gb0VrclJCRXNBdE1HMEwwZXNqbm1yZHo1bzViN3cKLS0tIFF4YkJSSURnUFd2MlQ0NVlzM2VRQ3htRTQvMXpOelNITktvemtFUFR3MmMKX5zfk/aVTKYMtZBdoFV0xPmnXlnEzFCdu9kbSEw+D2fCV0R0ceTGSRCx8iDbFgR6rp85825xPA3CV/IgNUb/T7ySeuUkQrfwOrKkm0orr1NtFJ8P9WsWzhoWOZ3miPBFvFLGYAU7IN9z86NGseNyYMbf3qEu44E+ksXGwYvVqun2xHdZPDp20VhCFhu40c3qssuhJA==\"}],\"proof\":\"VEdTMQAAAAH4U9M64os7ECRhVf+L0yucatc33O7ekYD5d/xYRL80R0bPwLK9iikCLAvOUYHrcyyOEgpYNqis+D4Ykvw=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAIpbTWmf/BiQYgsUM8ACZjyfTlLFcLrGgLXEjgfXeo+Po13jJiAVkfG0/rc6YRqqQ+wiKZAQ3opztVgw8nBJDZimd6hdiMZstB1M3EEUUdQOyNsWJFOluSIMxHOLGmGKA9Jt5IXCDDRLYbK8QOENk9ypw/b7UK6j3W3jp4GunUv2GuuuySPZxQ/vKIIek3R5uFb+KvOdG98cw==\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}"
   ],
   "expect_alice": [
    {
@@ -159,14 +159,14 @@
    },
    "excluded"
   ],
-  "epoch2_key": "ebd6a40aef71cce332da71289a44cdf403337fb4892324a262ce4885e0651234",
-  "forged_after_d1": "{\"created\":1794381755,\"epoch\":1,\"keycheck\":\"25c9421d26db4db81db0eb73beb8ad37161bafd4dcee9b8b007bc2ddbee2fd6b\",\"members\":[{\"id\":\"63319eff29913dea\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB0enhDT3d1YkZIc2RqRW80cEtiREhjdGlxaXgrNkFhVWIvdWhXRFJhZTM4CmJERW8wYW9GVHlVcnEwNlVMZXIwRDJ3NHM5OWxPeGpwbGtHZ0xzTjFzcjgKLT4gYUpzdGUtZ3JlYXNlIHU/I3BHVzE5IFBVSFRzaFEgXVhfIUpyIFlPQj8iQ2ZdCllZYjJLcElwRVgwQkdKNXdENFZab0xSWmNLczdlWmdRajRrUXJNUy9XS05vajYvcVFpaWhqVlkKLS0tIEdJR1pBYk93eTBwZVYzQWM4Vzcyd015Y0h2NVQxWWJvN1JjUGRod0lxaUEK9ppNCNlgjqky9VOgSFakQV89KhIMypmoOT2LNVQo11aHtGwdr4OKeznNI/hIW0iZwsfJwA4fkLM3u1ORnosegSHaBZ7kmiuo4IwVj9SAF/9ag4XA3RNtlCbL78nVWa8=\"},{\"id\":\"b6443fd1a060f96b\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhemFNNTQ0dUNCMkhYRXNwekFPVVpoL1hHR0h6VXlRWm5WZEc4N2Vib2g4CnFiaXp1U1M4cnQ0a05zQkdYZHJBNmtDTW10VFJFZjJUa2N0elN4L3BxMncKLT4gNi1ncmVhc2UKTlQ3ZVJCeGVwYUdHRGUzUEw0cEt2d0w4ZmwrRDhxZ2NVb0dDeHhqeVlzL3NVdGZ0WTJoNCthRW1yd3lVa0JaQgpkeUUzMUVUSGVkSEg4aW1wTXAzcy9CMmpwTE4xNlFFVDltM2E5WTZXMFpkVno3NAotLS0gb2RUampQUWphUUVTaTZVdURLdzdHWFRRbVhMamZSeU9MNGRjcmMyVUdwRQp76tcAOaB17q7wD8FNyJoh5B4h0QeVTgrMHNEHibqTXZAcPPnvmvEKqmELF8x1JPwQrRVSH7GPVWvUGHmoRwOPqE1ORwBrBGkmw7L79UaYpGILr8oCoGCo4kQ18Mm1Cg==\"}],\"proof\":\"VEdTMQAAAAEP5kz6MsCi8bD6xSLnxSaqizmbig9F+WJFSjBj3A3aPAw2Zg+POuJWlMFa9agAJFLCml/9jMkGvD3cFQw=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAGbUiDhDMjU8E8Pc4bGmIp1JfhkI4rrRVzid35x4OyaJnAzAEc0koUwbAH8+vQuprrg97yntgzSd4w/wrM+oDA/Fm0qsWSLwDTrnn4e6fCwDuCGhjAi2eTf424r+HM1S8QuqEVDzQXTgJb11fBuhaE331maSzrTnxt06Nds0zp3A01qfmhofsSXjUyTGRUE/cHMqX+zfgwrK4SlEubL0u9yn6iskH8iIDbJ2idQmC/UWuqC/vKzPohZZqdFzJIUTXJHyCVc/IPuf7bG1OkfPnfQX2XXP6wBgGFP2UIZVmwIk4QqXOu/q44apqEa6fww60RLv1mO7KNvoBY9n5YLDH5lJe/J5a9O6U/WbKI3aTPZJfgZ\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}"
+  "epoch2_key": "8b97c1544f4ce8f34ede9df2280b0fccddf48325d9699ed419cbbc7158da4d91",
+  "forged_after_d1": "{\"created\":1794384436,\"epoch\":1,\"keycheck\":\"25c9421d26db4db81db0eb73beb8ad37161bafd4dcee9b8b007bc2ddbee2fd6b\",\"members\":[{\"id\":\"5026632a708f11ce\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBqYU5CcWp0VjFMYjBySEx1WGhkYnhRV1ZFWmtiRERWN2wzeG9aNHdrdlY0CjNpVWt2dE5hRzBlK2EwQnlGWDVxYXpzZ1I0MEtJWjk1MG00bVZLQW5jQkUKLT4gP0U2LWdyZWFzZSBXWyBZKHlzIC9nU1Y3UiBdPjVuCjRhVmIzejhiY0h5SlVPaDNEYjVIS3RQL2NGQmwwK3RMcGxjRGE1dExkQzM3OS9PU0FzVWNUcnFPdEJldVArZXUKc2I5L3VBNWhGQ3pJTVdsN0EvR2ZqNGcKLS0tIHNXdU42TGJBa0ZJRVRPTk5WaUpzcEtNTW5renpuK3EybGVvM0hmMzJ6c3cK0Bq6AbCIfciC/lmimWIa7S+XiT+ZXl/79AyDvaiBZftnVPFDis2qfEd1g5qjpxNv/18WcJzF2e4rEaQyjGCRqR4RETBUY9soTxmXJUmGnWowukC3PEO5NRxEbEuOmeg=\"},{\"id\":\"69d67e29ada74fac\",\"wrapped\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBHSmdseVVXdFBkUFIyeW9WejNTdW5zS2JITDV2UjhrY1pvVGxSakhJdDFBCk1pa0FKZUhLMlFQSHZPdHlTZ29melZLdkYvVHBRVEsxcHpKWFpFaWNwamcKLT4gLDFIKCV2P14tZ3JlYXNlIEAuRzBtJCEsIFBJLSB3fDcyWEMgWSstJjgKZnZRc2pxekFMQklUOUl4NmdrenVxR3QrUWU3aEZCV0hkRC9SR3R3cENKKzA1dDNKbDZUb2x2dERzZ1ozUDExRQpIQ05kVWJNejZhYkFRUjR3TjRnCi0tLSBOeTFEcEVUWkJHRkNESVNUdWJjaVNFOFNzTkRpR1diL1lidjQ0cDhKVW5RCiVIaHmPsDG+6JaWYynZtxxwA3gBt3SLF63ThQgKiJ84qfW+53aWnAyKkfM8psf68b2ptgueHa+ZJjDzg0UbZr0Ayg+3T3ffKx0Pxkofypaus0aA5xlVriJrfj2kS8c1\"}],\"proof\":\"VEdTMQAAAAHzowChYU3XyV4lO5rtZjvgcLRFW74WItU3blJcRM1bIBOyTdAE15Ib+ea4s4of/3L9kp8j99lTVhzz5FM=\",\"proof_epoch\":1,\"roster\":\"VEdTMQAAAAFUd+JBYQbJBjXXo8aC7apQAun90k2EmLg0E8FCdQ5/B9XxOeCDHvfUur83jEa+uZzQ5XGh4VsSWe83mi+un/6s+ng2DC9spkvL8/MU1eIUhpVvGOwnuPn/hHN1x9mamibuHyqU6XNMrfu62QrpR09s3jemwJ4TYwWZnmTX8/T1pRQkUK2L+824Nopm3FaZRX56PqfkxFTPmQFbjWFleviyDEIkbQ18Nuxu5pUoR87dNF09aEBzcfpF2mMIJI1apwkHkhPe3g8d6HTfb9vMSPCGcwyqWxibAYgkG3WvND0xhYb8PsjYplKhVjIMjp5lCzHOKLUq0NKigKsQDzcDHMJFtRi9gqXntrdFWLnIo0fsqF6r\",\"v\":1,\"vault_id\":\"a1b2c3d4e5f60718\"}"
  },
  "record": {
   "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "epoch": 1,
-  "blob": "544753310000000100000000000000000000000021bc3e944964201c5aaba3db84112e41ff1783e018a4aaeaff6c9d35be62d0f8b75af9e7c8af3905ca56d70f323d569eb08d925c99e63f98456a001cfaf61426085bd96c2c4f4aea1e0e70bdff62b8a3c7d56db505e5130296b889f65685e9cdfde20f89ed473b7303c9bd95ae8b2fa9c4e9b5839d38ec5375d2659ea43e42fa331de044983a71511dd80c492e56a319604ac113171b4e8fd9cc3e88ae3687050c03e598f9ed12c9804ccef31e6e6d4def99c0669767ef18a0a82bcf227c8f9d5da315c34f138afc86e7d1aa25565ecc8316870e32d79e785fd2131e1c7c5502aabe6f58971abf8a4228b374411dcfd5bb9932a604b8fce5fd1212274e4a42fbe22789fa89b72f80f7e41a05ff07f08ec492c827e4742c5e7cf2c097d56326db8d7776c3af0a5bfd1c6522f4acd1bb5c2bc00fbc9b09c49bcbd93ea83332e014d3f4260e8d6a5b71c5bbeac638213363a616db4cd9337539a70564b0251a2d046d1f7bd6367ca95fa105014b8899c47c83d53e7da1e60f890ccf25ef2754bffea575920493ac571bbfe708e06bd12aaa44d2a7a9fb3b6e7160786a5bd9dd1633052ba9f9f61334add126e3cbfc96aa55526bc50ededda477847504502f3059b136e9444631caca0e17f4dc3d070f6b4c9415d558196338e57454f3abcf36480e4d420b1c8bb8d16a97c1d5f9e0aed5e163460ed68b50a2777b66613513f31f20f33a391957dfb87102cc1296dd7a164ad54ac25f4a093b0ad616e9ede47edf1758c43bc1f37918bbef81412878b709be2c702af899929daefd7b5d214a57ff7239d668d8e68510a6d74ea8c4ec9cc48a43aad100cff9a98edf77fc034ceceae46ed493b4f4956786299c24cd10d8c968dea5b22264a367aaee928eec39b886c258fe6ae1904e0f47194005214637a12a5274558a01e51b69105d28396c1a5e38cb741f4536d849042728f45fac78f258b75f70536a2d",
-  "author": "63319eff29913dea",
+  "blob": "544753310000000100000000000000000000000021bc3e944964201c5aaba3db84112e41ff1783e018a7a9ebf863cb61b967d9f9e058ace1ccaf3905ca56d70f323d569eb08d925c99e63f98456a001cfaf61426085bd96c2c4f4aea1e0e70bdff62b8a3c7d56db505e5130296b889f65685e9cdfde20f89ed473b7303c9bd95ae8b2fa9c4e9b5839d38ec5375d2659ea43e42fa331de044983a71511dd80c492e56a319604ac113171b4e8fd9cc3e88ae3687050c03e598f9ed12c9804ccef31e6e6d4def99c0669767ef18a0a82bcf227c8f9d5da315c34f138afc86e7d1aa25565ecc8316870e32d79e785fd2131e1c7c5502aabe6f58971abf8a4228b374411dcfd5bb9932a604b8fce5fd1212274e4a42fbe22789fa89b72f80f7e41a05ff07f08ec492c827e4742c5e7cf2c097d56326db8d7776c3af0a5bfd1c6522f4acd1bb5c2bc00fbc9b09c49bcbd93ea83332e014d3f4260e8d6a5b71c5bbeac638213363a616db4cd9337539a70564b0251a2d046d1f7bd6367ca95fa105014b8899c47c83d53e7da1e60f890ccf25ef2754bffea575920493ac571bbfe708e06bd12aaa44d2a7a9fb3b6e7160786a5bd9dd1633052ba9f9f61334add126e3cbfc96aa55526bc50ededda477847504502f3059b136e9444631caca0e17f4dc3d070f6b4c9415d558196338e57454f3abcf36480e4d420b1c8bb8d16a97c1d5f9e0aed5e163460ed68b50a2777b66613513f31f20f33a391957dfb87102cc1296dd7a164ad54ac25f4a093b0ad616e9ede47edf1758c43bc1f37918bbef81412878b709be2c702af899929daefd7b5d214a57ff7239d668d8e68510a6d74ea8c4ec9cc48a43aad100cff9a98edf77fc034ceceae46ed493b4f4956786299c24cd10d8c968dea5b22264a367aaee928eec39b886c258fe6ae1904e0f47194005214637a12a5274558a01e51b69105d28396c1a5e38cb741f4536d841c330f05f52b0f6612fb0dfba66e43c",
+  "author": "5026632a708f11ce",
   "seq": 1,
   "ts": 1762850002.5,
   "entries": [
@@ -233,9 +233,9 @@
   ]
  },
  "join_request": {
-  "body": "{\"v\":1,\"vault\":\"a1b2c3d4e5f60718\",\"recipient\":\"age1wykj7hh08rgxme8j8n5x2uk8antxu6nyfxa9x8ftk0yekhqmqyvsqd3l27\",\"name\":\"bob\"}",
+  "body": "{\"v\":1,\"vault\":\"a1b2c3d4e5f60718\",\"recipient\":\"age1w7nlm8en5aael9hm7ls4q7623ajus8vhv4y3a6lkgy9rglg4wd6s3ypwk0\",\"name\":\"bob\"}",
   "vault": "a1b2c3d4e5f60718",
-  "recipient": "age1wykj7hh08rgxme8j8n5x2uk8antxu6nyfxa9x8ftk0yekhqmqyvsqd3l27",
+  "recipient": "age1w7nlm8en5aael9hm7ls4q7623ajus8vhv4y3a6lkgy9rglg4wd6s3ypwk0",
   "name": "bob"
  },
  "paths": [
@@ -360,6 +360,112 @@
    "out": "d/.hidden (conflict abcdef 2025-11-11 0833)"
   }
  ],
+ "ignore": {
+  "default": "\n# tgsync ignore rules (gitignore syntax)\n.tgsync/\n.git/\n*.tgsync-tmp\n.DS_Store\nThumbs.db\ndesktop.ini\n# editor scratch files (vim/nvim swap + backup, emacs locks/autosaves, nvim's write probe)\n*.swp\n*.swo\n*.swx\n*~\n.#*\n\\#*#\n4913\n.netrwhist\n# Obsidian: per-device UI state churns constantly and conflicts for no reason\n.obsidian/workspace.json\n.obsidian/workspaces.json\n.obsidian/cache\n.trash/\n",
+  "extra": "*.log\n!keep.log\n/build/\nsecret*/\n",
+  "cases": [
+   {
+    "path": "a.md",
+    "ignored": false
+   },
+   {
+    "path": "x.swp",
+    "ignored": true
+   },
+   {
+    "path": "notes/.x.md.swp",
+    "ignored": true
+   },
+   {
+    "path": ".obsidian/workspace.json",
+    "ignored": true
+   },
+   {
+    "path": ".obsidian/app.json",
+    "ignored": false
+   },
+   {
+    "path": ".obsidian/cache/",
+    "ignored": true
+   },
+   {
+    "path": ".trash/",
+    "ignored": true
+   },
+   {
+    "path": ".trash/old.md",
+    "ignored": true
+   },
+   {
+    "path": "4913",
+    "ignored": true
+   },
+   {
+    "path": "#auto#",
+    "ignored": true
+   },
+   {
+    "path": ".#lock",
+    "ignored": true
+   },
+   {
+    "path": "note.md~",
+    "ignored": true
+   },
+   {
+    "path": ".DS_Store",
+    "ignored": true
+   },
+   {
+    "path": "d/Thumbs.db",
+    "ignored": true
+   },
+   {
+    "path": "app.log",
+    "ignored": true
+   },
+   {
+    "path": "keep.log",
+    "ignored": false
+   },
+   {
+    "path": "sub/app.log",
+    "ignored": true
+   },
+   {
+    "path": "build/",
+    "ignored": true
+   },
+   {
+    "path": "sub/build/",
+    "ignored": false
+   },
+   {
+    "path": "secret-stuff/",
+    "ignored": true
+   },
+   {
+    "path": "secretfile",
+    "ignored": false
+   },
+   {
+    "path": ".tgsync/",
+    "ignored": true
+   },
+   {
+    "path": ".git/",
+    "ignored": true
+   },
+   {
+    "path": "x.tgsync-tmp",
+    "ignored": true
+   },
+   {
+    "path": ".tgsyncignore",
+    "ignored": false
+   }
+  ]
+ },
  "replay": {
   "log": [
    {

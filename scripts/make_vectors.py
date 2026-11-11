@@ -122,6 +122,16 @@ def main() -> None:
                            "out": paths.conflict_name(p, "abcdef0123456789", 1762850000.0)}
                           for p in ["n.md", "dir/sub/n.tar.gz", "noext", ".gitignore", "d/.hidden"]]
 
+    import pathspec
+    extra = "*.log\n!keep.log\n/build/\nsecret*/\n"
+    spec = pathspec.PathSpec.from_lines("gitignore", (paths.DEFAULT_IGNORE + extra).splitlines())
+    cases = ["a.md", "x.swp", "notes/.x.md.swp", ".obsidian/workspace.json", ".obsidian/app.json", ".obsidian/cache/",
+             ".trash/", ".trash/old.md", "4913", "#auto#", ".#lock", "note.md~", ".DS_Store", "d/Thumbs.db",
+             "app.log", "keep.log", "sub/app.log", "build/", "sub/build/", "secret-stuff/", "secretfile",
+             ".tgsync/", ".git/", "x.tgsync-tmp", ".tgsyncignore"]
+    v["ignore"] = {"default": paths.DEFAULT_IGNORE, "extra": extra,
+                   "cases": [{"path": c, "ignored": spec.match_file(c)} for c in cases]}
+
     v["replay"] = replay_vector()
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(v, indent=1, ensure_ascii=False) + "\n")

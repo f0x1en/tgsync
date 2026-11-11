@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Crypto of tgsync protocol v1 (PROTOCOL.md section 2-3). WebCrypto only, so it runs in
 // Obsidian desktop (Electron) and mobile (WebView) alike.
-import { Decrypter, Encrypter } from "age-encryption";
+import { Decrypter, Encrypter, generateX25519Identity, identityToRecipient } from "age-encryption";
 
 const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();
@@ -136,4 +136,11 @@ export async function unwrap(secret: string, ciphertext: Uint8Array): Promise<Ui
   } catch (e) {
     throw new CryptoError(`cannot decrypt with this identity: ${e}`);
   }
+}
+
+/** A new person key (age X25519, same kind as the Python CLI makes). */
+export async function newIdentity(): Promise<{ secret: string; recipient: string; id: string }> {
+  const secret = await generateX25519Identity();
+  const recipient = await identityToRecipient(secret);
+  return { secret, recipient, id: await memberId(recipient) };
 }
