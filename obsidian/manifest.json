@@ -1,0 +1,9 @@
+{
+  "id": "tgsync",
+  "name": "tgsync",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "End-to-end encrypted sync of this vault through a private Telegram group.",
+  "author": "f0x1en",
+  "isDesktopOnly": false
+}

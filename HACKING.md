@@ -29,7 +29,7 @@ Delete `~/tgs` to start over.
 
 `PROTOCOL.md` describes every message format and the replay rules; `spec/vectors.json` has fixed examples
 (regenerate with `.venv/bin/python scripts/make_vectors.py`; `tests/test_vectors.py` checks Python against it).
-The Obsidian plugin must pass the same vectors. Change the protocol only together with both.
+The Obsidian plugin must pass the same vectors. Plugin code: `obsidian/` (`cd obsidian && npm install` once, then `make plugin`). Change the protocol only together with both.
 
 ## Code map (`src/tgsync/`)
 
