@@ -506,6 +506,25 @@ const COMMANDS: { [name: string]: Command } = {
     },
   },
 
+  login: {
+    help: "Log a profile in to Telegram (or show which account it uses). new/join do this for you.",
+    usage: "[--profile P] [--api-id ID --api-hash HASH] [--proxy URL]",
+    options: { "api-id": { type: "string" }, "api-hash": { type: "string" }, ...PROFILE_OPT },
+    async run(_a, o) {
+      if (sandboxRoot() !== null) throw new CliError("The sandbox (TGSYNC_SANDBOX) needs no login.");
+      const profile = await chooseProfile(o.profile as string | undefined);
+      const api: [number, string] | null = o["api-id"] && o["api-hash"] ? [Number(o["api-id"]), o["api-hash"] as string] : null;
+      const [, tg] = await ensureReady(profile, api, o.proxy as string | undefined);
+      try {
+        const me = await tg!.getMe();
+        const account = `${me.firstName ?? ""} (@${me.username ?? me.id})`;
+        emit({ profile, account }, () => echo(`Account '${profile}' is logged in as ${account}.`));
+      } finally {
+        await tg!.destroy();
+      }
+    },
+  },
+
   pull: reportCmd("Download teammates' changes only (uploads nothing).", "pullChanges"),
   push: reportCmd("Upload your changes only (never touches your local files).", "pushChanges"),
 

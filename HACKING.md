@@ -31,12 +31,15 @@ Delete `~/tgs` to start over.
 (regenerate with `.venv/bin/python scripts/make_vectors.py`; `tests/test_vectors.py` checks Python against it).
 The Obsidian plugin must pass the same vectors. TypeScript engine (the base for the Node CLI and the plugin): `ts/` (`make ts`).
 
-**Node CLI** (`ts/src/cli/main.ts`, built to `ts/dist/tgsync.mjs` by `npm run build`): the same commands, output and
-`--json` contract as the Python CLI, and it replaces it once Telegram works in TypeScript. Until then it only talks
-to sandbox groups (`TGSYNC_SANDBOX`). Profiles and keys are shared with Python (`~/.config/tgsync/<profile>/`).
-Differences from Python: local state is `.tgsync/state.json` (Python folders are not converted; join again), and
+**Node CLI** (`ts/src/cli/main.ts`, built to the single file `ts/dist/tgsync.mjs` by `npm run build`): the same
+commands, output and `--json` contract as the Python CLI, which it replaces. Telegram goes through mtcute (pinned
+exact version, `ts/src/node/telegram.ts`); the login is a session string in `<profile>/mtcute.session`, and
+`tgsync login [--profile P]` logs a profile in. Profiles, keys and `telegram.json` are shared with Python
+(`~/.config/tgsync/<profile>/`). Differences from Python: local state is `.tgsync/state.json` (Python folders are
+not converted; join again); `.tgsync/config.json` `chat` is the group's invite link (the group is found by it);
 `restore` downloads old versions from the group instead of a local git copy, so REV is a version id like `812.0`
-(record message, entry). `make ts` also runs `tests/test_sandbox.py` against it (`TGSYNC_CLI=...`).
+(record message, entry). `make ts` also runs `tests/test_sandbox.py` against it, and
+`TGSYNC_CLI="node ts/dist/tgsync.mjs" python scripts/live_e2e.py` runs the live test with it.
 Obsidian plugin, a thin layer over `ts/` that adds nothing the CLI lacks: `obsidian/` (`make plugin`).
 Run `npm install` once in each.
 
