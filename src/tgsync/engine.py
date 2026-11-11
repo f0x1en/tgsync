@@ -20,7 +20,7 @@ from .lock import VaultLock
 from .paths import INTERNAL_DIR, TMP_SUFFIX, load_ignore, normalize, safe_join
 from .state import State
 from .transport import Transport
-from .tree import Node, Tree
+from .tree import DIR, Node, Tree
 
 HASH_BLOCK = 1024 * 1024
 BIG_FILE = 8 * 1024 * 1024  # files at least this big get a heads-up message while transferring
@@ -184,6 +184,7 @@ class Vault:
         cursor = self.state.cursor
         authors = self.state.author_seqs()
         new_desc: list[tuple[int, bytes]] = []
+        log: list[tuple] = []
         last = cursor
         blocked = False  # saw records we could not read yet; freeze the cursor before them
         fresh = self.state.get("active") != "1"  # this vault has never been synced to disk
@@ -235,16 +236,17 @@ class Vault:
                                 if rec.seq != prev + 1 and prev:
                                     self._problem(rep, msg.id, f"gap in {rec.author[:6]}'s history: {prev} -> {rec.seq} (message dropped?)")
                                 authors[rec.author] = rec.seq
-                                for ent in rec.entries:
+                                for i, ent in enumerate(rec.entries):
                                     r = self.tree.apply_entry(ent, rec.author, rec.ts, msg.id)
                                     if r is not None and r[0] != "noop":
                                         rep.applied_remote += 1
+                                        log.append((msg.id, i, rec.ts, rec.author, *r))
                                     if r is not None and r[0] == "conflict":
                                         rep.conflicts.append((r[1], r[2]))
                 if not blocked:
                     last = msg.id
         finally:
-            self.state.save_tree(self.tree, last, authors, new_desc)
+            self.state.save_tree(self.tree, last, authors, new_desc, log)
         self._sent_seq = max(self._sent_seq, authors.get(self.identity.id, 0))
         return blocked
 
@@ -258,11 +260,11 @@ class Vault:
             rel_dir = Path(dirpath).relative_to(self.root).as_posix()
             rel_dir = "" if rel_dir == "." else rel_dir
             dirnames[:] = [d for d in dirnames if not self._ignored(f"{rel_dir}/{d}".lstrip("/") + "/")]
-            for fn in filenames:
-                rel = f"{rel_dir}/{fn}".lstrip("/")
-                if self._ignored(rel):
-                    continue
-                yield rel, Path(dirpath) / fn
+            files = [fn for fn in filenames if not self._ignored(f"{rel_dir}/{fn}".lstrip("/"))]
+            if rel_dir and not dirnames and not files:
+                yield rel_dir, Path(dirpath)  # empty folder
+            for fn in files:
+                yield f"{rel_dir}/{fn}".lstrip("/"), Path(dirpath) / fn
 
     def _ignored(self, rel: str) -> bool:
         return self._ignore.match_file(rel)
@@ -278,6 +280,15 @@ class Vault:
                 st = p.lstat()
             except (PathError, OSError) as e:
                 rep.skipped.append(f"{rel}: {e}")
+                continue
+            if p.is_dir() and not p.is_symlink():
+                seen.add(rel)
+                node = self.tree.get(rel)
+                if node is not None and node.sha == DIR:
+                    if rel not in synced:
+                        self.state.set_synced(rel, DIR, 0, 0)
+                elif rel not in synced:
+                    changes.append({"op": "mkdir", "path": rel})
                 continue
             if not os.path.isfile(p) or p.is_symlink():
                 rep.skipped.append(f"{rel}: not a regular file")
@@ -296,10 +307,10 @@ class Vault:
                 self.state.set_synced(rel, sha, st.st_size, st.st_mtime_ns)
                 continue
             changes.append({"op": "put", "path": rel, "base": prev[0] if prev else None,
-                            "size": st.st_size, "mtime": st.st_mtime})
+                            "size": st.st_size, "mtime": st.st_mtime, "sha": sha})
         for rel, (sha, _, _) in synced.items():
             if rel not in seen and not (self.root / rel).exists():
-                changes.append({"op": "delete", "path": rel, "base": sha})
+                changes.append({"op": "rmdir", "path": rel} if sha == DIR else {"op": "delete", "path": rel, "base": sha})
         self.state.commit()
         return changes
 
@@ -310,6 +321,7 @@ class Vault:
         batch: list[dict] = []
         payload = bytearray()
         pushed_paths: list[str] = []
+        known = {n.sha: n for n in self.tree.nodes.values() if n.sha != DIR}  # content the group already has
 
         async def flush() -> None:
             nonlocal batch, payload
@@ -323,8 +335,13 @@ class Vault:
             batch, payload = [], bytearray()
 
         for ch in changes:
-            if ch["op"] == "delete":
+            old = known.get(ch.get("sha", ""))
+            if ch["op"] != "put":
                 batch.append(ch)
+                pushed_paths.append(ch["path"])
+            elif old is not None:  # renamed or copied: point at the existing upload, send no data
+                batch.append({"op": "put", "path": ch["path"], "base": ch["base"], "mtime": ch["mtime"],
+                              "sha": old.sha, "size": old.size, "blob": dict(old.blob)})
                 pushed_paths.append(ch["path"])
             else:
                 p = safe_join(self.root, ch["path"])
@@ -417,9 +434,16 @@ class Vault:
 
     async def materialize(self, rep: SyncReport) -> None:
         synced = self.state.synced()
-        preserved = {n.sha for n in self.tree.nodes.values()}
+        preserved = {n.sha for n in self.tree.nodes.values() if n.sha != DIR}
         for path, node in sorted(self.tree.nodes.items()):
             dest = safe_join(self.root, path)
+            if node.sha == DIR:
+                if not dest.exists():
+                    dest.mkdir(parents=True)
+                    rep.written.append(path + "/")
+                if dest.is_dir():
+                    self.state.set_synced(path, DIR, 0, 0)
+                continue
             disk_sha = None
             if dest.is_file() and not dest.is_symlink():
                 st = dest.stat()
@@ -448,7 +472,12 @@ class Vault:
             if path in self.tree.nodes:
                 continue
             dest = safe_join(self.root, path)
-            if dest.is_file():
+            if sha == DIR:
+                if dest.is_dir() and not dest.is_symlink() and not any(dest.iterdir()):
+                    dest.rmdir()
+                    rep.deleted.append(path + "/")
+                    self._prune_empty(dest.parent)
+            elif dest.is_file():
                 if sha256_file(dest) != sha and sha256_file(dest) not in preserved:
                     rep.skipped.append(f"{path}: deleted remotely but has local edits; kept")
                     self.state.del_synced(path)
@@ -461,7 +490,8 @@ class Vault:
         self.state.commit()
 
     def _prune_empty(self, d: Path) -> None:
-        while d != self.root and d.is_dir() and not any(d.iterdir()):
+        while d != self.root and d.is_dir() and not any(d.iterdir()) \
+                and self.tree.get(d.relative_to(self.root).as_posix()) is None:  # keep synced empty folders
             d.rmdir()
             d = d.parent
 
@@ -528,7 +558,9 @@ class Vault:
             if ch["op"] == "put" and node and p.is_file() and sha256_file(p) == node.sha:
                 st = p.stat()
                 self.state.set_synced(ch["path"], node.sha, st.st_size, st.st_mtime_ns)
-            elif ch["op"] == "delete" and node is None:
+            elif ch["op"] == "mkdir" and node and node.sha == DIR:
+                self.state.set_synced(ch["path"], DIR, 0, 0)
+            elif ch["op"] in ("delete", "rmdir") and node is None:
                 self.state.del_synced(ch["path"])
         self.state.commit()
 
@@ -574,6 +606,12 @@ class Vault:
         data, _ = vaultkeys.remove_member(ring, self._vid(), self.members, target)
         await self.transport.send(oplog.KIND_DESCRIPTOR, data)
         await self.pull()
+
+    def log(self, path: str | None = None, limit: int = 50) -> list[dict]:
+        """Who changed what, newest first (from the local copy of the log; works offline)."""
+        names = {m.id: m.name or m.recipient[:12] for m in self.members}
+        return [{"ts": ts, "who": names.get(a, a[:8]), "op": op, "path": p, "copy": other}
+                for ts, a, op, p, other in self.state.log(path, limit)]
 
     def status(self) -> dict:
         rep = SyncReport()

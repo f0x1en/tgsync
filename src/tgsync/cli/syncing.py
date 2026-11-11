@@ -106,7 +106,7 @@ def status(check: bool, vault_dir: Path) -> None:
         click.echo(f"you: account '{profile}', key {ident.recipient[:14]}...   "
                    f"members: " + ", ".join(n or r[:12] for n, r in s["members"]))
         for op, path in s["pending"]:
-            click.echo(f"  {'M' if op == 'put' else 'D'} {path}")
+            click.echo(f"  {'M' if op in ('put', 'mkdir') else 'D'} {path}{'/' if op in ('mkdir', 'rmdir') else ''}")
         if not s["pending"]:
             click.echo("  nothing to upload")
         for _, what in s["problems"]:

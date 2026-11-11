@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Local history: `restore` (works offline; reads .tgsync/history.git)."""
+"""Local history: `log` and `restore` (both work offline)."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import click
 
+from ..engine import Vault
 from ..errors import TgSyncError
 from ..history import History
+from ..identity import load_identity
 from ..paths import INTERNAL_DIR, safe_join
 from . import common as c
 from .common import main, vault_opt
@@ -72,3 +75,31 @@ def restore(path: str | None, rev: str | None, vault_dir: Path) -> None:
     c.emit({"restored": path, "rev": rev},
            lambda: click.echo(f"Restored {path} as of {rev}. Your previous version is saved in history. "
                               f"Run `tgsync` to share it."))
+
+
+_WORDS = {"put": "wrote", "delete": "deleted", "conflict": "conflict", "mkdir": "made folder",
+          "rmdir": "removed folder"}
+
+
+@main.command()
+@click.argument("path", required=False)
+@click.option("-n", "limit", default=50, show_default=True, help="How many changes to show.")
+@vault_opt
+def log(path: str | None, limit: int, vault_dir: Path) -> None:
+    """Who changed what and when, newest first (works offline). Give PATH for one file or folder."""
+    cfg = c._load_cfg(vault_dir)
+    v = Vault(vault_dir, load_identity(cfg.get("profile", "default")), None, use_git=False)  # type: ignore[arg-type]
+    rows = v.log(path, limit)
+    v.close()
+
+    def text() -> None:
+        if not rows:
+            click.echo("No changes recorded yet. Changes show up here after the next `tgsync`.")
+            return
+        for r in rows:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
+            what = f"{r['path']} -> {r['copy']}" if r["copy"] else r["path"]
+            click.echo(f"{when}  {r['who']:<12} {_WORDS.get(r['op'], r['op']):<14} {what}")
+        click.echo("Older version of a file:  tgsync restore <path>")
+
+    c.emit({"log": rows}, text)

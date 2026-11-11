@@ -4,6 +4,7 @@
     tgsync              sync this folder (pull + push), same as `tgsync sync`
     tgsync pull / push  only download / only upload
     tgsync status       what changed locally (add --check to test Telegram access)
+    tgsync log          who changed what and when
     tgsync restore      bring back an older version of a file
     tgsync new DIR      start a vault        tgsync join CODE   join one
     tgsync invite / members / accept CODE / remove NAME

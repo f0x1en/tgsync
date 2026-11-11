@@ -33,7 +33,7 @@ Delete `~/tgs` to start over.
 | `cli/setup.py` | `new`, `join` |
 | `cli/people.py` | `invite`, `members`, `accept`, `remove` |
 | `cli/syncing.py` | `sync`, `pull`, `push`, `status` |
-| `cli/restore.py` | `restore` (offline, local history) |
+| `cli/restore.py` | `log`, `restore` (offline) |
 | `engine.py` | `Vault`: create/join, pull (replay the log), push (scan + upload), materialize (write files), members. No printing, no prompts. |
 | `oplog.py` | Message formats: records (batched file ops), chunks (big files). |
 | `vaultkeys.py` | Descriptors: the vault key wrapped per member, roster, add/remove (key rotation). |
@@ -87,6 +87,7 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
 - `members`: `members` (`[{name, id, you}]`), `waiting` (`[{code, name}]`).
 - `new`: `folder`, `profile`, `vault_id`, `invite`. `join`: `state` (`"waiting"` + `code`, or `"joined"` + `report`).
 - `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev`.
+- `log`: `log` (`[{ts, who, op, path, copy}]`, newest first; op is `put`, `delete`, `conflict`, `mkdir`, `rmdir`).
 
 A plugin would run e.g. `tgsync --json sync -C <vault>` and read stdout. Desktop only: Obsidian
 mobile cannot start processes, so a mobile plugin would need the sync logic itself.

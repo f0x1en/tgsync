@@ -230,3 +230,55 @@ async def test_joining_with_the_same_files_on_disk_uploads_nothing_again(pair, m
     assert "same.md" not in rep.pushed_paths          # identical to the vault: not uploaded again
     assert "other.md" in rep.pushed_paths             # a real difference is still shared, not lost
     assert c.read("same.md") == b"shared text"
+
+
+async def test_rename_uploads_no_content(pair, channel):
+    a, b = pair
+    big = os.urandom(300_000)  # chunked
+    a.write("big.bin", big)
+    a.write("n.md", "note")  # inline
+    await a.vault.sync()
+    await b.vault.sync()
+    (a.root / "moved").mkdir()
+    (a.root / "big.bin").rename(a.root / "moved/big.bin")
+    (a.root / "n.md").rename(a.root / "m.md")
+    before = channel.sent
+    await a.vault.sync()
+    assert channel.sent - before == 1  # one small record, no chunks re-sent
+    await b.vault.sync()
+    assert b.files() == {"moved/big.bin", "m.md"}
+    assert b.read("moved/big.bin") == big and b.read("m.md") == b"note"
+
+
+async def test_empty_folders_sync_and_delete(pair):
+    a, b = pair
+    (a.root / "ideas/later").mkdir(parents=True)
+    await a.vault.sync()
+    await b.vault.sync()
+    assert (b.root / "ideas/later").is_dir()
+    b.write("ideas/later/x.md", "x")  # folder no longer empty: still fine
+    await b.vault.sync()
+    await a.vault.sync()
+    assert a.read("ideas/later/x.md") == b"x"
+    (a.root / "ideas/later/x.md").unlink()  # back to empty: the folder stays on both sides
+    await a.vault.sync()
+    await b.vault.sync()
+    assert (b.root / "ideas/later").is_dir() and not b.exists("ideas/later/x.md")
+    (b.root / "ideas/later").rmdir()
+    await b.vault.sync()
+    await a.vault.sync()
+    assert not (a.root / "ideas/later").exists()
+    assert a.vault.status()["pending"] == [] and b.vault.status()["pending"] == []
+
+
+async def test_log_lists_who_changed_what(pair):
+    a, b = pair
+    a.write("n.md", "1")
+    await a.vault.sync()
+    await b.vault.sync()
+    b.write("n.md", "2")
+    await b.vault.sync()
+    await a.vault.sync()
+    rows = a.vault.log("n.md")
+    assert [(r["who"], r["op"], r["path"]) for r in rows] == [("bob", "put", "n.md"), ("alice", "put", "n.md")]
+    assert a.vault.log("other.md") == []

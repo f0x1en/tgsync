@@ -36,6 +36,7 @@ tgsync            # sync: download others' changes AND upload yours, list what m
 tgsync pull       # only download (safe while you are mid-edit: publishes nothing)
 tgsync push       # only upload (never touches your local files)
 tgsync status     # what changed locally (works offline); `--check` also tests Telegram
+tgsync log        # who changed what and when (works offline); `tgsync log notes/x.md` for one file
 tgsync restore    # bring back an older version of a file (it asks which)
 ```
 
@@ -98,8 +99,10 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 * A removed member keeps what they already synced; they can't read data written after rotation.
 * Your age secret key lives in your user config dir (`0600` on Unix; per-user profile ACLs on
   Windows). Protect your disk, and back it up: losing it means losing access.
-* Not synced: empty folders, symlinks, files matching `.tgsyncignore`. Renames re-upload
-  content (no cross-file dedupe yet).
+* Not synced: symlinks, files matching `.tgsyncignore`. Empty folders are synced. A renamed,
+  moved or copied file uploads no content again (the group already has it). Everyone should
+  update: older versions cannot read such renames and report "content hash mismatch".
+* `tgsync log` lists changes from the moment you update; earlier changes are not in it.
 * Automating a user account is a grey area under Telegram's ToS; keep traffic modest. The limiter
   caps sends at 18/min with >=1.2 s gaps, spaces downloads, honours FloodWait and slows itself
   down after one. Telegram does not publish exact limits.

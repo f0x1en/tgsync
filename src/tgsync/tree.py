@@ -9,6 +9,10 @@ Rules (applied in log order):
           file first -> this write lands at a deterministic conflict-copy path.
   delete: only honoured if `base` equals current content. A concurrent edit
           beats a delete (never silently lose data).
+  mkdir : an empty folder (node with sha DIR). Ignored if the path is taken.
+  rmdir : removes that folder node.
+A put may point at content already in the log (its blob carries `payload_msg`), so a
+rename or copy uploads nothing new; the content hash is still checked on download.
 """
 
 from __future__ import annotations
@@ -17,6 +21,8 @@ from dataclasses import dataclass
 
 from .errors import PathError
 from .paths import conflict_name, normalize
+
+DIR = "dir"  # sha of a folder node
 
 
 @dataclass
@@ -78,7 +84,7 @@ class Tree:
             try:
                 node = Node(path, entry["sha"], int(entry["size"]), float(entry.get("mtime", ts)),
                             dict(entry["blob"]), author, msg_id)
-                node.blob["payload_msg"] = msg_id
+                node.blob.setdefault("payload_msg", msg_id)
             except (KeyError, TypeError, ValueError):
                 return None
             if clash is not None and clash != path:
@@ -94,6 +100,16 @@ class Tree:
             if cur is not None and cur.sha == entry.get("base"):
                 self._remove(path)
                 return ("delete", path, None)
+            return None
+        if op == "mkdir":
+            if cur is not None or clash is not None:
+                return None
+            self._set(Node(path, DIR, 0, ts, {}, author, msg_id))
+            return ("mkdir", path, None)
+        if op == "rmdir":
+            if cur is not None and cur.sha == DIR:
+                self._remove(path)
+                return ("rmdir", path, None)
             return None
         return None
 

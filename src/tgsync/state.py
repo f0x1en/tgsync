@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS synced (path TEXT PRIMARY KEY, sha TEXT NOT NULL, siz
 CREATE TABLE IF NOT EXISTS descriptors (msg_id INTEGER PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS authors (author TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS problems (id INTEGER PRIMARY KEY AUTOINCREMENT, msg_id INTEGER, what TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS log (msg_id INTEGER NOT NULL, i INTEGER NOT NULL, ts REAL NOT NULL, author TEXT NOT NULL,
+                                op TEXT NOT NULL, path TEXT NOT NULL, other TEXT, PRIMARY KEY (msg_id, i));
 """
 
 
@@ -57,7 +59,8 @@ class State:
             t._set(Node.from_json(json.loads(js)))
         return t
 
-    def save_tree(self, tree: Tree, cursor: int, authors: dict[str, int], descriptors: list[tuple[int, bytes]]) -> None:
+    def save_tree(self, tree: Tree, cursor: int, authors: dict[str, int], descriptors: list[tuple[int, bytes]],
+                  log: list[tuple] | None = None) -> None:
         """Atomically persist everything derived from log replay."""
         with self.db:
             self.db.execute("DELETE FROM tree")
@@ -71,12 +74,22 @@ class State:
                 list(authors.items()),
             )
             self.db.executemany("INSERT OR IGNORE INTO descriptors(msg_id,data) VALUES(?,?)", descriptors)
+            self.db.executemany("INSERT OR IGNORE INTO log VALUES(?,?,?,?,?,?,?)", log or [])
 
     def descriptors(self) -> list[bytes]:
         return [r[0] for r in self.db.execute("SELECT data FROM descriptors ORDER BY msg_id")]
 
     def author_seqs(self) -> dict[str, int]:
         return dict(self.db.execute("SELECT author, seq FROM authors"))
+
+    def log(self, path: str | None = None, limit: int = 50) -> list[tuple[float, str, str, str, str | None]]:
+        """Newest first: (ts, author id, op, path, conflict copy or None)."""
+        q = "SELECT ts, author, op, path, other FROM log"
+        args: tuple = ()
+        if path:
+            q += " WHERE path=? OR other=? OR path LIKE ?"
+            args = (path, path, path.rstrip("/") + "/%")
+        return list(self.db.execute(q + " ORDER BY msg_id DESC, i DESC LIMIT ?", (*args, limit)))
 
     # synced
     def synced(self) -> dict[str, tuple[str, int, int]]:
