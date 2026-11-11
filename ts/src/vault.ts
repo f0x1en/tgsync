@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Sync engine (PROTOCOL.md section 9): replay the group's log, compare with the folder, upload,
 // write files. Same behaviour as src/tgsync/engine.py. No printing, no prompts.
+import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import { CryptoError, KeyRing, blobEpoch, fingerprint, fromUtf8, hex, memberId, sha256, utf8 } from "./crypto.ts";
 import type { Files } from "./files.ts";
 import { INTERNAL_DIR, PathError, TMP_SUFFIX, makeIgnore, normalize } from "./paths.ts";
@@ -14,6 +15,7 @@ import type { Transport } from "./transport.ts";
 import { DIR, type Node, type Tree } from "./tree.ts";
 
 export const BIG_FILE = 8 * 1024 * 1024; // files at least this big get a heads-up while moving
+const HASH_PIECE = 4 * 1024 * 1024;
 
 export class VaultError extends Error {}
 
@@ -258,7 +260,7 @@ export class Vault {
       const prev = synced.get(rel);
       if (prev && prev[1] === st.size && prev[2] === st.mtime) continue;
       let sha: string;
-      try { sha = hex(await sha256(await this.files.read(raw))); } catch (e) { rep.skipped.push(`${rel}: ${e}`); continue; }
+      try { sha = await this.hashFile(raw); } catch (e) { rep.skipped.push(`${rel}: ${e}`); continue; }
       const node = this.tree.get(rel);
       if ((prev && prev[0] === sha) || (node && node.sha === sha)) { this.state.setSynced(rel, sha, st.size, st.mtime); continue; }
       changes.push({ op: "put", path: rel, base: prev ? prev[0] : null, size: st.size, mtime: st.mtime / 1000, sha });
@@ -296,30 +298,49 @@ export class Vault {
       } else if (old) { // renamed or copied: point at the existing upload, send no data
         batch.push({ op: "put", path: ch.path, base: ch.base, mtime: ch.mtime, sha: old.sha, size: old.size, blob: { ...old.blob } });
       } else {
-        let data: Uint8Array;
-        try { data = await this.files.read(ch.path); } catch (e) { rep.skipped.push(`${ch.path}: ${e}`); continue; }
-        const sha = hex(await sha256(data));
-        const entry: any = { op: "put", path: ch.path, base: ch.base, mtime: ch.mtime, sha, size: data.length };
-        if (data.length <= INLINE_MAX) {
-          entry.blob = { file_id: randomId(), chunks: null, inline: [payloadLen, data.length] };
-          payload.push(data);
-          payloadLen += data.length;
-        } else {
-          if (data.length >= BIG_FILE) this.notify(`uploading ${ch.path} (${humanSize(data.length)}); big files take a while`);
-          const fileId = randomId();
-          const count = Math.max(1, Math.ceil(data.length / chunkSize));
-          const ids: number[] = [];
-          for (let i = 0; i < count; i++) {
-            const part = data.subarray(i * chunkSize, (i + 1) * chunkSize);
-            ids.push(await this.transport.send(KIND.chunk, await sealChunk(this.keys, fileId, i, count, part)));
-          }
-          entry.blob = { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null };
-        }
+        let entry: any;
+        try { entry = await this.preparePut(ch, chunkSize, payload, payloadLen); } catch (e) { rep.skipped.push(`${ch.path}: ${(e as Error).message}`); continue; }
+        if (entry.blob.inline) payloadLen += entry.size;
         batch.push(entry);
       }
       if (batch.length >= MAX_ENTRIES_PER_RECORD || payloadLen >= RECORD_PAYLOAD_MAX) await flush();
     }
     await flush();
+  }
+
+  /** Build a put entry. Small files join the record payload; big ones stream out as chunks. */
+  private async preparePut(ch: Change, chunkSize: number, payload: Uint8Array[], payloadLen: number): Promise<any> {
+    const st = await this.files.stat(ch.path);
+    if (!st || st.type !== "file") throw new Error("disappeared before upload");
+    const entry: any = { op: "put", path: ch.path, base: ch.base, mtime: ch.mtime };
+    if (st.size <= INLINE_MAX) {
+      const data = await this.files.read(ch.path);
+      payload.push(data);
+      return Object.assign(entry, { sha: hex(await sha256(data)), size: data.length,
+        blob: { file_id: randomId(), chunks: null, inline: [payloadLen, data.length] } });
+    }
+    if (st.size >= BIG_FILE) this.notify(`uploading ${ch.path} (${humanSize(st.size)}); big files take a while`);
+    const fileId = randomId();
+    const count = Math.max(1, Math.ceil(st.size / chunkSize));
+    const h = nobleSha256.create();
+    const ids: number[] = [];
+    let total = 0;
+    for await (const part of this.files.readChunks(ch.path, chunkSize)) {
+      if (ids.length >= count) break;
+      h.update(part);
+      total += part.length;
+      ids.push(await this.transport.send(KIND.chunk, await sealChunk(this.keys, fileId, ids.length, count, part)));
+    }
+    if (ids.length !== count || total !== st.size) throw new Error("changed while uploading; run `tgsync push` again");
+    return Object.assign(entry, { sha: hex(h.digest()), size: total,
+      blob: { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null } });
+  }
+
+  /** SHA-256 of a file on disk, read in pieces. */
+  async hashFile(path: string): Promise<string> {
+    const h = nobleSha256.create();
+    for await (const part of this.files.readChunks(path, HASH_PIECE)) h.update(part);
+    return hex(h.digest());
   }
 
   // ------------------------------------------------------------ materialize
@@ -332,20 +353,31 @@ export class Vault {
     return this.cache.get(mid)!;
   }
 
-  private async contentOf(node: Node): Promise<Uint8Array> {
-    if (node.size >= BIG_FILE) this.notify(`downloading ${node.path} (${humanSize(node.size)}); big files take a while`);
-    let data: Uint8Array;
+  /** Download a node into `path`: verified before it replaces anything; big files stream chunk by chunk. */
+  private async writeNode(node: Node, path: string, mtime: number): Promise<void> {
     const inline = node.blob.inline;
     if (inline) {
-      data = (await this.payloadOf(node)).slice(inline[0], inline[0] + inline[1]);
-    } else {
-      const ids = node.blob.chunks ?? [];
-      const parts: Uint8Array[] = [];
-      for (const [i, mid] of ids.entries()) parts.push(await openChunk(this.keys, node.blob.file_id!, i, ids.length, await this.transport.fetch(mid)));
-      data = concatAll(parts, parts.reduce((n, p) => n + p.length, 0));
+      const data = (await this.payloadOf(node)).slice(inline[0], inline[0] + inline[1]);
+      if (hex(await sha256(data)) !== node.sha) throw new CryptoError("content hash mismatch after decryption");
+      await this.files.write(path, data, mtime);
+      return;
     }
-    if (hex(await sha256(data)) !== node.sha) throw new CryptoError("content hash mismatch after decryption");
-    return data;
+    if (node.size >= BIG_FILE) this.notify(`downloading ${node.path} (${humanSize(node.size)}); big files take a while and only appear when finished`);
+    const ids = node.blob.chunks ?? [];
+    const h = nobleSha256.create();
+    const w = await this.files.writer(path);
+    try {
+      for (const [i, mid] of ids.entries()) {
+        const part = await openChunk(this.keys, node.blob.file_id!, i, ids.length, await this.transport.fetch(mid));
+        h.update(part);
+        await w.write(part);
+      }
+      if (hex(h.digest()) !== node.sha) throw new CryptoError("content hash mismatch after decryption");
+      await w.finish(mtime);
+    } catch (e) {
+      await w.abort();
+      throw e;
+    }
   }
 
   /** Write the tree into the folder, never overwriting local edits that are not uploaded yet. */
@@ -357,7 +389,7 @@ export class Vault {
       if (!st || st.type !== "file") return null;
       const prev = synced.get(path);
       if (prev && prev[1] === st.size && prev[2] === st.mtime) return prev[0];
-      return hex(await sha256(await this.files.read(path)));
+      return this.hashFile(path);
     };
     for (const [path, node] of [...this.tree.nodes].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (node.sha === DIR) {
@@ -378,11 +410,10 @@ export class Vault {
         continue;
       }
       try {
-        const data = await this.contentOf(node);
         let mtime = Math.round(node.mtime * 1000);
         const st = await this.files.stat(path);
         if (st && st.mtime === mtime) mtime += 1; // never keep the same (size, mtime) as the old version
-        await this.files.write(path, data, mtime);
+        await this.writeNode(node, path, mtime);
       } catch (e) {
         rep.problems.push(`${path}: could not restore: ${(e as Error).message}`);
         continue;
@@ -400,7 +431,7 @@ export class Vault {
           await this.pruneEmpty(parentOf(path));
         }
       } else if (st?.type === "file") {
-        const have = hex(await sha256(await this.files.read(path)));
+        const have = await this.hashFile(path);
         if (have !== sha && !preserved.has(have)) {
           rep.skipped.push(`${path}: deleted by someone else, but you changed it; kept`);
           this.state.delSynced(path);
@@ -469,7 +500,7 @@ export class Vault {
       const node = this.tree.get(ch.path);
       if (ch.op === "put" && node) {
         const st = await this.files.stat(ch.path);
-        if (st?.type === "file" && hex(await sha256(await this.files.read(ch.path))) === node.sha) {
+        if (st?.type === "file" && await this.hashFile(ch.path) === node.sha) {
           this.state.setSynced(ch.path, node.sha, st.size, st.mtime);
         }
       } else if (ch.op === "mkdir" && node?.sha === DIR) this.state.setSynced(ch.path, DIR, 0, 0);

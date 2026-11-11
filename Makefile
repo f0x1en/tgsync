@@ -1,7 +1,7 @@
 # Dev shortcuts. Run `uv venv && uv pip install -e ".[dev]"` once first.
 PY ?= .venv/bin/python
 
-.PHONY: check test live plugin
+.PHONY: check test live ts plugin
 
 check:  ## lint + types + tests (same as CI)
 	$(PY) -m ruff check src tests scripts
@@ -14,5 +14,8 @@ test:   ## tests only
 live:   ## two-person test on REAL Telegram (needs profiles default + b); KEEP=dir keeps folders
 	$(PY) scripts/live_e2e.py $(if $(KEEP),--keep $(KEEP))
 
-plugin: ## Obsidian plugin: tests against spec/vectors.json + type check + build (run `npm install` in obsidian/ once)
-	cd obsidian && npm test && npm run build
+ts:     ## TypeScript engine: type check + tests (vectors, sync, Python cross test). `npm install` in ts/ once
+	cd ts && npm run typecheck && npm test
+
+plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm install` in obsidian/ once
+	cd obsidian && npm run build

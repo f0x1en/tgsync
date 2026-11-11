@@ -196,3 +196,32 @@ test("state survives reopening the vault", async () => {
   assert.deepEqual((await again.status()).pending, []);
   await cleanup();
 });
+
+test("huge files stream: never read or written whole, verified byte for byte", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "tgsync-big-"));
+  const ch = new FakeChannel();
+  const A = join(tmp, "a"), B = join(tmp, "b");
+  await mkdir(A); await mkdir(B);
+  const whole: string[] = [];
+  const spy = (root: string) => {
+    const f = new NodeFiles(root);
+    const read = f.read.bind(f), write = f.write.bind(f);
+    f.read = async (p) => { const d = await read(p); if (d.length > 1_000_000) whole.push(`read ${p}`); return d; };
+    f.write = async (p, d, m) => { if (d.length > 1_000_000) whole.push(`write ${p}`); return write(p, d, m); };
+    return f;
+  };
+  const ia = await newIdentity(), ib = await newIdentity();
+  const a = await Vault.create(spy(A), ia, ch.transport(), "a");
+  await a.addMember(ib.recipient, "b");
+  const b = await Vault.join(spy(B), ib, ch.transport(), a.vaultId!);
+  const big = new Uint8Array(5 * 1024 * 1024 + 123).map((_, i) => (i * 7919) % 256);
+  await writeFile(join(A, "video.bin"), big);
+  const rep = await a.pushChanges(1024 * 1024);
+  assert.deepEqual(rep.pushed_paths.sort(), [".tgsyncignore", "video.bin"]);
+  assert.equal([...ch.messages.values()].filter(([k]) => k === "c").length, 6);
+  await b.pullChanges();
+  assert.deepEqual(new Uint8Array(await readFile(join(B, "video.bin"))), big);
+  assert.deepEqual((await b.status()).pending, []);
+  assert.deepEqual(whole, []);
+  await rm(tmp, { recursive: true, force: true });
+});

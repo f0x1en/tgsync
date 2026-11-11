@@ -29,7 +29,13 @@ Delete `~/tgs` to start over.
 
 `PROTOCOL.md` describes every message format and the replay rules; `spec/vectors.json` has fixed examples
 (regenerate with `.venv/bin/python scripts/make_vectors.py`; `tests/test_vectors.py` checks Python against it).
-The Obsidian plugin must pass the same vectors. Plugin code: `obsidian/` (`cd obsidian && npm install` once, then `make plugin`). Change the protocol only together with both.
+The Obsidian plugin must pass the same vectors. TypeScript engine (the base for the coming Node CLI and the plugin): `ts/` (`make ts`).
+Obsidian plugin, a thin layer over `ts/` that adds nothing the CLI lacks: `obsidian/` (`make plugin`).
+Run `npm install` once in each.
+
+Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-11 on this
+machine: 1 GB push 55 MB/s, pull 126 MB/s, peak memory 329 MB; 3 GB: 52 / 129 MB/s, peak 296 MB (memory stays
+flat: files stream in chunks). Real Telegram speed is limited by Telegram, not by this. Change the protocol only together with both.
 
 ## Code map (`src/tgsync/`)
 
