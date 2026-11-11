@@ -3,14 +3,18 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
+
+# TGSYNC_CLI="node /abs/path/ts/dist/tgsync.mjs" runs these same tests against the Node CLI (`make ts`).
+CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
 
 
 def _tg(sandbox, profile, *args, cwd=None):
     env = {k: v for k, v in os.environ.items() if k != "TGSYNC_HOME"}
     env.update(TGSYNC_SANDBOX=str(sandbox), TGSYNC_PROFILE=profile)
-    r = subprocess.run([sys.executable, "-m", "tgsync.cli", "--json", *args],
+    r = subprocess.run([*CLI, "--json", *args],
                        capture_output=True, text=True, env=env, cwd=cwd)
     return json.loads(r.stdout), r.returncode
 
@@ -56,7 +60,7 @@ def test_two_people_in_the_sandbox(tmp_path):
     assert (B / "hello.md").read_text() == "hi bob\n"
     assert not out["report"]["conflicts"], out
     assert out["report"]["pushed_paths"] == [], out           # files he already had are not uploaded again
-    assert list((B / ".tgsync").glob("state.db.removed-*"))   # old state kept, not deleted
+    assert list((B / ".tgsync").glob("state.*.removed-*"))   # old state kept, not deleted
 
 
 def test_json_errors_are_json_and_never_ask(tmp_path):

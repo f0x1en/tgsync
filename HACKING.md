@@ -29,7 +29,14 @@ Delete `~/tgs` to start over.
 
 `PROTOCOL.md` describes every message format and the replay rules; `spec/vectors.json` has fixed examples
 (regenerate with `.venv/bin/python scripts/make_vectors.py`; `tests/test_vectors.py` checks Python against it).
-The Obsidian plugin must pass the same vectors. TypeScript engine (the base for the coming Node CLI and the plugin): `ts/` (`make ts`).
+The Obsidian plugin must pass the same vectors. TypeScript engine (the base for the Node CLI and the plugin): `ts/` (`make ts`).
+
+**Node CLI** (`ts/src/cli/main.ts`, built to `ts/dist/tgsync.mjs` by `npm run build`): the same commands, output and
+`--json` contract as the Python CLI, and it replaces it once Telegram works in TypeScript. Until then it only talks
+to sandbox groups (`TGSYNC_SANDBOX`). Profiles and keys are shared with Python (`~/.config/tgsync/<profile>/`).
+Differences from Python: local state is `.tgsync/state.json` (Python folders are not converted; join again), and
+`restore` downloads old versions from the group instead of a local git copy, so REV is a version id like `812.0`
+(record message, entry). `make ts` also runs `tests/test_sandbox.py` against it (`TGSYNC_CLI=...`).
 Obsidian plugin, a thin layer over `ts/` that adds nothing the CLI lacks: `obsidian/` (`make plugin`).
 Run `npm install` once in each.
 
@@ -102,7 +109,7 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
   `checks` (with `--check`: `[{ok, what, detail}]`, else null).
 - `members`: `members` (`[{name, id, you}]`), `waiting` (`[{code, name}]`).
 - `new`: `folder`, `profile`, `vault_id`, `invite`. `join`: `state` (`"waiting"` + `code`, or `"joined"` + `report`).
-- `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev`.
+- `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev` (Python: a git snapshot id; Node: a version id like `812.0`).
 - `log`: `log` (`[{ts, who, op, path, copy}]`, newest first; op is `put`, `delete`, `conflict`, `mkdir`, `rmdir`).
 
 A script can run e.g. `tgsync --json status -C <vault>` and read stdout. Desktop only: Obsidian

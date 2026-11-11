@@ -552,6 +552,31 @@ export class Vault {
     return this.state.log(path, limit).map(([ts, a, op, p, other]) => ({ ts, who: names.get(a) ?? a.slice(0, 8), op, path: p, copy: other }));
   }
 
+  /** Uploaded versions of a file, newest first. Each one can come back with restoreVersion(). */
+  async versions(path: string, limit = 20) {
+    const names = await this.memberNames();
+    return this.state.d.log.filter((r) => r[5] === path && r[4] === "put")
+      .sort((a, b) => b[0] - a[0] || b[1] - a[1]).slice(0, limit)
+      .map(([msg, i, ts, a]) => ({ rev: `${msg}.${i}`, ts, who: names.get(a) ?? a.slice(0, 8) }));
+  }
+
+  /** Download an older version of `path` from the group into the folder (`tgsync push` shares it). */
+  restoreVersion(path: string, rev: string): Promise<void> {
+    return this.exclusive(async () => {
+      this.checkMember();
+      const m = /^(\d+)\.(\d+)$/.exec(rev);
+      const row = m && this.state.d.log.find((r) => r[0] === +m[1] && r[1] === +m[2] && r[5] === path && r[4] === "put");
+      if (!row) throw new VaultError(`${rev} is not a version of ${path} (see \`tgsync restore ${path}\`)`);
+      const st = await this.files.stat(path);
+      if (st?.type === "file" && await this.hashFile(path) !== this.state.synced().get(path)?.[0]) {
+        throw new VaultError(`${path} has changes you did not upload; run \`tgsync push\` first so they stay in the history`);
+      }
+      const entry = (await decodeRecord(this.keys, await this.transport.fetch(row[0]))).entries[row[1]];
+      const node: Node = { ...entry, blob: { payload_msg: row[0], ...entry.blob }, author: row[3], msg_id: row[0] };
+      await this.writeNode(node, path, Date.now());
+    });
+  }
+
   private async memberNames(): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     for (const m of this.members) out.set(await memberId(m.recipient), m.name || m.recipient.slice(0, 12));
@@ -581,6 +606,11 @@ export class Vault {
       if (req && req.vaultId === this.vaultId && !have.has(req.recipient)) found.set(req.recipient, req);
     }
     return [...found.values()].sort((a, b) => a.msgId - b.msgId);
+  }
+
+  /** Let in someone who asked to join (typing their code is the confirmation). */
+  acceptRequest(req: JoinRequest, name?: string): Promise<void> {
+    return this.addMember(req.recipient, name || req.name);
   }
 
   async removeMember(target: string): Promise<void> {
