@@ -206,3 +206,28 @@ records. Then pull again: a put that lost a race appears as a conflict copy.
 Messages carry `v: 1` (descriptor, record header, join request), `TGS1` (sealed blobs), `tgs1:`
 (captions), `tgsync1-` (invites). Readers reject versions they do not know. New optional fields may
 be added; readers ignore unknown fields. Changing the meaning of a field needs a new version.
+
+## 11. Admins (descriptor `v: 2`, planned; the TypeScript engine implements it, Python does not)
+
+Only **admins** may change who is in the vault. Everyone else can only sync. Admin rights pass
+from one person to another.
+
+- Each person has an **Ed25519 signing key** next to their age key. Its public key (`signer`,
+  b64 of 32 bytes) is in their join request (`"signer": ...`, optional field) and in their roster entry.
+- A `v: 2` descriptor adds three fields to the `v: 1` fields:
+  - `admins`: sorted list of signer public keys allowed to post descriptors (at least one; each must
+    belong to a member in the roster);
+  - `signer`: the public key that signed this descriptor;
+  - `sig`: b64 Ed25519 signature by `signer` over `"tgsync/desc/v2" || canonical JSON of every field except sig`.
+  `proof` is computed as in v1, over every field except `proof` and `sig`.
+- **Accepting** (in addition to section 4): `sig` must verify; and
+  - if this vault already has an accepted `v: 2` descriptor: `signer` must be in **that** descriptor's
+    `admins`; otherwise reject ("not signed by an admin");
+  - if not (new vault, or the one-time upgrade of a `v: 1` vault): `signer` must be in its own `admins`
+    (trust on first use, like the vault key).
+  After a vault's first `v: 2` descriptor, `v: 1` descriptors for it are rejected.
+- Operations (all are descriptors posted by an admin): create (creator is the only admin); accept a
+  join request (add member); remove a member (also drops them from `admins`; rotates the key);
+  **give admin** to a member (add their signer); **drop admin** (remove yourself; refused if you are the
+  last admin).
+- Records are unchanged: any member writes files.
