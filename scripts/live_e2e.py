@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 FAILS: list[str] = []
+LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\dT\S+ \[(VRB|DBG|INF|WRN|ERR)\] ")  # TGSYNC_DEBUG lines
 TIMEOUT = 120  # seconds; no tiny-file command needs this long
 ROOT = Path(__file__).resolve().parent.parent
 CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
@@ -46,10 +47,11 @@ def tg(*args: str, expect_ok: bool = True) -> str:
         print(f"  $ tgsync {' '.join(args)}   [killed after {TIMEOUT}s]")
         check(False, f"command hung: tgsync {' '.join(args)}\n{part.decode(errors='replace').strip()}")
         return part.decode(errors="replace")
-    out = (r.stdout + r.stderr).strip()
+    full = (r.stdout + r.stderr).strip()
+    out = "\n".join(x for x in full.splitlines() if not LOG_LINE.match(x))  # checks read tgsync's own words only
     print(f"  $ tgsync {' '.join(args)}   [{time.monotonic() - t:.0f}s]")
     if expect_ok and r.returncode != 0:
-        check(False, f"command failed: tgsync {' '.join(args)}\n{out}")
+        check(False, f"command failed: tgsync {' '.join(args)}\n{full}")
     return out
 
 

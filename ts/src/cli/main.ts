@@ -749,7 +749,9 @@ export async function main(argv: string[]): Promise<number> {
     return 1;
   } finally {
     if (lines) process.stdin.destroy(); // a question left stdin open
-    for (const tr of OPEN.splice(0)) await tr.close().catch(() => {});
+    for (const tr of OPEN.splice(0)) { // mtcute can leave a connection open: never wait on it for long
+      await Promise.race([tr.close().catch(() => {}), new Promise((ok) => setTimeout(ok, 5000).unref())]);
+    }
   }
 }
 
@@ -770,5 +772,5 @@ async function runCmd(name: string, rest: string[]): Promise<number> {
 
 // Run when executed directly (the bundle in dist/), not when imported by tests.
 if (process.argv[1] && /tgsync(\.m?js)?$/.test(basename(process.argv[1]))) {
-  process.exitCode = await main(process.argv.slice(2));
+  process.exit(await main(process.argv.slice(2))); // the work is done: leftover connections must not keep us alive
 }
