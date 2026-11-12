@@ -76,22 +76,21 @@ async function askNumber(question: string, max: number, def: number, flag: strin
 }
 
 function printLines(sym: string, paths: string[], limit = 15): void {
-  for (const p of paths.slice(0, limit)) echo(`  ${sym} ${p}`);
-  if (paths.length > limit) echo(`  ${sym} ... and ${paths.length - limit} more`);
+  for (const p of paths.slice(0, limit)) echo(`  ${sym ? sym + " " : ""}${p}`);
+  if (paths.length > limit) echo(`  ${sym ? sym + " " : ""}... and ${paths.length - limit} more`);
 }
 
-const summary = (r: Report) => `pushed ${r.pushed} change(s), applied ${r.applied_remote} remote op(s), ` +
-  `wrote ${r.written.length}, deleted ${r.deleted.length}, ${r.conflicts.length} conflict(s), ` +
-  `${r.skipped.length} skipped, ${r.problems.length} problem(s)`;
-
-function printReport(r: Report): void {
-  echo(summary(r));
-  printLines("^", r.pushed_paths); // uploaded
-  printLines("v", r.written); // downloaded / updated here
-  printLines("x", r.deleted); // deleted here
-  for (const [a, b] of r.conflicts) echo(yellow(`  conflict: ${a} -> kept both, other copy at ${b}`));
-  for (const s of r.skipped) echo(yellow(`  skipped: ${s}`));
-  for (const p of r.problems) err(red(`  problem: ${p}`));
+/** What a push/pull did, in plain words; `nothing` is said when it did nothing. */
+function printReport(r: Report, nothing: string): void {
+  const files = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
+  if (r.pushed_paths.length) { echo(`Uploaded ${files(r.pushed_paths.length)}:`); printLines("", r.pushed_paths); }
+  if (r.written.length) { echo(`Downloaded ${files(r.written.length)}:`); printLines("", r.written); }
+  if (r.deleted.length) { echo(`Deleted here, because someone deleted them (${files(r.deleted.length)}):`); printLines("", r.deleted); }
+  for (const [a, b] of r.conflicts) echo(yellow(`Conflict: ${a} was changed by two people. Kept both; the other version is ${b}`));
+  for (const s of r.skipped) echo(yellow(`Not updated: ${s}`));
+  for (const p of r.problems) err(red(`Problem: ${p}`));
+  if (!r.pushed_paths.length && !r.written.length && !r.deleted.length && !r.conflicts.length &&
+      !r.skipped.length && !r.problems.length) echo(nothing);
 }
 
 /** Path as you would type it: ~/x instead of /home/you/x. */
@@ -225,6 +224,11 @@ async function openVault(vault: string, cmd: string): Promise<[Vault, Cfg]> {
   return [v, cfg];
 }
 
+/** Name others see for you: your Telegram first name, else the profile name. */
+async function defaultName(tg: TelegramClient | null, profile: string): Promise<string> {
+  return (tg && (await tg.getMe()).firstName) || profile;
+}
+
 /** Keep the group's id and access hash next to its link, so later runs find the group without the link. */
 function savePeer(vault: string, cfg: Cfg, tr: Transport): void {
   const peer = tr instanceof TelegramTransport ? savedPeer(tr.chat) : undefined;
@@ -307,7 +311,7 @@ function reportCmd(help: string, what: "pullChanges" | "pushChanges"): Command {
     async run(_a, o) {
       const [v] = await openVault(o.vault as string, what === "pullChanges" ? "pull" : "push");
       const rep = await v[what]();
-      emit({ report: rep }, () => printReport(rep));
+      emit({ report: rep }, () => printReport(rep, what === "pullChanges" ? "Nothing new." : "Nothing to upload."));
     },
   };
 }
@@ -334,7 +338,7 @@ const COMMANDS: { [name: string]: Command } = {
       else chat = link = (await createGroup(tg, basename(resolve(folder)) || "tgsync vault"))[1];
       const tr = await transportFor(chat, tg); // the group is found by its link from now on
       mkdirSync(folder, { recursive: true });
-      const v = await Vault.create(new NodeFiles(resolve(folder)), ident, tr, (o.name as string) || profile);
+      const v = await Vault.create(new NodeFiles(resolve(folder)), ident, tr, (o.name as string) || await defaultName(tg, profile));
       const cfg: Cfg = { chat, profile };
       if (link) cfg.invite = link;
       if (tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(tr.chat);
@@ -399,17 +403,18 @@ const COMMANDS: { [name: string]: Command } = {
       }
       const found = await Vault.discover(tr, ident);
       if (!found.has(inv.vaultId)) {
-        const who = (o.name as string | undefined) || profile;
+        const who = (o.name as string | undefined) || await defaultName(tg, profile);
         await Vault.postJoinRequest(tr, ident, inv.vaultId, who);
         const m = mem();
         (m.joins ??= {})[inv.vaultId] = { code, profile, folder: resolve(folder) };
         memSave(m);
+        mkdirSync(folder, { recursive: true }); // so the next step's `cd` works
         const sc = await shortCode(ident.recipient);
         emit({ state: "waiting", code: sc, folder: resolve(folder) }, () => {
           echo(`Join request sent as '${who}'. Files will go in ${short(folder!)}.`);
           echo(bold(`Tell the person who invited you this code: ${sc}`));
           echo(`They run:  tgsync accept ${sc}`);
-          echo("Then you run:  tgsync join     (no need to paste the line again; any time, no hurry)");
+          echo(`Then you run:  cd ${short(folder!)} && tgsync join     (no need to paste the line again; any time, no hurry)`);
         });
         return;
       }
@@ -431,7 +436,7 @@ const COMMANDS: { [name: string]: Command } = {
       const rep = await v.pullChanges();
       emit({ state: "joined", folder: resolve(folder), report: rep }, () => {
         echo(`Joined. Files go in ${short(folder!)}`);
-        printReport(rep);
+        printReport(rep, "No files in the vault yet.");
         echo(`\nFrom now on, in ${short(folder!)}:  tgsync (what changed)   tgsync pull   tgsync push`);
       });
     },
