@@ -11,7 +11,7 @@ if (!profile || !vault) throw new Error("usage: delete-group PROFILE VAULT_FOLDE
 const cfg = JSON.parse(readFileSync(join(vault, ".tgsync", "config.json"), "utf8"));
 const tg = await connect(profile);
 try {
-  await tg.deleteSupergroup(await resolveChat(tg, String(cfg.chat), cfg.chat_id));
+  await tg.deleteSupergroup(await resolveChat(tg, String(cfg.chat), cfg.chat_peer));
   console.log("  throwaway group deleted");
 } finally {
   await tg.destroy();

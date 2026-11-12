@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 FAILS: list[str] = []
+TIMEOUT = 120  # seconds; no tiny-file command needs this long
 ROOT = Path(__file__).resolve().parent.parent
 CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
 
@@ -37,7 +38,14 @@ CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else
 def tg(*args: str, expect_ok: bool = True) -> str:
     cmd = [*CLI, *args]
     t = time.monotonic()
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    env = {**os.environ, "TGSYNC_DEBUG": "1"}  # timestamped Telegram calls: a hang shows where it stopped
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        part = b"".join(x if isinstance(x, bytes) else (x or "").encode() for x in (e.stdout, e.stderr))
+        print(f"  $ tgsync {' '.join(args)}   [killed after {TIMEOUT}s]")
+        check(False, f"command hung: tgsync {' '.join(args)}\n{part.decode(errors='replace').strip()}")
+        return part.decode(errors="replace")
     out = (r.stdout + r.stderr).strip()
     print(f"  $ tgsync {' '.join(args)}   [{time.monotonic() - t:.0f}s]")
     if expect_ok and r.returncode != 0:

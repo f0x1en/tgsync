@@ -3,7 +3,7 @@
 // files are documents with a `tgs1:<kind>` caption, sends are paced, flood waits slow us down.
 // The login is a session string in the profile folder (`mtcute.session`); nothing native.
 import { BaseTelegramClient, TelegramClient } from "@mtcute/core/client.js";
-import { InputMedia, MemoryStorage, MtArgumentError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
+import { InputMedia, Long, MemoryStorage, MtArgumentError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
 import { HttpProxyTcpTransport, NodePlatform, SocksProxyTcpTransport, TcpTransport } from "@mtcute/node";
 import { NodeCryptoProvider } from "@mtcute/node/utils.js";
 import { SIMD_AVAILABLE, initSync } from "@mtcute/wasm";
@@ -77,7 +77,8 @@ function makeClient(creds: Creds): TelegramClient {
     crypto: new Crypto(),
     platform: new NodePlatform(),
     transport: parseProxy(creds.proxy) ?? new TcpTransport(),
-    logLevel: 0, // tgsync reports one clear error instead of mtcute's connection chatter
+    // tgsync reports one clear error instead of mtcute's connection chatter; TGSYNC_DEBUG=1 shows every call
+    logLevel: process.env.TGSYNC_DEBUG ? 4 : 0,
     updates: false,
   });
   return new TelegramClient({ client: base });
@@ -138,10 +139,14 @@ export async function connect(profile: string): Promise<TelegramClient> {
 
 // ------------------------------------------------------------------ groups
 /** Invite link (t.me/+..., t.me/joinchat/...), @username or numeric id -> chat (joins via the link if needed).
- *  `id` is the chat id saved from an earlier run: tried first, so the link (rate-limited lookups) is rarely needed. */
-export async function resolveChat(tg: TelegramClient, ref: string, id?: number): Promise<Chat> {
-  if (id) {
-    try { return await tg.getChat(id); } catch { /* not known to this login yet: use the link */ }
+ *  `peer` is what `savedPeer` returned on an earlier run. This login keeps no chat list between runs, and
+ *  a private group needs its access hash, so the hash is saved; then the link (rate-limited lookups) is rarely used. */
+export async function resolveChat(tg: TelegramClient, ref: string, peer?: string): Promise<Chat> {
+  const [id, hash] = (peer ?? "").split(":");
+  if (id && hash) {
+    try {
+      return await tg.getChat({ _: "inputPeerChannel", channelId: Number(id), accessHash: Long.fromString(hash) });
+    } catch { /* left the group, or another login: use the link */ }
   }
   if (/(?:t\.me|telegram\.me)\/(?:joinchat\/|\+)[\w-]+/.test(ref)) {
     try { return await tg.getChat(ref); } catch (e) {
@@ -153,6 +158,12 @@ export async function resolveChat(tg: TelegramClient, ref: string, id?: number):
       "to join). Ask an admin to approve you, then run the command again.");
   }
   return tg.getChat(/^-?\d+$/.test(ref) ? Number(ref) : ref);
+}
+
+/** "channelId:accessHash" for a supergroup, to pass to `resolveChat` later. */
+export function savedPeer(chat: Chat): string | undefined {
+  const p = chat.inputPeer;
+  return p._ === "inputPeerChannel" ? `${p.channelId}:${p.accessHash.toString()}` : undefined;
 }
 
 /** A private supergroup (everyone can post) and an invite link for it. */

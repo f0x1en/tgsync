@@ -28,7 +28,7 @@ import {
 import { DirTransport, PREFIX } from "../node/sandbox.ts";
 import {
   NotLoggedIn, TelegramTransport, connect, createGroup, exportInvite, interactiveLogin, loadCreds, parseProxy,
-  resolveChat, saveCreds, type Creds, type LoginPrompts,
+  resolveChat, saveCreds, savedPeer, type Creds, type LoginPrompts,
 } from "../node/telegram.ts";
 import type { TelegramClient } from "@mtcute/core/client.js";
 
@@ -103,7 +103,7 @@ function short(p: string): string {
 const expand = (p: string) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
 
 // ------------------------------------------------------------------ vault folders
-interface Cfg { chat: string; chat_id?: number; profile: string; invite?: string; code?: string; [k: string]: unknown }
+interface Cfg { chat: string; chat_peer?: string; profile: string; invite?: string; code?: string; [k: string]: unknown }
 
 const cfgPath = (vault: string) => join(vault, INTERNAL_DIR, "config.json");
 
@@ -189,7 +189,7 @@ async function connectOrRelogin(profile: string): Promise<TelegramClient> {
 }
 
 /** The group behind a link, real or sandbox. `tg` is null in the sandbox. */
-async function transportFor(ref: string, tg: TelegramClient | null, id?: number): Promise<Transport> {
+async function transportFor(ref: string, tg: TelegramClient | null, peer?: string): Promise<Transport> {
   let tr: Transport;
   if (isSandboxLink(ref)) {
     if (sandboxRoot() === null) { // its keys live in the sandbox config dir
@@ -201,7 +201,7 @@ async function transportFor(ref: string, tg: TelegramClient | null, id?: number)
   } else {
     if (!tg) throw new CliError("this vault's group is on Telegram, but TGSYNC_SANDBOX is set; unset it first");
     let chat;
-    try { chat = await resolveChat(tg, ref, id); } catch (e) {
+    try { chat = await resolveChat(tg, ref, peer); } catch (e) {
       await tg.destroy().catch(() => {}); // else the open connection keeps the process alive
       throw e;
     }
@@ -218,16 +218,17 @@ async function openVault(vault: string, cmd: string): Promise<[Vault, Cfg]> {
   const profile = cfg.profile ?? "default";
   const chat = String(cfg.chat);
   const tg = isSandboxLink(chat) ? null : await connectOrRelogin(profile);
-  const tr = await transportFor(chat, tg, cfg.chat_id);
-  saveChatId(vault, cfg, tr);
+  const tr = await transportFor(chat, tg, cfg.chat_peer);
+  savePeer(vault, cfg, tr);
   const v = await Vault.open(new NodeFiles(resolve(vault)), await loadIdentity(profile), tr);
   v.notify = say;
   return [v, cfg];
 }
 
-/** Keep the group's id next to its link, so later runs find the group without the link. */
-function saveChatId(vault: string, cfg: Cfg, tr: Transport): void {
-  if (tr instanceof TelegramTransport && cfg.chat_id !== tr.chat.id) { cfg.chat_id = tr.chat.id; saveCfg(vault, cfg); }
+/** Keep the group's id and access hash next to its link, so later runs find the group without the link. */
+function savePeer(vault: string, cfg: Cfg, tr: Transport): void {
+  const peer = tr instanceof TelegramTransport ? savedPeer(tr.chat) : undefined;
+  if (peer && cfg.chat_peer !== peer) { cfg.chat_peer = peer; saveCfg(vault, cfg); }
 }
 
 /** Load or collect Telegram API credentials for a profile and save them (with the proxy). */
@@ -336,7 +337,7 @@ const COMMANDS: { [name: string]: Command } = {
       const v = await Vault.create(new NodeFiles(resolve(folder)), ident, tr, (o.name as string) || profile);
       const cfg: Cfg = { chat, profile };
       if (link) cfg.invite = link;
-      if (tr instanceof TelegramTransport) cfg.chat_id = tr.chat.id;
+      if (tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(tr.chat);
       saveCfg(folder, cfg);
       rememberVault(folder);
       const code = link ? encodeInvite({ link, vaultId: v.vaultId!, fingerprint: await fingerprint(v.keys.key(1)), api: null }) : null;
@@ -422,7 +423,7 @@ const COMMANDS: { [name: string]: Command } = {
       mkdirSync(folder, { recursive: true });
       const v = await Vault.join(new NodeFiles(resolve(folder)), ident, tr, inv.vaultId);
       v.notify = say;
-      saveCfg(folder, { chat: inv.link, ...(tr instanceof TelegramTransport ? { chat_id: tr.chat.id } : {}),
+      saveCfg(folder, { chat: inv.link, chat_peer: tr instanceof TelegramTransport ? savedPeer(tr.chat) : undefined,
                         profile, invite: inv.link, code });
       rememberVault(folder);
       const m = mem();
@@ -557,8 +558,8 @@ const COMMANDS: { [name: string]: Command } = {
       if (!o.offline || o.check) {
         try {
           const tg = isSandboxLink(chat) ? null : await withTimeout(connectOrRelogin(profile), 60_000);
-          tr = await withTimeout(transportFor(chat, tg, cfg.chat_id), 60_000);
-          saveChatId(dir, cfg, tr);
+          tr = await withTimeout(transportFor(chat, tg, cfg.chat_peer), 60_000);
+          savePeer(dir, cfg, tr);
         } catch (e) { onlineError = (e as Error).message || String(e); }
       }
       const v = await Vault.open(new NodeFiles(resolve(dir)), ident, tr ?? (null as unknown as Transport));
