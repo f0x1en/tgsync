@@ -9,7 +9,7 @@ approval, sync, conflict, delete-vs-edit, removal, re-join) with tiny files, the
     python scripts/live_e2e.py --owner me --friend you
     TGSYNC_CLI="node ts/dist/tgsync.mjs" python scripts/live_e2e.py   # the Node CLI instead
 
-The group is deleted at the end through the Python login of the owner profile.
+The group is deleted at the end through the owner profile's login (Node or Python, same as the CLI).
 
 Not part of CI (needs real accounts). Takes a few minutes because the rate limiter spaces sends.
 """
@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 FAILS: list[str] = []
+ROOT = Path(__file__).resolve().parent.parent
 CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
 
 
@@ -193,7 +194,14 @@ def main() -> int:
         print("\n== cleanup")
         if chat_id is not None:
             try:
-                asyncio.run(delete_group(a.owner, chat_id))
+                if "node" in Path(CLI[0]).name:  # same login as the CLI under test
+                    r = subprocess.run(["npm", "--prefix", str(ROOT / "ts"), "run", "-s", "delete-group", "--",
+                                        a.owner, str(A)], capture_output=True, text=True)
+                    if r.returncode != 0:
+                        raise RuntimeError((r.stdout + r.stderr).strip() or "failed")
+                    print(r.stdout.rstrip())
+                else:
+                    asyncio.run(delete_group(a.owner, chat_id))
             except Exception as e:  # noqa: BLE001
                 print(f"  could not delete the throwaway group (delete it by hand): {e}")
         if a.keep:
