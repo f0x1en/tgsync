@@ -3,7 +3,7 @@
 // files are documents with a `tgs1:<kind>` caption, sends are paced, flood waits slow us down.
 // The login is a session string in the profile folder (`mtcute.session`); nothing native.
 import { BaseTelegramClient, TelegramClient } from "@mtcute/core/client.js";
-import { InputMedia, MemoryStorage, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
+import { InputMedia, MemoryStorage, MtArgumentError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
 import { HttpProxyTcpTransport, NodePlatform, SocksProxyTcpTransport, TcpTransport } from "@mtcute/node";
 import { NodeCryptoProvider } from "@mtcute/node/utils.js";
 import { SIMD_AVAILABLE, initSync } from "@mtcute/wasm";
@@ -137,10 +137,16 @@ export async function connect(profile: string): Promise<TelegramClient> {
 }
 
 // ------------------------------------------------------------------ groups
-/** Invite link (t.me/+..., t.me/joinchat/...), @username or numeric id -> chat (joins via the link if needed). */
-export async function resolveChat(tg: TelegramClient, ref: string): Promise<Chat> {
+/** Invite link (t.me/+..., t.me/joinchat/...), @username or numeric id -> chat (joins via the link if needed).
+ *  `id` is the chat id saved from an earlier run: tried first, so the link (rate-limited lookups) is rarely needed. */
+export async function resolveChat(tg: TelegramClient, ref: string, id?: number): Promise<Chat> {
+  if (id) {
+    try { return await tg.getChat(id); } catch { /* not known to this login yet: use the link */ }
+  }
   if (/(?:t\.me|telegram\.me)\/(?:joinchat\/|\+)[\w-]+/.test(ref)) {
-    try { return await tg.getChat(ref); } catch { /* not joined yet */ }
+    try { return await tg.getChat(ref); } catch (e) {
+      if (!(e instanceof MtArgumentError)) throw e; // only "You haven't joined" means: join now
+    }
     const res = await tg.joinChat(ref);
     if (res.status === "ok") return res.chat;
     throw new TransportError("Joined, but Telegram did not return the chat (the group may require admin approval " +
