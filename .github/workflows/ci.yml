@@ -40,7 +40,14 @@ jobs:
         with: { node-version: "22" }
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
-      - run: cargo build --release -p tgsync-wasm --target wasm32-unknown-unknown
-      - run: wasm-bindgen --target nodejs --out-dir pkg target/wasm32-unknown-unknown/release/tgsync_wasm.wasm
-      - run: ls -l pkg
+      - run: cargo build --profile wasm -p tgsync-wasm --target wasm32-unknown-unknown
+      - run: wasm-bindgen --target nodejs --out-dir pkg target/wasm32-unknown-unknown/wasm/tgsync_wasm.wasm
+      - run: wasm-bindgen --target web --out-dir pkg-web target/wasm32-unknown-unknown/wasm/tgsync_wasm.wasm
+      - run: ls -l pkg pkg-web
       - run: node tgsync-wasm/tests/smoke.mjs "$PWD/pkg/tgsync_wasm.js"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tgsync-wasm
+          path: |
+            core/pkg
+            core/pkg-web
