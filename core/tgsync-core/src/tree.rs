@@ -21,6 +21,8 @@ pub struct Node {
     pub blob: Map<String, Value>,
     pub author: String,
     pub msg_id: i64,
+    /// Text notes merged with Loro: the doc id of this file's lineage (PROTOCOL.md section 13).
+    pub doc: Option<String>,
 }
 
 /// What one entry did. `Conflict(original, copy)`: the write landed at `copy`.
@@ -32,6 +34,8 @@ pub enum Applied {
     Mkdir(String),
     Rmdir(String),
     Conflict(String, String),
+    /// A text edit merged into the note at this path.
+    Text(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -91,7 +95,7 @@ impl Tree {
                 };
                 let mut blob = entry.get("blob")?.as_object()?.clone();
                 blob.entry("payload_msg").or_insert(Value::from(msg_id));
-                let node = Node { path: path.clone(), sha, size, mtime, blob, author: author.to_owned(), msg_id };
+                let node = Node { path: path.clone(), sha, size, mtime, blob, author: author.to_owned(), msg_id, doc: None };
                 if clash.as_ref().is_some_and(|c| *c != path) {
                     return Some(self.conflict(node, author, ts));
                 }
@@ -120,7 +124,7 @@ impl Tree {
                 if cur_sha.is_some() || clash.is_some() {
                     return None;
                 }
-                self.set(Node { path: path.clone(), sha: DIR.into(), size: 0, mtime: ts, blob: Map::new(), author: author.to_owned(), msg_id });
+                self.set(Node { path: path.clone(), sha: DIR.into(), size: 0, mtime: ts, blob: Map::new(), author: author.to_owned(), msg_id, doc: None });
                 Some(Applied::Mkdir(path))
             }
             "rmdir" => {
@@ -131,6 +135,41 @@ impl Tree {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Apply a `text` entry whose update was already imported into doc `doc` (text sha `sha`).
+    /// Same doc at the path, or no node: the note now has the merged text (an edit beats a delete).
+    /// Another file at the path, or a case clash: the note lands at a conflict-copy path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_text(&mut self, path: &str, doc: &str, sha: &str, size: i64, mtime: f64, author: &str, ts: f64, msg_id: i64) -> Applied {
+        let node = Node {
+            path: path.to_owned(),
+            sha: sha.to_owned(),
+            size,
+            mtime,
+            blob: Map::new(),
+            author: author.to_owned(),
+            msg_id,
+            doc: Some(doc.to_owned()),
+        };
+        // The doc may already sit at a conflict-copy path: keep editing it there.
+        if let Some(at) = self.nodes.values().find(|n| n.doc.as_deref() == Some(doc) && n.path != path).map(|n| n.path.clone()) {
+            if self.nodes.get(path).and_then(|n| n.doc.as_deref()) != Some(doc) {
+                self.set(Node { path: at.clone(), ..node });
+                return Applied::Text(at);
+            }
+        }
+        let clash = self.fold.get(&path.to_lowercase()).cloned();
+        if clash.as_ref().is_some_and(|c| c != path) {
+            return self.conflict(node, author, ts);
+        }
+        match self.nodes.get(path) {
+            Some(cur) if cur.doc.as_deref() != Some(doc) => self.conflict(node, author, ts),
+            _ => {
+                self.set(node);
+                Applied::Text(path.to_owned())
+            }
         }
     }
 

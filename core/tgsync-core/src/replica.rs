@@ -21,6 +21,7 @@ use serde_json::Value;
 use crate::crypto::{blob_epoch, KeyRing};
 use crate::descriptor::{self, Identity, Member, Snapshot};
 use crate::oplog::decode_record;
+use crate::text::{sha_hex, TextEdit, Texts};
 use crate::tree::{Applied, Tree};
 
 pub const KIND_DESCRIPTOR: char = 'd';
@@ -42,10 +43,24 @@ pub struct Report {
     /// Entries of OUR records that readers skip because they were sealed with a key that was
     /// already replaced. The caller must upload these entries again with the next push: same
     /// content (read it from the old record, which we can still open, not from disk) and same `base`.
-    pub resend: Vec<Value>,
+    pub resend: Vec<Resend>,
 }
 
-#[derive(Debug, Clone)]
+/// One of our entries to upload again, with the content bytes it pointed to (empty if none).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Resend {
+    pub entry: Value,
+    pub bytes: Vec<u8>,
+}
+
+/// The inline bytes an entry points to in its record's payload.
+fn inline_bytes<'a>(entry: &Value, payload: &'a [u8]) -> Option<&'a [u8]> {
+    let inline = entry.get("blob")?.get("inline")?.as_array()?;
+    let (off, len) = (inline.first()?.as_u64()? as usize, inline.get(1)?.as_u64()? as usize);
+    payload.get(off..off.checked_add(len)?)
+}
+
+#[derive(Debug)]
 pub struct Replica {
     pub me: Identity,
     pub vault_id: Option<String>,
@@ -54,6 +69,8 @@ pub struct Replica {
     /// Admins of the last accepted v2 descriptor (`None` until the vault has one).
     pub admins: Option<Vec<String>>,
     pub tree: Tree,
+    /// Loro documents of text notes (PROTOCOL.md section 13).
+    pub texts: Texts,
     /// Last message id fully processed.
     pub cursor: i64,
     /// Last record seq seen per author id.
@@ -81,6 +98,7 @@ impl Replica {
             members: vec![],
             admins: None,
             tree: Tree::new(),
+            texts: Texts::default(),
             cursor: 0,
             authors: BTreeMap::new(),
             removed: false,
@@ -114,6 +132,33 @@ impl Replica {
                 self.admins = d.admins;
             }
         }
+    }
+
+    /// A `text` entry: import its Loro update, then place the note in the tree.
+    fn apply_text(&mut self, e: &Value, payload: &[u8], author: &str, ts: f64, id: i64) -> Option<Applied> {
+        let path = crate::paths::normalize(e.get("path")?.as_str()?).ok()?;
+        let doc = e.get("doc")?.as_str()?;
+        if doc.is_empty() || doc.len() > 64 || e.get("blob")?.get("payload_msg").is_some() {
+            return None;
+        }
+        let text = self.texts.import(doc, inline_bytes(e, payload)?).ok()?;
+        let mtime = e.get("mtime").and_then(Value::as_f64).unwrap_or(ts);
+        Some(self.tree.apply_text(&path, doc, &sha_hex(&text), text.len() as i64, mtime, author, ts, id))
+    }
+
+    /// Text of the note at `path`, if it is a merged text note.
+    pub fn text(&self, path: &str) -> Option<String> {
+        self.texts.text(self.tree.get(path)?.doc.as_deref()?)
+    }
+
+    /// Writer: the Loro update turning the version we last synced of `path` (text sha `base`) into
+    /// `new_text`. `new_doc` (16 random hex) is used if this starts a new note; `peer` must be unique
+    /// per update (e.g. derived from our id, the record seq and the entry index).
+    pub fn prepare_text(&self, path: &str, base: Option<&str>, new_text: &str, new_doc: &str, peer: u64) -> crate::Result<TextEdit> {
+        let doc = self.tree.get(path).and_then(|n| n.doc.clone()).filter(|d| base.is_some_and(|b| self.texts.has_version(d, b)));
+        // The note may have moved (conflict copy) or been deleted since: find the doc by its version.
+        let doc = doc.or_else(|| base.and_then(|b| self.texts.doc_with_version(b)));
+        self.texts.prepare(doc.as_deref(), base, new_text, new_doc, peer)
     }
 
     /// Move descriptors from `pending` into the history once we hold keys to check them.
@@ -216,7 +261,10 @@ impl Replica {
                                 // Authentic but sealed with a replaced key: count its seq, apply nothing.
                                 self.authors.insert(rec.author.clone(), rec.seq.max(self.authors.get(&rec.author).copied().unwrap_or(0)));
                                 if rec.author == self.me.id() {
-                                    rep.resend.extend(rec.entries.iter().cloned());
+                                    rep.resend.extend(rec.entries.iter().map(|e| Resend {
+                                        entry: e.clone(),
+                                        bytes: inline_bytes(e, &rec.payload).unwrap_or_default().to_vec(),
+                                    }));
                                 }
                             }
                             rep.problems.push((id, why.to_owned()));
@@ -233,7 +281,12 @@ impl Replica {
                             }
                             self.authors.insert(rec.author.clone(), rec.seq);
                             for (i, e) in rec.entries.iter().enumerate() {
-                                match self.tree.apply_entry(e, &rec.author, rec.ts, id) {
+                                let applied = if e.get("op").and_then(Value::as_str) == Some("text") {
+                                    self.apply_text(e, &rec.payload, &rec.author, rec.ts, id)
+                                } else {
+                                    self.tree.apply_entry(e, &rec.author, rec.ts, id)
+                                };
+                                match applied {
                                     None | Some(Applied::Noop(_)) => {}
                                     Some(a) => rep.applied.push((id, i, rec.ts, rec.author.clone(), a)),
                                 }

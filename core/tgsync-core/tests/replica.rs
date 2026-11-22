@@ -53,7 +53,11 @@ impl Group {
     }
 
     fn record(&mut self, ring: &KeyRing, author: &Identity, seq: u64, ts: f64, entries: Vec<Value>) -> i64 {
-        let rec = Record { author: author.id(), seq, ts, entries, payload: vec![], signer: None };
+        self.record_with(ring, author, seq, ts, entries, vec![])
+    }
+
+    fn record_with(&mut self, ring: &KeyRing, author: &Identity, seq: u64, ts: f64, entries: Vec<Value>, payload: Vec<u8>) -> i64 {
+        let rec = Record { author: author.id(), seq, ts, entries, payload, signer: None };
         let nonce = self.nonce();
         let body = encode_record(ring, &rec, &nonce, author.signing.as_ref()).unwrap();
         self.post('r', body)
@@ -349,7 +353,7 @@ fn stale_key_record_rejected_and_handed_back_to_its_writer() {
     assert!(rep.problems[0].1.contains("already replaced"));
     assert_eq!(rep.resend.len(), 1, "bob's own entry comes back for re-sending");
     // Re-sent with the new key: applied.
-    g.record(&ring, &b, 2, 2.0, rep.resend.clone());
+    g.record(&ring, &b, 2, 2.0, rep.resend.iter().map(|r| r.entry.clone()).collect());
     g.pull(&mut rb);
     assert_eq!(rb.tree.get("n.md").unwrap().sha, "s1");
 }
@@ -388,4 +392,74 @@ fn late_joiner_agrees_with_old_member_on_rejected_records() {
     assert_eq!(rd.tree, ra.tree);
     assert_eq!(rd.tree.nodes.keys().collect::<Vec<_>>(), ["ok.md"]);
     assert_eq!(rd.history.len(), ra.history.len());
+}
+
+// ------------------------------------------------------------------ text notes (PROTOCOL.md section 13)
+
+/// One text edit by `who` (replica `r` prepares it), sent as its own record.
+fn text_edit(g: &mut Group, ring: &KeyRing, who: &Identity, r: &Replica, seq: u64, path: &str, base: Option<&str>, text: &str, doc: &str) {
+    let peer = seq * 1000 + u64::from(who.id().as_bytes()[0]);
+    let edit = r.prepare_text(path, base, text, doc, peer).unwrap();
+    let n = edit.update.len();
+    let e = json!({"op": "text", "path": path, "doc": edit.doc, "sha": tgsync_core::text::sha_hex(text), "size": text.len(),
+                   "mtime": 1.0, "base": base, "blob": {"inline": [0, n]}});
+    g.record_with(ring, who, seq, seq as f64, vec![e], edit.update);
+}
+
+#[test]
+fn concurrent_note_edits_merge_without_conflict_copy() {
+    let (mut g, ring, a, b, mut ra, mut rb) = pair();
+    text_edit(&mut g, &ring, &a, &ra, 1, "n.md", None, "hello world", "d1");
+    g.pull(&mut ra);
+    g.pull(&mut rb);
+    let base = tgsync_core::text::sha_hex("hello world");
+    // Both edit the same version at once.
+    text_edit(&mut g, &ring, &a, &ra, 2, "n.md", Some(&base), "hello brave world", "x");
+    text_edit(&mut g, &ring, &b, &rb, 1, "n.md", Some(&base), "hello world!", "y");
+    g.pull(&mut ra);
+    g.pull(&mut rb);
+    assert_eq!(ra.text("n.md").unwrap(), "hello brave world!");
+    assert_eq!(ra.tree, rb.tree);
+    assert_eq!(ra.tree.nodes.len(), 1, "no conflict copy");
+}
+
+#[test]
+fn note_edit_beats_delete() {
+    let (mut g, ring, a, b, mut ra, mut rb) = pair();
+    text_edit(&mut g, &ring, &a, &ra, 1, "n.md", None, "one", "d1");
+    g.pull(&mut ra);
+    g.pull(&mut rb);
+    let base = tgsync_core::text::sha_hex("one");
+    g.record(&ring, &a, 2, 2.0, vec![json!({"op": "delete", "path": "n.md", "base": base})]);
+    text_edit(&mut g, &ring, &b, &rb, 1, "n.md", Some(&base), "one two", "y");
+    g.pull(&mut ra);
+    assert_eq!(ra.text("n.md").unwrap(), "one two");
+}
+
+#[test]
+fn two_new_notes_at_one_path_make_a_conflict_copy() {
+    let (mut g, ring, a, b, mut ra, rb) = pair();
+    text_edit(&mut g, &ring, &a, &ra, 1, "n.md", None, "from alice", "da");
+    text_edit(&mut g, &ring, &b, &rb, 1, "n.md", None, "from bob", "db");
+    g.pull(&mut ra);
+    assert_eq!(ra.text("n.md").unwrap(), "from alice");
+    let copy = ra.tree.nodes.keys().find(|p| p.contains("conflict")).unwrap().clone();
+    assert_eq!(ra.text(&copy).unwrap(), "from bob");
+    // Bob keeps editing his note: the edits follow it to the conflict copy.
+    let mut rb = rb;
+    g.pull(&mut rb);
+    let base = tgsync_core::text::sha_hex("from bob");
+    text_edit(&mut g, &ring, &b, &rb, 2, "n.md", Some(&base), "from bob, again", "z");
+    g.pull(&mut ra);
+    assert_eq!(ra.text(&copy).unwrap(), "from bob, again");
+    assert_eq!(ra.text("n.md").unwrap(), "from alice");
+}
+
+#[test]
+fn bad_text_update_is_skipped() {
+    let (mut g, ring, a, _, mut ra, _) = pair();
+    let e = json!({"op": "text", "path": "n.md", "doc": "d1", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, 3]}});
+    g.record_with(&ring, &a, 1, 1.0, vec![e], b"bad".to_vec());
+    g.pull(&mut ra);
+    assert!(ra.tree.get("n.md").is_none());
 }

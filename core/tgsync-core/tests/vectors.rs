@@ -200,6 +200,7 @@ fn replay() {
                 Some(Applied::Mkdir(p)) => serde_json::json!(["mkdir", p, null]),
                 Some(Applied::Rmdir(p)) => serde_json::json!(["rmdir", p, null]),
                 Some(Applied::Conflict(p, c)) => serde_json::json!(["conflict", p, c]),
+                Some(Applied::Text(p)) => serde_json::json!(["text", p, null]),
             });
         }
     }

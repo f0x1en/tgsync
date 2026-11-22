@@ -9,6 +9,7 @@ pub mod invites;
 pub mod oplog;
 pub mod paths;
 pub mod replica;
+pub mod text;
 pub mod tree;
 
 /// Every failure the engine reports. The message is meant for the user.

@@ -4,7 +4,8 @@
 //! 1. every replica holds the same tree;
 //! 2. every client's disk equals the tree;
 //! 3. no delivered edit is silently lost: each put's content is still in the tree, or a later
-//!    entry named it as `base` (its author saw it and replaced or deleted it on purpose).
+//!    entry named it as `base` (its author saw it and replaced or deleted it on purpose);
+//! 4. text notes (`.md`, merged with Loro): every edit a member uploaded is merged into its doc.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,8 +14,35 @@ use serde_json::json;
 use tgsync_core::crypto::KeyRing;
 use tgsync_core::descriptor::{self, Identity, Member};
 use tgsync_core::oplog::{encode_record, Record};
-use tgsync_core::replica::{Replica, Report, KIND_DESCRIPTOR, KIND_RECORD};
+use tgsync_core::replica::{Replica, Report, Resend, KIND_DESCRIPTOR, KIND_RECORD};
+use tgsync_core::text::{is_text_path, sha_hex};
 use tgsync_core::tree::DIR;
+
+/// What `base` is for a file with this content: text notes use the sha of the text, other files
+/// use their content id directly (content ids stand in for sha-256 of file bytes).
+fn base_of(path: &str, content: Option<&String>) -> Option<String> {
+    content.map(|c| if is_text_path(path) { sha_hex(c) } else { c.clone() })
+}
+
+/// The files a replica's tree describes: path -> text (notes) or content id (other files).
+fn contents(r: &Replica) -> BTreeMap<String, String> {
+    r.tree
+        .nodes
+        .values()
+        .filter(|n| n.sha != DIR)
+        .map(|n| (n.path.clone(), match &n.doc { Some(d) => r.texts.text(d).unwrap(), None => n.sha.clone() }))
+        .collect()
+}
+
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(' ').filter(|w| !w.is_empty())
+}
+
+/// Append `bytes` to the record payload; returns the entry's `inline` field.
+fn inline(bytes: &[u8], payload: &mut Vec<u8>) -> serde_json::Value {
+    payload.extend_from_slice(bytes);
+    json!([payload.len() - bytes.len(), bytes.len()])
+}
 
 /// splitmix64: tiny, fast, good enough to drive a simulation.
 pub struct Rng(u64);
@@ -50,15 +78,15 @@ const PATHS: &[&str] = &["a.md", "A.md", "b.md", "notes/x.md", "notes/X.md", "no
 
 struct Client {
     replica: Replica,
-    /// path -> content id. Content ids stand in for file bytes (the tree stores them as `sha`).
+    /// path -> content: the text of a note, or a content id that stands in for other file bytes.
     disk: BTreeMap<String, String>,
-    /// path -> content id at the last sync (what `base` is taken from).
+    /// path -> content at the last sync (what `base` is taken from).
     synced: BTreeMap<String, String>,
     /// Last seq we posted, saved before posting (write-ahead), so a crash never reuses a seq.
     sent_seq: u64,
     /// Entries of our records that readers rejected (old key): uploaded again, same content and base,
     /// with the next push. The content comes from the old record, not from disk.
-    resend: Vec<serde_json::Value>,
+    resend: Vec<Resend>,
 }
 
 pub struct Sim {
@@ -75,6 +103,8 @@ pub struct Sim {
     promised: Vec<(usize, i64, String, Option<String>)>,
     /// (client, record msg id at that time, path) for every local edit or delete.
     touched: Vec<(usize, i64, String)>,
+    /// (client, record msg id, doc, Loro update) for every note upload marked as done.
+    text_promised: Vec<(usize, i64, String, Vec<u8>)>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -123,7 +153,7 @@ impl Sim {
             .into_iter()
             .map(|p| Client { replica: Replica::new(p, None), disk: BTreeMap::new(), synced: BTreeMap::new(), sent_seq: 0, resend: vec![] })
             .collect();
-        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![] }
+        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![], text_promised: vec![] }
     }
 
     fn post(&mut self, kind: char, body: Vec<u8>) {
@@ -192,6 +222,19 @@ impl Sim {
 
     fn edit(&mut self, c: usize) {
         let path = PATHS[self.rng.below(PATHS.len())].to_string();
+        if is_text_path(&path) {
+            // Insert one new word at a random place: words are never removed from a note, so
+            // every uploaded word must survive the merges.
+            self.next_content += 1;
+            let word = format!("k{}", self.next_content - 1);
+            let mut ws: Vec<String> = self.clients[c].disk.get(&path).map(|t| words(t).map(str::to_owned).collect()).unwrap_or_default();
+            let at = self.rng.below(ws.len() + 1);
+            ws.insert(at, word.clone());
+            self.trace.push(format!("c{c} edit {path}: insert {word} at {at}"));
+            self.touched.push((c, self.group.len() as i64, path.clone()));
+            self.clients[c].disk.insert(path, ws.join(" "));
+            return;
+        }
         // Sometimes write content that another client also wrote (same bytes, no conflict expected).
         let content = if self.next_content > 0 && self.rng.chance(10) {
             format!("k{}", self.rng.below(self.next_content as usize))
@@ -222,34 +265,58 @@ impl Sim {
         if cl.replica.removed || !cl.replica.has_keys() {
             return;
         }
-        let mut entries = cl.resend.clone();
-        let mut done = vec![];
-        let paths: BTreeSet<&String> = cl.disk.keys().chain(cl.synced.keys()).collect();
-        for p in paths {
-            let (now, then) = (cl.disk.get(p), cl.synced.get(p));
-            if now == then {
-                continue;
-            }
-            match now {
-                Some(sha) => entries.push(json!({"op": "put", "path": p, "sha": sha, "size": 1, "mtime": self.clock,
-                    "base": then, "blob": {"file_id": "0000000000000000", "chunks": null, "inline": [0, 0]}})),
-                None => entries.push(json!({"op": "delete", "path": p, "base": then})),
-            }
-            done.push((p.clone(), now.cloned()));
-        }
-        if entries.is_empty() {
+        let changed: Vec<(String, Option<String>, Option<String>)> = cl
+            .disk
+            .keys()
+            .chain(cl.synced.keys())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|p| cl.disk.get(*p) != cl.synced.get(*p))
+            .map(|p| (p.clone(), cl.disk.get(p).cloned(), cl.synced.get(p).cloned()))
+            .collect();
+        if changed.is_empty() && cl.resend.is_empty() {
             return;
         }
         if self.faults && self.rng.chance(5) {
             self.trace.push(format!("c{c} push refused (flood wait), nothing sent"));
             return;
         }
-        let resent = std::mem::take(&mut self.clients[c].resend).len();
         let cl = &self.clients[c];
         let seq = cl.sent_seq.max(cl.replica.next_seq() - 1) + 1;
+        let me_id = cl.replica.me.id();
+        let mut entries = vec![];
+        let mut payload: Vec<u8> = vec![];
+        let resend = std::mem::take(&mut self.clients[c].resend);
+        let resent = resend.len();
+        for r in &resend {
+            let mut e = r.entry.clone();
+            if !r.bytes.is_empty() {
+                e["blob"]["inline"] = inline(&r.bytes, &mut payload);
+            }
+            entries.push(e);
+        }
+        let mut done = vec![];
+        let mut text_docs = vec![];
+        for (p, now, then) in changed {
+            let base = base_of(&p, then.as_ref());
+            match &now {
+                Some(text) if is_text_path(&p) => {
+                    let peer = u64::from_be_bytes(sha2_8(&format!("{me_id}:{seq}:{}", entries.len())));
+                    let new_doc = hex8(self.rng.bytes::<8>());
+                    let edit = self.clients[c].replica.prepare_text(&p, base.as_deref(), text, &new_doc, peer).unwrap();
+                    text_docs.push((edit.doc.clone(), edit.update.clone()));
+                    entries.push(json!({"op": "text", "path": p, "doc": edit.doc, "sha": sha_hex(text), "size": text.len(),
+                        "mtime": self.clock, "base": base, "blob": {"inline": inline(&edit.update, &mut payload)}}));
+                }
+                Some(id) => entries.push(json!({"op": "put", "path": p, "sha": id, "size": 1, "mtime": self.clock,
+                    "base": base, "blob": {"file_id": "0000000000000000", "chunks": null, "inline": [0, 0]}})),
+                None => entries.push(json!({"op": "delete", "path": p, "base": base})),
+            }
+            done.push((p, now));
+        }
         self.clients[c].sent_seq = seq;
         let me = &self.clients[c].replica.me;
-        let rec = Record { author: me.id(), seq, ts: self.clock, entries, payload: vec![], signer: None };
+        let rec = Record { author: me.id(), seq, ts: self.clock, entries, payload, signer: None };
         let body = encode_record(&self.clients[c].replica.keys, &rec, &self.rng.bytes(), me.signing.as_ref()).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
@@ -263,6 +330,9 @@ impl Sim {
             return;
         }
         let msg_id = self.group.len() as i64 - i64::from(twice);
+        for (doc, update) in text_docs {
+            self.text_promised.push((c, msg_id, doc, update));
+        }
         for (p, sha) in done {
             self.promised.push((c, msg_id, p.clone(), sha.clone()));
             match sha {
@@ -304,8 +374,7 @@ impl Sim {
         if cl.replica.has_keys() {
             cl.replica.active = true;
         }
-        let tree: BTreeMap<String, String> =
-            cl.replica.tree.nodes.values().filter(|n| n.sha != DIR).map(|n| (n.path.clone(), n.sha.clone())).collect();
+        let tree = contents(&cl.replica);
         for (p, sha) in &tree {
             let local = cl.disk.get(p);
             if local == Some(sha) {
@@ -369,8 +438,11 @@ impl Sim {
                 return Err(format!("c{i}'s tree differs from c0's (c{i} cursor {}, removed {}):\n  {}",
                     cl.replica.cursor, cl.replica.removed, diff.join("\n  ")));
             }
-            let tree: BTreeMap<String, String> =
-                cl.replica.tree.nodes.values().filter(|n| n.sha != DIR).map(|n| (n.path.clone(), n.sha.clone())).collect();
+            let tree = contents(&cl.replica);
+            let docs = |r: &Replica| r.texts.doc_ids().map(|d| (d.clone(), r.texts.text(d))).collect::<Vec<_>>();
+            if docs(&cl.replica) != docs(&self.clients[0].replica) {
+                return Err(format!("c{i}'s text notes differ from c0's"));
+            }
             if cl.disk != tree {
                 return Err(format!("c{i}'s disk differs from the tree:\n disk {:?}\n tree {:?}", cl.disk, tree));
             }
@@ -419,6 +491,9 @@ impl Sim {
         // (this catches records that readers rejected, e.g. sealed with a replaced key, and never re-sent).
         for (c, msg_id, path, sha) in &self.promised {
             let Some(sha) = sha else { continue };
+            if is_text_path(path) {
+                continue; // checked below
+            }
             let me = self.clients[*c].replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
             // The same person changed or deleted this path on their own disk afterwards.
@@ -429,6 +504,16 @@ impl Sim {
                 return Err(format!("upload lost: c{c} marked {path} = {sha} (msg {msg_id}) as uploaded; it is gone. \
                     c{c} disk {:?}, synced {:?}, tree {:?}; c{c}'s uploads of {path}: {puts_of_it:?}",
                     cl.disk.get(path), cl.synced.get(path), cl.replica.tree.get(path).map(|n| &n.sha)));
+            }
+        }
+        // Text: every note edit a member uploaded is merged into its doc (all its Loro operations
+        // are in the final doc). Edits re-sent after an old-key rejection count from the re-send.
+        for (c, msg_id, doc, update) in &self.text_promised {
+            let me = self.clients[*c].replica.me.id();
+            let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
+            if member && !self.clients[0].replica.texts.contains(doc, update) {
+                return Err(format!("note edit lost: c{c}'s upload to doc {doc} (msg {msg_id}) is not in the final doc {:?}",
+                    self.clients[0].replica.texts.text(doc)));
             }
         }
         Ok(stats)
@@ -468,4 +553,17 @@ mod tests {
         };
         assert_eq!(trace(7), trace(7));
     }
+}
+
+fn sha2_8(s: &str) -> [u8; 8] {
+    let h = sha_hex(s);
+    let mut out = [0u8; 8];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap();
+    }
+    out
+}
+
+fn hex8(b: [u8; 8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }

@@ -263,3 +263,36 @@ epoch key), so every client builds the same history.
 - sealed with an epoch below the entry's epoch: skip, but count its `seq` (problem "record sealed with a
   key that was already replaced"). If we are its author, upload its entries again with the next push:
   same content (read from the old record, which we can still open) and same `base`. Nothing is lost.
+
+## 13. Text notes merged with Loro (Rust core only)
+
+Notes (`.md`, valid UTF-8, at most 256 KiB) can be sent as `text` entries instead of `put`. Two people
+editing the same note at once then get one merged note, not a conflict copy.
+
+Every note lineage is one [Loro](https://loro.dev) document with a text container named `t`, named by a
+`doc` id (16 random hex chars, chosen by the writer who starts the note).
+
+**Entry** (in a record, section 5):
+```json
+{"op": "text", "path": "...", "doc": "<doc id>", "sha": "<hex SHA-256 of the writer's new text>",
+ "size": n, "mtime": t, "base": "<SHA-256 of the text the writer last synced, or null>",
+ "blob": {"inline": [offset, length]}}
+```
+The inline bytes are a Loro update (`export(updates since the writer's base version)`): only the
+operations of this edit. `payload_msg` is not allowed (text always travels in its own record).
+
+**Writer.** Fork the doc at the version whose text has sha `base`, set a peer id unique to this update
+(derived from author, seq and entry index), replace the text with the new text (Loro `update`, a
+character diff), export the new operations. No known base (a new note, or the base cannot be found):
+start a new doc.
+
+**Replay** (in log order, after the record checks of sections 9 and 12):
+1. Import the update into doc `doc` (create it if new). A bad update skips the entry. Documents are
+   kept even when their file is deleted.
+2. The node gets `sha` = SHA-256 of the doc's text after the import, `doc` = the doc id.
+3. Place it: if the doc already sits at another path (a conflict copy), it stays there. Else, if
+   the path has no node or a node of the same doc, set it there (an edit beats a delete). Else
+   (another file or doc at that path, or a case clash) it goes to a conflict-copy path (section 8).
+
+Loro merges concurrent operations the same way in every replica, so every client ends with the same
+text. `put` and `delete` still work on note paths with the section 9 rules (sha = SHA-256 of the text).

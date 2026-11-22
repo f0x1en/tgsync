@@ -13,6 +13,7 @@ ed25519-dalek = "2"
 hex = "0.4"
 hkdf = "0.12"
 hmac = "0.12"
+loro = "1.18.0"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
