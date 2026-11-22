@@ -47,7 +47,41 @@ Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cac
 machine: 1 GB push 55 MB/s, pull 126 MB/s, peak memory 329 MB; 3 GB: 52 / 129 MB/s, peak 296 MB (memory stays
 flat: files stream in chunks). Real Telegram speed is limited by Telegram, not by this. Change the protocol only together with both.
 
-## Code map (`src/tgsync/`)
+## Rust core (`core/`, branch `rust-core`)
+
+The rewrite: one Rust engine, compiled to WebAssembly for the Node CLI and the Obsidian plugin. It is
+**sans-IO**: no network, no files, no clock, no randomness inside. The host lists the folder, talks to
+Telegram and passes in nonces, keys and timestamps; the core decides everything else.
+
+```bash
+make rust           # cargo test: spec/vectors.json, replica, members, sync plans, simulator smoke run
+make sim            # 10000 seeds of the deterministic simulator (release build, a few minutes)
+make sim SEEDS=500  # quicker
+cd core && cargo run --release -p tgsync-sim -- --start 1234 --seeds 1   # replay one seed with its trace
+```
+
+| Crate / file | What it does |
+|---|---|
+| `tgsync-core/src/crypto.rs` | Seal/open, subkeys, key ring, fingerprints, member ids (PROTOCOL.md 2-3) |
+| `descriptor.rs` | Descriptors v1 and v2 (admins, Ed25519), `accept`, `inspect` (membership history) |
+| `members.rs` | Create a vault, add/remove members (key rotation), give/drop admin |
+| `oplog.rs` | Records v1/v2 (signed), chunks |
+| `tree.rs` | Deterministic replay of entries into the file tree, conflict copies |
+| `text.rs` | Notes merged with the Loro CRDT (PROTOCOL.md 13) |
+| `replica.rs` | One client's view: feeds messages in order, record checks (PROTOCOL.md 12), save/load |
+| `sync.rs` | `plan_push` / `plan_materialize`: what to upload, what to write |
+| `vault.rs` | Per-folder state between runs (replica, synced map, re-send queue, last seq) |
+| `tgsync-sim` | N clients, one fake group, random edits and faults; checks convergence and that nothing is lost |
+| `tgsync-wasm` | JS API (`Engine`, `createVault`, invites); boundary is JSON + byte arrays; CI builds it for wasm32 |
+
+**Simulator faults:** Telegram shows the newest messages late, refuses uploads (flood wait), delivers an
+upload twice; a client crashes after posting but before marking files synced; clients restart (state
+saved and loaded); the admin removes and re-adds members (key rotation) while others keep writing.
+**Checks after settling:** every replica has the same tree and notes; every folder equals its tree;
+every upload a member marked as done is in the tree or was knowingly replaced; every note edit is merged
+into its document. A failing seed prints its whole trace and replays exactly.
+
+
 
 | File | What it does |
 |---|---|
