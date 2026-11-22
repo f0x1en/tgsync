@@ -34,6 +34,7 @@ LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\dT\S+ \[(VRB|DBG|INF|WRN|ERR)\] ")  # TGS
 TIMEOUT = 120  # seconds; no tiny-file command needs this long
 ROOT = Path(__file__).resolve().parent.parent
 CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
+MERGES = any(a.endswith("tgsync.mjs") for a in CLI)  # the Node CLI (Rust core) merges notes; Python makes copies
 
 
 def tg(*args: str, expect_ok: bool = True) -> str:
@@ -152,19 +153,29 @@ def main() -> int:
         check(files(A).get("draft.md") == "friend draft\n", "owner's pull downloads the draft")
         check(files(A) == files(B), "folders identical after push/pull")
 
-        print("\n== 5. both edit the same note: nothing is lost")
+        print("\n== 5. both edit the same note (and the same binary file): nothing is lost")
         (A / "shared.md").write_text("base\n")
+        (A / "shared.bin").write_bytes(b"base\x00")
         sync(A)
         sync(B)
         (A / "shared.md").write_text("owner edit\n")
         (B / "shared.md").write_text("friend edit\n")
+        (A / "shared.bin").write_bytes(b"owner\x00")
+        (B / "shared.bin").write_bytes(b"friend\x00")
         sync(A)
         out = sync(B)
         sync(A)
-        check("Conflict" in out, "friend's push/pull reports a conflict")
         check(files(A) == files(B), "both folders are identical after syncing")
-        both = " ".join(files(A).values())
-        check("owner edit" in both and "friend edit" in both, "both versions survive")
+        if MERGES:
+            merged = files(A).get("shared.md", "")
+            check("owner edit" in merged and "friend edit" in merged, "the note holds both edits (merged)")
+            check(not [p for p in files(A) if p.startswith("shared (conflict")], "the note made no conflict copy")
+            check(len([p for p in files(A) if p.startswith("shared (conflict") and p.endswith(".bin")]) == 1,
+                  "the binary file kept both versions (one conflict copy)")
+        else:
+            check("Conflict" in out, "friend's push/pull reports a conflict")
+            both = " ".join(v for v in files(A).values() if isinstance(v, str))
+            check("owner edit" in both and "friend edit" in both, "both versions survive")
 
         print("\n== 6. owner deletes a note while friend edits it: the edit wins")
         (A / "keep.md").write_text("v1\n")

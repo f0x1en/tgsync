@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The tgsync command line, on the TypeScript engine. Same commands, output and --json contract
+// The tgsync command line, on the Rust core (WebAssembly, ../core). Same commands, output and --json contract
 // as the Python CLI (HACKING.md). Talks to Telegram, or to a sandbox group (TGSYNC_SANDBOX).
 //
 //   tgsync              what changed, yours and others' (same as `tgsync status`)
@@ -486,11 +486,11 @@ const COMMANDS: { [name: string]: Command } = {
       const mine = v.me.recipient;
       const ids = await Promise.all(v.members.map((m) => memberId(m.recipient)));
       emit({
-        members: v.members.map((m, i) => ({ name: m.name, id: ids[i], you: m.recipient === mine })),
+        members: v.members.map((m, i) => ({ name: m.name, id: ids[i], you: m.recipient === mine, admin: !!m.admin })),
         waiting: reqs.map((r, i) => ({ code: codes[i], name: r.name })),
       }, () => {
         echo("members:");
-        v.members.forEach((m, i) => echo(`  ${m.name || ids[i]}${m.recipient === mine ? "  (you)" : ""}`));
+        v.members.forEach((m, i) => echo(`  ${m.name || ids[i]}${m.admin ? "  (admin)" : ""}${m.recipient === mine ? "  (you)" : ""}`));
         if (reqs.length) {
           echo("\nwaiting to join (only accept a code the person read to you yourself):");
           reqs.forEach((r, i) => echo(`  ${codes[i]}  ${r.name || "(no name)"}     ->  tgsync accept ${codes[i]}`));
@@ -516,6 +516,19 @@ const COMMANDS: { [name: string]: Command } = {
     },
   },
 
+  admin: {
+    help: "Admins let people in and remove them. `admin give NAME` makes a member an admin; `admin drop` stops you being one.",
+    usage: "give NAME | drop [-C VAULT]",
+    options: VAULT_OPT,
+    async run([what, who], o) {
+      if (what !== "give" && what !== "drop") throw new CliError("Use `tgsync admin give NAME` or `tgsync admin drop`.");
+      if (what === "give" && !who) throw new CliError("Missing argument 'NAME' (see `tgsync members`).");
+      const [v] = await openVault(o.vault as string, "admin");
+      if (what === "give") await v.giveAdmin(who); else await v.dropAdmin();
+      const admins = v.members.filter((m) => m.admin).map((m) => m.name || m.recipient.slice(0, 12));
+      emit({ admins }, () => echo(`Done. Admins now: ${admins.join(", ")}`));
+    },
+  },
   remove: {
     help: "Remove a member (by name) and rotate the vault key.",
     usage: "WHO [--yes] [-C VAULT]",

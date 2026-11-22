@@ -242,3 +242,21 @@ test("huge files stream: never read or written whole, verified byte for byte", a
   assert.deepEqual(whole, []);
   await rm(tmp, { recursive: true, force: true });
 });
+
+test("only admins change members; admin rights pass on", async () => {
+  const { a, b, ch, cleanup } = await pair();
+  const ic = await newIdentity();
+  await assert.rejects(b.vault.addMember(ic.recipient, "carol", w.signerOf(ic.signing)), /only an admin/);
+  await a.vault.giveAdmin("bob");
+  await b.vault.pull();
+  assert.ok(b.vault.isAdmin);
+  await b.vault.addMember(ic.recipient, "carol", w.signerOf(ic.signing));
+  await a.vault.dropAdmin();
+  await a.vault.pull();
+  assert.ok(!a.vault.isAdmin);
+  assert.deepEqual(a.vault.members.map((m) => [m.name, m.admin]), [["alice", false], ["bob", true], ["carol", false]]);
+  const before = ch.sent;
+  await assert.rejects(a.vault.removeMember("carol"), /only an admin/);
+  assert.equal(ch.sent, before, "nothing was posted");
+  await cleanup();
+});
