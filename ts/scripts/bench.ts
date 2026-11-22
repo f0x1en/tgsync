@@ -11,6 +11,7 @@ import { newIdentity } from "../src/crypto.ts";
 import { NodeFiles } from "../src/node/files.ts";
 import { DirTransport, PREFIX } from "../src/node/sandbox.ts";
 import { Vault } from "../src/vault.ts";
+import { w } from "../src/core.ts";
 
 const mb = Number(process.argv[2] ?? 1024);
 const base = process.argv[3] ?? tmpdir();
@@ -36,7 +37,7 @@ try {
   const link = PREFIX + G;
   const ia = await newIdentity(), ib = await newIdentity();
   const a = await Vault.create(new NodeFiles(A), ia, new DirTransport(link), "alice");
-  await a.addMember(ib.recipient, "bob");
+  await a.addMember(ib.recipient, "bob", w.signerOf(ib.signing));
   const b = await Vault.join(new NodeFiles(B), ib, new DirTransport(link), a.vaultId!);
   peak = 0;
 

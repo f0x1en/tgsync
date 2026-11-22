@@ -351,6 +351,16 @@ impl Engine {
         self.vault.replica.me.id()
     }
 
+    /// The vault keys, JSON `{"<epoch>": "<hex key>"}`, for a host that seals and opens big-file
+    /// chunks itself with the platform's AES-GCM (hardware-accelerated; same format, PROTOCOL.md
+    /// section 6). Keep them in memory only.
+    #[wasm_bindgen(js_name = vaultKeys)]
+    pub fn vault_keys(&self) -> String {
+        let k = &self.vault.replica.keys;
+        let m: BTreeMap<String, String> = k.epochs().map(|e| (e.to_string(), hex::encode(k.key(e).unwrap()))).collect();
+        serde_json::to_string(&m).unwrap()
+    }
+
     /// Key epoch new data is sealed with.
     pub fn epoch(&self) -> Option<u32> {
         self.vault.replica.keys.current_epoch().ok()

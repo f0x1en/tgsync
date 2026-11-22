@@ -5,7 +5,8 @@
 import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import type { Files, Stat } from "./files.ts";
 import { INTERNAL_DIR, PathError, TMP_SUFFIX, makeIgnore, normalize } from "./paths.ts";
-import { DEFAULT_CHUNK, INLINE_MAX, KIND, type Identity, type JoinRequest, type Member } from "./protocol.ts";
+import { KeyRing } from "./crypto.ts";
+import { DEFAULT_CHUNK, INLINE_MAX, KIND, openChunk, sealChunk, type Identity, type JoinRequest, type Member } from "./protocol.ts";
 import type { Transport } from "./transport.ts";
 import { w } from "./core.ts";
 
@@ -135,6 +136,14 @@ export class Vault {
       engine = new w.Engine(me.secret, me.recipient, signing, vid);
     }
     return new Vault(files, me, transport, engine, state, makeIgnore(ig));
+  }
+
+  /** The vault keys for big-file chunks, sealed and opened with the platform's AES-GCM (much faster
+   * than AES in WebAssembly; same format, PROTOCOL.md section 6). Read fresh: keys rotate. */
+  private chunkKeys(): KeyRing {
+    const keys: { [e: string]: string } = JSON.parse(this.engine.vaultKeys());
+    const hexBytes = (h: string) => Uint8Array.from(h.match(/../g)!, (b) => parseInt(b, 16));
+    return new KeyRing(new Map(Object.entries(keys).map(([e, k]) => [Number(e), hexBytes(k)])));
   }
 
   private async saveEngine(): Promise<void> {
@@ -305,11 +314,12 @@ export class Vault {
     const h = nobleSha256.create();
     const ids: number[] = [];
     let total = 0;
+    const ring = this.chunkKeys();
     for await (const part of this.files.readChunks(raw, chunkSize)) {
       if (ids.length >= count) break;
       h.update(part);
       total += part.length;
-      ids.push(await this.transport.send(KIND.chunk, this.engine.sealChunk(fileId, ids.length, count, part, seed())));
+      ids.push(await this.transport.send(KIND.chunk, await sealChunk(ring, fileId, ids.length, count, part)));
     }
     if (ids.length !== count || total !== size) throw new Error("changed while uploading; run `tgsync push` again");
     return { sha: hexOf(h.digest()), blob: { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null } };
@@ -403,9 +413,10 @@ export class Vault {
     if (size >= BIG_FILE) this.notify(`downloading ${path} (${humanSize(size)}); big files take a while and only appear when finished`);
     const h = nobleSha256.create();
     const wr = await this.files.writer(path);
+    const ring = this.chunkKeys();
     try {
       for (const [i, mid] of ids.entries()) {
-        const part = this.engine.openChunk(blob.file_id, i, ids.length, await this.transport.fetch(mid));
+        const part = await openChunk(ring, blob.file_id, i, ids.length, await this.transport.fetch(mid));
         h.update(part);
         await wr.write(part);
       }
