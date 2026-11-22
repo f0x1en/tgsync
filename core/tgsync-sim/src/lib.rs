@@ -24,12 +24,11 @@ fn base_of(path: &str, content: Option<&String>) -> Option<String> {
     content.map(|c| if is_text_path(path) { sha_hex(c) } else { c.clone() })
 }
 
-/// The files a replica's tree describes: path -> text (notes) or content id (other files).
+/// The files a replica's tree describes: path -> text (notes), content id (other files) or "dir".
 fn contents(r: &Replica) -> BTreeMap<String, String> {
     r.tree
         .nodes
         .values()
-        .filter(|n| n.sha != DIR)
         .map(|n| (n.path.clone(), match &n.doc { Some(d) => r.texts.text(d).unwrap(), None => n.sha.clone() }))
         .collect()
 }
@@ -41,7 +40,13 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 /// How the simulated folder's content looks to the core: notes are text, other files stand in
 /// as empty small files whose sha is their content id.
 fn local_file(path: &str, content: &str) -> LocalFile {
-    if is_text_path(path) {
+    if content == DIR {
+        LocalFile { sha: DIR.into(), size: 0, mtime: 0.0, content: Content::Dir }
+    } else if path == BIG {
+        // A big file: its chunks went up before the record (here only the blob is simulated).
+        let blob = serde_json::json!({"file_id": &content[..content.len().min(16)], "chunks": [], "chunk_size": 1, "inline": null});
+        LocalFile { sha: content.to_owned(), size: 1 << 30, mtime: 0.0, content: Content::Big(blob) }
+    } else if is_text_path(path) {
         LocalFile { sha: sha_hex(content), size: content.len() as u64, mtime: 0.0, content: Content::Text(content.to_owned()) }
     } else {
         LocalFile { sha: content.to_owned(), size: 1, mtime: 0.0, content: Content::Small(vec![]) }
@@ -78,7 +83,11 @@ impl Rng {
 }
 
 /// Paths the clients fight over: case clashes, folders, names that need conflict copies.
-const PATHS: &[&str] = &["a.md", "A.md", "b.md", "notes/x.md", "notes/X.md", "notes/y.md", "img.png"];
+const PATHS: &[&str] = &["a.md", "A.md", "b.md", "notes/x.md", "notes/X.md", "notes/y.md", "img.png", "video.bin"];
+/// A big file (chunked upload): re-uses the blob when the same content appears again.
+const BIG: &str = "video.bin";
+/// Empty folders the clients create and remove.
+const DIRS: &[&str] = &["empty", "ideas/later"];
 
 struct Client {
     /// Replica, synced map, re-send queue, last seq: the state a real host saves per folder.
@@ -177,7 +186,8 @@ impl Sim {
             return;
         }
         match self.rng.below(10) {
-            0..=3 => self.edit(c),
+            0..=2 => self.edit(c),
+            3 => self.toggle_dir(c),
             4 => self.delete(c),
             5..=6 => self.push(c),
             _ => {
@@ -246,6 +256,15 @@ impl Sim {
         let loaded = Vault::load(v.replica.me.clone(), &v.save()).unwrap();
         self.trace.push(format!("c{c} restarts"));
         self.clients[c].vault = loaded;
+    }
+
+    /// Create an empty folder, or remove it if it is there.
+    fn toggle_dir(&mut self, c: usize) {
+        let d = DIRS[self.rng.below(DIRS.len())].to_string();
+        let disk = &mut self.clients[c].disk;
+        let made = if disk.get(&d).map(String::as_str) == Some(DIR) { disk.remove(&d); false } else { disk.insert(d.clone(), DIR.into()); true };
+        self.trace.push(format!("c{c} {} folder {d}", if made { "makes" } else { "removes" }));
+        self.touched.push((c, self.group.len() as i64, d));
     }
 
     fn edit(&mut self, c: usize) {
@@ -373,7 +392,8 @@ impl Sim {
                 DiskOp::Write { path, text: Some(t), .. } => cl.disk.insert(path, t),
                 DiskOp::Write { path, sha, .. } => cl.disk.insert(path, sha),
                 DiskOp::Delete { path } => cl.disk.remove(&path),
-                DiskOp::Mkdir { .. } | DiskOp::Rmdir { .. } => None,
+                DiskOp::Mkdir { path } => cl.disk.insert(path, DIR.into()),
+                DiskOp::Rmdir { path } => cl.disk.remove(&path),
             };
         }
         cl.vault.materialized(synced);
@@ -486,7 +506,7 @@ impl Sim {
         // Every upload a client marked as done, while it was a member, must survive the same way
         // (this catches records that readers rejected, e.g. sealed with a replaced key, and never re-sent).
         for (c, msg_id, path, sha) in &self.promised {
-            let Some(sha) = sha else { continue };
+            let Some(sha) = sha.as_ref().filter(|s| *s != DIR) else { continue };
             if is_text_path(path) {
                 continue; // checked below
             }
@@ -535,6 +555,20 @@ mod tests {
                 panic!("{e}");
             }
         }
+    }
+
+    #[test]
+    fn runs_cover_folders_and_big_files() {
+        let mut sim = super::Sim::new(3, 3);
+        for _ in 0..300 {
+            sim.step();
+        }
+        sim.settle_and_check().unwrap();
+        let t = sim.trace.join("\n");
+        assert!(t.contains("makes folder") && t.contains("removes folder"), "no folder actions");
+        assert!(t.contains("video.bin"), "no big-file actions");
+        let tree = &sim.clients[0].vault.replica.tree;
+        assert!(tree.nodes.values().any(|n| n.blob.get("chunks").is_some_and(|c| c.is_array())), "no big file in the tree");
     }
 
     #[test]
