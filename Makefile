@@ -1,7 +1,7 @@
 # Dev shortcuts. Run `uv venv && uv pip install -e ".[dev]"` once first.
 PY ?= .venv/bin/python
 
-.PHONY: check test live ts plugin rust
+.PHONY: check test live ts plugin rust sim
 
 check:  ## lint + types + tests (same as CI)
 	$(PY) -m ruff check src tests scripts
@@ -23,3 +23,6 @@ plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm in
 
 rust:   ## Rust core (core/): tests, incl. spec/vectors.json
 	cd core && cargo test
+
+sim:    ## deterministic simulation: many clients, faults, convergence check. SEEDS=n (default 10000)
+	cd core && cargo run --release -q -p tgsync-sim -- --seeds $(or $(SEEDS),10000)

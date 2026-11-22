@@ -1,0 +1,13 @@
+[package]
+name = "tgsync-sim"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Deterministic simulation of many tgsync clients sharing one Telegram group."
+publish = false
+
+[dependencies]
+tgsync-core = { path = "../tgsync-core" }
+age = { version = "0.11", default-features = false }
+bech32 = "0.9"
+serde_json = "1"
