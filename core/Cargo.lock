@@ -2080,6 +2080,10 @@ dependencies = [
 name = "tgsync-wasm"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "serde_json",
+ "sha2 0.10.9",
  "tgsync-core",
  "wasm-bindgen",
 ]
