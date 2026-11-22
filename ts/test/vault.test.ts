@@ -297,3 +297,45 @@ test("restore brings back an old version of a binary file from the group", async
   assert.equal(await a.read("pic.bin"), "v1");
   await cleanup();
 });
+
+test("a synced file that cannot be read right now is never pushed as a delete", async () => {
+  const { a, b, cleanup } = await pair();
+  await a.write("busy.md", "v1\n");
+  await sync(a); await sync(b);
+  await a.write("busy.md", "v2, being saved\n");
+  const files: any = (a.vault as any).files;
+  const read = files.read.bind(files);
+  files.read = async (p: string) => { if (p === "busy.md") throw new Error("EBUSY: locked by another app"); return read(p); };
+  const rep = await a.vault.pushChanges();
+  assert.ok(rep.skipped.some((s) => s.startsWith("busy.md:")), JSON.stringify(rep.skipped));
+  assert.ok(!rep.pushed_paths.includes("busy.md"));
+  await sync(b);
+  assert.equal(await b.read("busy.md"), "v1\n", "bob still has it");
+  files.read = read;
+  await sync(a); await sync(b);
+  assert.equal(await b.read("busy.md"), "v2, being saved\n");
+  await cleanup();
+});
+
+test("a note with a byte-order mark syncs", async () => {
+  const { a, b, cleanup } = await pair();
+  await a.write("bom.md", "﻿hello\n");
+  await sync(a); await sync(b);
+  assert.equal(await b.read("bom.md"), "﻿hello\n");
+  assert.deepEqual((await b.vault.status()).problems, []);
+  await cleanup();
+});
+
+test("a file stored under a decomposed (NFD) name is read and kept, not deleted", async () => {
+  const { a, b, cleanup } = await pair();
+  const nfd = "café.md", nfc = "café.md";
+  await a.write(nfd, "from a mac\n");
+  await sync(a); await sync(b);
+  assert.equal(await b.read(nfc), "from a mac\n");
+  assert.deepEqual((await a.vault.pendingChanges()).map((c) => [c.op, c.path]), []);
+  await a.write(nfd, "edited\n");
+  await sync(a); await sync(b);
+  assert.equal(await b.read(nfc), "edited\n");
+  assert.ok(await a.exists(nfd));
+  await cleanup();
+});

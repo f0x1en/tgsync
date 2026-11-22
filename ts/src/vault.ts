@@ -41,6 +41,8 @@ export interface Incoming { op: string; path: string; who: string; also_local: b
 /** [msg_id, entry index, ts, author id, op, path, conflict copy or null] */
 type LogRow = [number, number, number, string, string, string, string | null];
 
+interface Scanned { sha: string; st: Stat | null; raw: string }
+
 interface Local {
   /** path -> [sha, size, mtime ms, when we hashed it (ms)]: skip re-hashing unchanged files. */
   stat: { [path: string]: [string, number, number, number] };
@@ -252,53 +254,58 @@ export class Vault {
     return hexOf(h.digest());
   }
 
-  /** sha of a file, from the stat cache when size and mtime did not change. */
-  private async shaOf(rel: string, st: Stat): Promise<string> {
+  /** sha of a file (`raw`: its name on disk), from the stat cache when size and mtime did not change. */
+  private async shaOf(rel: string, raw: string, st: Stat): Promise<string> {
     const c = this.state.d.stat[rel];
     if (c && c[1] === st.size && c[2] === st.mtime && c[3] - c[2] > RACY_MS) return c[0];
-    const sha = await this.hashFile(rel);
+    const sha = await this.hashFile(raw);
     this.state.d.stat[rel] = [sha, st.size, st.mtime, Date.now()];
     return sha;
   }
 
-  /** path -> sha of everything in the folder ("dir" for empty folders). */
-  private async scan(rep: Report): Promise<Map<string, [string, Stat | null]>> {
-    const out = new Map<string, [string, Stat | null]>();
+  /**
+   * Everything in the folder: vault path -> sha ("dir" for empty folders), its stat and its name on
+   * disk (which may differ from the vault path in Unicode form, e.g. NFD names written by macOS).
+   * `unreadable`: files that are there but could not be hashed; they must never look deleted.
+   */
+  private async scan(rep: Report): Promise<{ files: Map<string, Scanned>; unreadable: Set<string> }> {
+    const files = new Map<string, Scanned>();
+    const unreadable = new Set<string>();
     for await (const [raw, kind] of this.walk()) {
       let rel: string;
       try { rel = normalize(raw); } catch (e) { rep.skipped.push(`${raw}: ${(e as PathError).message}`); continue; }
-      if (kind === "emptydir") { out.set(rel, ["dir", null]); continue; }
+      if (kind === "emptydir") { files.set(rel, { sha: "dir", st: null, raw }); continue; }
       const st = await this.files.stat(raw);
-      if (!st || st.type !== "file") { rep.skipped.push(`${rel}: not a regular file`); continue; }
-      try { out.set(rel, [await this.shaOf(rel, st), st]); } catch (e) { rep.skipped.push(`${rel}: ${e}`); }
+      if (!st || st.type !== "file") { rep.skipped.push(`${rel}: not a regular file`); unreadable.add(rel); continue; }
+      try { files.set(rel, { sha: await this.shaOf(rel, raw, st), st, raw }); } catch (e) { rep.skipped.push(`${rel}: ${e}`); unreadable.add(rel); }
     }
-    return out;
+    return { files, unreadable };
   }
 
   /** Local changes not uploaded yet (no content read beyond hashing). */
   async pendingChanges(rep = newReport()): Promise<Change[]> {
     const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
-    const disk = await this.scan(rep);
+    const { files, unreadable } = await this.scan(rep);
     const out: Change[] = [];
-    for (const [p, [sha]] of disk) {
+    for (const [p, { sha }] of files) {
       if (synced[p] !== sha) out.push({ op: sha === "dir" ? "mkdir" : "put", path: p });
     }
     for (const [p, sha] of Object.entries(synced)) {
-      if (!disk.has(p)) out.push({ op: sha === "dir" ? "rmdir" : "delete", path: p });
+      if (!files.has(p) && !unreadable.has(p)) out.push({ op: sha === "dir" ? "rmdir" : "delete", path: p });
     }
     return out.sort((a, b) => (a.path < b.path ? -1 : 1));
   }
 
   // ------------------------------------------------------------------- push
   /** Upload a big file as sealed chunks; returns its blob for the record. */
-  private async uploadChunks(rel: string, size: number, chunkSize: number): Promise<{ sha: string; blob: object }> {
+  private async uploadChunks(rel: string, raw: string, size: number, chunkSize: number): Promise<{ sha: string; blob: object }> {
     if (size >= BIG_FILE) this.notify(`uploading ${rel} (${humanSize(size)}); big files take a while`);
     const fileId = hexOf(globalThis.crypto.getRandomValues(new Uint8Array(8)));
     const count = Math.max(1, Math.ceil(size / chunkSize));
     const h = nobleSha256.create();
     const ids: number[] = [];
     let total = 0;
-    for await (const part of this.files.readChunks(rel, chunkSize)) {
+    for await (const part of this.files.readChunks(raw, chunkSize)) {
       if (ids.length >= count) break;
       h.update(part);
       total += part.length;
@@ -310,38 +317,47 @@ export class Vault {
 
   /** Upload every local change: as many records as needed (500 entries / 4 MiB each). */
   async push(rep: Report, chunkSize = DEFAULT_CHUNK): Promise<void> {
-    const uploaded = new Map<string, object>(); // sha -> blob of big files sent during this push
-    for (;;) {
-      const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
-      const known = new Set(Object.values(JSON.parse(this.engine.tree()) as { [p: string]: { sha: string } }).map((n) => n.sha));
-      const disk: { [p: string]: object } = {};
-      for (const [rel, [sha, st]] of await this.scan(rep)) {
-        if (sha === "dir") { disk[rel] = { sha, size: 0, mtime: 0, dir: true }; continue; }
-        const base = { sha, size: st!.size, mtime: st!.mtime / 1000 };
-        if (synced[rel] === sha) { disk[rel] = { ...base, keep: true }; continue; }
-        try {
-          if (st!.size <= INLINE_MAX) {
-            const data = await this.files.read(rel);
-            if (hexOf(nobleSha256(data)) !== sha) { rep.skipped.push(`${rel}: changed while reading; run \`tgsync push\` again`); continue; }
-            let text: string | null = null;
-            if (isTextPath(rel)) { try { text = new TextDecoder("utf-8", { fatal: true }).decode(data); } catch { /* not UTF-8: plain file */ } }
-            disk[rel] = text !== null ? { ...base, text } : { ...base, bytes: b64(data) };
-          } else if (known.has(sha)) {
-            disk[rel] = { ...base, bytes: "" }; // the group has this content: the core re-uses its blob
-          } else {
-            let blob = uploaded.get(sha);
-            if (!blob) {
-              const up = await this.uploadChunks(rel, st!.size, chunkSize);
-              if (up.sha !== sha) { rep.skipped.push(`${rel}: changed while uploading; run \`tgsync push\` again`); continue; }
-              uploaded.set(sha, blob = up.blob);
-            }
-            disk[rel] = { ...base, blob };
+    const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
+    // Content the group already has as a plain file: a copy or rename re-uses its blob (notes do not).
+    const tree = JSON.parse(this.engine.tree()) as { [p: string]: { sha: string; doc: string | null } };
+    const known = new Set(Object.values(tree).filter((n) => !n.doc && n.sha !== "dir").map((n) => n.sha));
+    const { files, unreadable } = await this.scan(rep);
+    const disk: { [p: string]: object } = {};
+    // Present but unreadable right now: send nothing for it, and certainly not a delete.
+    for (const rel of unreadable) if (synced[rel]) disk[rel] = { sha: synced[rel], size: 0, mtime: 0, keep: true };
+    const keepAsIs = (rel: string, why: string) => {
+      rep.skipped.push(`${rel}: ${why}`);
+      if (synced[rel]) disk[rel] = { sha: synced[rel], size: 0, mtime: 0, keep: true };
+    };
+    for (const [rel, { sha, st, raw }] of files) {
+      if (sha === "dir") { disk[rel] = { sha, size: 0, mtime: 0, dir: true }; continue; }
+      const base = { sha, size: st!.size, mtime: st!.mtime / 1000 };
+      if (synced[rel] === sha) { disk[rel] = { ...base, keep: true }; continue; }
+      try {
+        if (st!.size <= INLINE_MAX) {
+          const data = await this.files.read(raw);
+          if (hexOf(nobleSha256(data)) !== sha) { keepAsIs(rel, "changed while reading; run `tgsync push` again"); continue; }
+          let text: string | null = null;
+          if (isTextPath(rel)) {
+            // ignoreBOM: keep a byte-order mark, so the text hashes to the file's sha everywhere.
+            try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data); } catch { /* not UTF-8: plain file */ }
           }
-        } catch (e) {
-          rep.skipped.push(`${rel}: ${(e as Error).message}`);
+          disk[rel] = text !== null ? { ...base, text } : { ...base, bytes: b64(data) };
+        } else if (known.has(sha)) {
+          disk[rel] = { ...base, bytes: "" }; // the group has this content: the core re-uses its blob
+        } else {
+          const up = await this.uploadChunks(rel, raw, st!.size, chunkSize);
+          if (up.sha !== sha) { keepAsIs(rel, "changed while uploading; run `tgsync push` again"); continue; }
+          disk[rel] = { ...base, blob: up.blob };
         }
+      } catch (e) {
+        keepAsIs(rel, (e as Error).message);
       }
-      const plan = this.engine.planPush(JSON.stringify(disk), seed());
+    }
+    // One scan, as many records as needed: the core marks each record's files synced once posted.
+    const listing = JSON.stringify(disk);
+    for (;;) {
+      const plan = this.engine.planPush(listing, seed());
       if (plan === null) break;
       const p = JSON.parse(plan as string);
       const body = this.engine.sealRecord(Date.now() / 1000, seed());
@@ -408,43 +424,57 @@ export class Vault {
 
   /** Write the tree into the folder, never overwriting local edits that are not uploaded yet. */
   async materialize(rep: Report): Promise<void> {
-    const disk = await this.scan(rep);
+    const { files, unreadable } = await this.scan(rep);
     const shas: { [p: string]: string } = {};
-    for (const [p, [sha]] of disk) shas[p] = sha;
+    for (const [p, { sha }] of files) shas[p] = sha;
     const before: { [p: string]: string } = JSON.parse(this.engine.synced());
+    // Unreadable files count as unchanged for planning; any op on them is dropped below.
+    for (const p of unreadable) if (before[p]) shas[p] = before[p];
     const tree: { [p: string]: { sha: string } } = JSON.parse(this.engine.tree());
     const plan = JSON.parse(this.engine.planMaterialize(JSON.stringify(shas)));
     const synced: { [p: string]: string } = plan.synced;
+    const onDisk = (p: string) => files.get(p)?.raw ?? p; // the file's own name (Unicode form) if it exists
+    const undo = (p: string) => { if (before[p] === undefined) delete synced[p]; else synced[p] = before[p]; };
     for (const op of plan.ops) {
+      if (unreadable.has(op.path)) { // never write over (or delete) a file we could not read
+        rep.skipped.push(`${op.path}: could not read your copy; left alone`);
+        undo(op.path);
+        continue;
+      }
       try {
         if (op.op === "write") {
-          await this.writeFile(op.path, op.sha, op.mtime, op.text, op.blob);
-          const st = await this.files.stat(op.path);
+          await this.writeFile(onDisk(op.path), op.sha, op.mtime, op.text, op.blob);
+          const st = await this.files.stat(onDisk(op.path));
           if (st) this.state.d.stat[op.path] = [op.sha, st.size, st.mtime, Date.now()];
           rep.written.push(op.path);
         } else if (op.op === "delete") {
-          await this.files.remove(op.path);
+          if (await this.files.stat(onDisk(op.path))) await this.files.remove(onDisk(op.path)); // already gone: fine
           delete this.state.d.stat[op.path];
           rep.deleted.push(op.path);
-          await this.pruneEmpty(parentOf(op.path), tree);
+          await this.pruneEmpty(parentOf(onDisk(op.path)), tree);
         } else if (op.op === "mkdir") {
           await this.files.mkdir(op.path);
           rep.written.push(op.path + "/");
         } else if (op.op === "rmdir") {
-          if (await this.files.rmdirIfEmpty(op.path)) {
+          if (await this.files.rmdirIfEmpty(onDisk(op.path))) {
             rep.deleted.push(op.path + "/");
-            await this.pruneEmpty(parentOf(op.path), tree);
+            await this.pruneEmpty(parentOf(onDisk(op.path)), tree);
           }
         }
       } catch (e) {
-        rep.problems.push(`${op.path}: could not ${op.op === "write" ? "write" : op.op}: ${(e as Error).message}`);
-        if (before[op.path] === undefined) delete synced[op.path]; else synced[op.path] = before[op.path];
+        rep.problems.push(`${op.path}: could not ${op.op}: ${(e as Error).message}`);
+        undo(op.path);
       }
     }
     for (const [p, n] of Object.entries(tree)) {
       const mine = shas[p];
       if (n.sha !== "dir" && mine !== undefined && mine !== n.sha && mine !== before[p] && before[p] !== n.sha) {
         rep.skipped.push(`${p}: you changed it and so did someone else; run \`tgsync push\`, then \`tgsync pull\` to get both versions`);
+      }
+    }
+    for (const [p, last] of Object.entries(before)) {
+      if (!tree[p] && last !== "dir" && shas[p] !== undefined && shas[p] !== last) {
+        rep.skipped.push(`${p}: deleted by someone else, but you changed it; kept (\`tgsync push\` shares it again)`);
       }
     }
     this.engine.materialized(JSON.stringify(synced));
@@ -571,6 +601,9 @@ export class Vault {
         return;
       }
       const entry = JSON.parse(this.engine.openRecord(await this.transport.fetch(row[0]))).entries[row[1]];
+      if (entry.op === "text") { // a note edit carries Loro operations, not the file: needs its saved version
+        throw new VaultError(`${rev}: that version of the note is not available here (it was merged before this folder kept versions)`);
+      }
       await this.writeFile(path, entry.sha, Date.now() / 1000, null, { payload_msg: row[0], ...entry.blob });
     });
   }
@@ -583,9 +616,11 @@ export class Vault {
   private async postDescriptor(make: () => Uint8Array): Promise<void> {
     await this.pull();
     this.checkMember();
-    await this.transport.send(KIND.descriptor, make());
+    const id = await this.transport.send(KIND.descriptor, make());
     const rep = await this.pull();
-    if (rep.problems.length) throw new VaultError(`the change was not accepted: ${rep.problems.join("; ")}`);
+    // Only our own message matters here; others' problems in the same pull are not about this change.
+    const ours = rep.problems.filter((p) => p.startsWith(`msg ${id}:`));
+    if (ours.length) throw new VaultError(`the change was not accepted: ${ours.join("; ")}`);
   }
 
   addMember(recipient: string, name = "", signer: string | null = null): Promise<void> {
