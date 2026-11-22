@@ -9,6 +9,7 @@ pub mod invites;
 pub mod oplog;
 pub mod paths;
 pub mod replica;
+pub mod sync;
 pub mod text;
 pub mod tree;
 

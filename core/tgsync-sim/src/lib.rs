@@ -10,11 +10,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use age::secrecy::ExposeSecret;
-use serde_json::json;
 use tgsync_core::crypto::KeyRing;
 use tgsync_core::descriptor::{self, Identity, Member};
 use tgsync_core::oplog::{encode_record, Record};
 use tgsync_core::replica::{Replica, Report, Resend, KIND_DESCRIPTOR, KIND_RECORD};
+use tgsync_core::sync::{plan_materialize, plan_push, Content, DiskOp, LocalFile};
 use tgsync_core::text::{is_text_path, sha_hex};
 use tgsync_core::tree::DIR;
 
@@ -38,10 +38,14 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
     text.split(' ').filter(|w| !w.is_empty())
 }
 
-/// Append `bytes` to the record payload; returns the entry's `inline` field.
-fn inline(bytes: &[u8], payload: &mut Vec<u8>) -> serde_json::Value {
-    payload.extend_from_slice(bytes);
-    json!([payload.len() - bytes.len(), bytes.len()])
+/// How the simulated folder's content looks to the core: notes are text, other files stand in
+/// as empty small files whose sha is their content id.
+fn local_file(path: &str, content: &str) -> LocalFile {
+    if is_text_path(path) {
+        LocalFile { sha: sha_hex(content), size: content.len() as u64, mtime: 0.0, content: Content::Text(content.to_owned()) }
+    } else {
+        LocalFile { sha: content.to_owned(), size: 1, mtime: 0.0, content: Content::Small(vec![]) }
+    }
 }
 
 /// splitmix64: tiny, fast, good enough to drive a simulation.
@@ -80,7 +84,7 @@ struct Client {
     replica: Replica,
     /// path -> content: the text of a note, or a content id that stands in for other file bytes.
     disk: BTreeMap<String, String>,
-    /// path -> content at the last sync (what `base` is taken from).
+    /// path -> sha at the last sync (what `base` is taken from).
     synced: BTreeMap<String, String>,
     /// Last seq we posted, saved before posting (write-ahead), so a crash never reuses a seq.
     sent_seq: u64,
@@ -258,69 +262,42 @@ impl Sim {
         self.clients[c].disk.remove(&path);
     }
 
-    /// Upload local changes as one record. Faults: Telegram refusing the upload (flood wait); crash after posting but before marking the files
+    /// Upload local changes as one record (planned by `tgsync_core::sync::plan_push`). Faults:
+    /// Telegram refusing the upload (flood wait); crash after posting but before marking the files
     /// synced; Telegram delivering the same upload twice.
     fn push(&mut self, c: usize) {
-        let cl = &self.clients[c];
+        let Sim { clients, rng, .. } = self;
+        let cl = &clients[c];
         if cl.replica.removed || !cl.replica.has_keys() {
             return;
         }
-        let changed: Vec<(String, Option<String>, Option<String>)> = cl
-            .disk
-            .keys()
-            .chain(cl.synced.keys())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|p| cl.disk.get(*p) != cl.synced.get(*p))
-            .map(|p| (p.clone(), cl.disk.get(p).cloned(), cl.synced.get(p).cloned()))
-            .collect();
-        if changed.is_empty() && cl.resend.is_empty() {
+        let disk: BTreeMap<String, LocalFile> = cl.disk.iter().map(|(p, content)| (p.clone(), local_file(p, content))).collect();
+        let seq = cl.sent_seq.max(cl.replica.next_seq() - 1) + 1;
+        let plan = plan_push(&cl.replica, &disk, &cl.synced, &cl.resend, seq, &mut || hex8(rng.bytes::<8>())).unwrap();
+        if plan.is_empty() {
             return;
         }
         if self.faults && self.rng.chance(5) {
             self.trace.push(format!("c{c} push refused (flood wait), nothing sent"));
             return;
         }
-        let cl = &self.clients[c];
-        let seq = cl.sent_seq.max(cl.replica.next_seq() - 1) + 1;
-        let me_id = cl.replica.me.id();
-        let mut entries = vec![];
-        let mut payload: Vec<u8> = vec![];
-        let resend = std::mem::take(&mut self.clients[c].resend);
-        let resent = resend.len();
-        for r in &resend {
-            let mut e = r.entry.clone();
-            if !r.bytes.is_empty() {
-                e["blob"]["inline"] = inline(&r.bytes, &mut payload);
-            }
-            entries.push(e);
-        }
-        let mut done = vec![];
-        let mut text_docs = vec![];
-        for (p, now, then) in changed {
-            let base = base_of(&p, then.as_ref());
-            match &now {
-                Some(text) if is_text_path(&p) => {
-                    let peer = u64::from_be_bytes(sha2_8(&format!("{me_id}:{seq}:{}", entries.len())));
-                    let new_doc = hex8(self.rng.bytes::<8>());
-                    let edit = self.clients[c].replica.prepare_text(&p, base.as_deref(), text, &new_doc, peer).unwrap();
-                    text_docs.push((edit.doc.clone(), edit.update.clone()));
-                    entries.push(json!({"op": "text", "path": p, "doc": edit.doc, "sha": sha_hex(text), "size": text.len(),
-                        "mtime": self.clock, "base": base, "blob": {"inline": inline(&edit.update, &mut payload)}}));
-                }
-                Some(id) => entries.push(json!({"op": "put", "path": p, "sha": id, "size": 1, "mtime": self.clock,
-                    "base": base, "blob": {"file_id": "0000000000000000", "chunks": null, "inline": [0, 0]}})),
-                None => entries.push(json!({"op": "delete", "path": p, "base": base})),
-            }
-            done.push((p, now));
-        }
+        let resent = std::mem::take(&mut self.clients[c].resend).len();
         self.clients[c].sent_seq = seq;
         let me = &self.clients[c].replica.me;
-        let rec = Record { author: me.id(), seq, ts: self.clock, entries, payload, signer: None };
+        let text_docs: Vec<(String, Vec<u8>)> = plan
+            .entries
+            .iter()
+            .filter(|e| e["op"] == "text")
+            .map(|e| {
+                let (off, len) = (e["blob"]["inline"][0].as_u64().unwrap() as usize, e["blob"]["inline"][1].as_u64().unwrap() as usize);
+                (e["doc"].as_str().unwrap().to_owned(), plan.payload[off..off + len].to_vec())
+            })
+            .collect();
+        let rec = Record { author: me.id(), seq, ts: self.clock, entries: plan.entries, payload: plan.payload, signer: None };
         let body = encode_record(&self.clients[c].replica.keys, &rec, &self.rng.bytes(), me.signing.as_ref()).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
-        self.trace.push(format!("c{c} push seq {seq} {} entries, {resent} sent again{}{}", done.len(),
+        self.trace.push(format!("c{c} push seq {seq} {} entries, {resent} sent again{}{}", plan.done.len(),
             if twice { " (delivered twice)" } else { "" }, if crash { " (crash before marking synced)" } else { "" }));
         self.post(KIND_RECORD, body.clone());
         if twice {
@@ -333,8 +310,9 @@ impl Sim {
         for (doc, update) in text_docs {
             self.text_promised.push((c, msg_id, doc, update));
         }
-        for (p, sha) in done {
-            self.promised.push((c, msg_id, p.clone(), sha.clone()));
+        for (p, sha) in plan.done {
+            let content = self.clients[c].disk.get(&p).cloned();
+            self.promised.push((c, msg_id, p.clone(), content));
             match sha {
                 Some(s) => self.clients[c].synced.insert(p, s),
                 None => self.clients[c].synced.remove(&p),
@@ -368,29 +346,23 @@ impl Sim {
         rep
     }
 
-    /// PROTOCOL.md section 9 "Materialize": write what changed, never clobber unpushed local edits.
+    /// Write the tree to disk as `tgsync_core::sync::plan_materialize` says.
     fn materialize(&mut self, c: usize) {
         let cl = &mut self.clients[c];
         if cl.replica.has_keys() {
             cl.replica.active = true;
         }
-        let tree = contents(&cl.replica);
-        for (p, sha) in &tree {
-            let local = cl.disk.get(p);
-            if local == Some(sha) {
-                cl.synced.insert(p.clone(), sha.clone());
-            } else if local == cl.synced.get(p) {
-                cl.disk.insert(p.clone(), sha.clone());
-                cl.synced.insert(p.clone(), sha.clone());
-            }
+        let disk: BTreeMap<String, String> = cl.disk.iter().map(|(p, content)| (p.clone(), base_of(p, Some(content)).unwrap())).collect();
+        let (ops, synced) = plan_materialize(&cl.replica, &disk, &cl.synced);
+        for op in ops {
+            match op {
+                DiskOp::Write { path, text: Some(t), .. } => cl.disk.insert(path, t),
+                DiskOp::Write { path, sha, .. } => cl.disk.insert(path, sha),
+                DiskOp::Delete { path } => cl.disk.remove(&path),
+                DiskOp::Mkdir { .. } | DiskOp::Rmdir { .. } => None,
+            };
         }
-        let gone: Vec<String> = cl.synced.keys().filter(|p| !tree.contains_key(*p)).cloned().collect();
-        for p in gone {
-            if cl.disk.get(&p) == cl.synced.get(&p) {
-                cl.disk.remove(&p);
-            }
-            cl.synced.remove(&p);
-        }
+        cl.synced = synced;
     }
 
     /// Everyone pushes and pulls until nothing moves, then check the invariants.
@@ -553,15 +525,6 @@ mod tests {
         };
         assert_eq!(trace(7), trace(7));
     }
-}
-
-fn sha2_8(s: &str) -> [u8; 8] {
-    let h = sha_hex(s);
-    let mut out = [0u8; 8];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap();
-    }
-    out
 }
 
 fn hex8(b: [u8; 8]) -> String {
