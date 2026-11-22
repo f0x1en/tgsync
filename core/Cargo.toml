@@ -5,3 +5,7 @@ members = ["tgsync-core", "tgsync-sim", "tgsync-wasm"]
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-or-later"
+
+# Crypto in debug builds is very slow; optimize dependencies (our own code stays debug).
+[profile.dev.package."*"]
+opt-level = 3
