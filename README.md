@@ -31,6 +31,15 @@ both versions. A small CLI and a desktop Obsidian plugin; your editor and file m
 * **The core is sans-IO**: no network, files, clock or randomness inside. That makes it testable
   as a pure function of the log, and lets one engine run in Node, in Obsidian, and in the simulator.
 
+**See it** (offline, a folder plays the group): `scripts/demo.sh` runs alice and bob editing one
+note at the same time:
+```
+# Plan                      alice: "buy milk" -> "buy oat milk"
+- buy oat milk              bob:   adds "book flights"
+- call mom                  after push/pull: one note, the same for both, no conflict copy
+- book flights
+```
+
 ## How it is tested
 
 * **Deterministic simulation** (`make sim`): 2-4 clients share one fake group; a seed picks every
