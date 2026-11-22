@@ -2073,7 +2073,9 @@ name = "tgsync-sim"
 version = "0.1.0"
 dependencies = [
  "age",
+ "base64 0.22.1",
  "bech32",
+ "hex",
  "serde_json",
  "tgsync-core",
 ]

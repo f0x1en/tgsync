@@ -72,6 +72,7 @@ cd core && cargo run --release -p tgsync-sim -- --start 1234 --seeds 1   # repla
 | `sync.rs` | `plan_push` / `plan_materialize`: what to upload, what to write |
 | `vault.rs` | Per-folder state between runs (replica, synced map, re-send queue, last seq) |
 | `tgsync-sim` | N clients, one fake group, random edits and faults; checks convergence and that nothing is lost |
+| `spec/vectors_v2.json` | A fixed v2 log (admins, signed records, merged notes, rejected messages) and the expected state; `tests/vectors_v2.rs` replays it |
 | `tgsync-wasm` | JS API (`Engine`, `createVault`, invites); boundary is JSON + byte arrays; CI builds it for wasm32 |
 
 **Simulator faults:** Telegram shows the newest messages late, refuses uploads (flood wait), delivers an

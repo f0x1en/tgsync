@@ -4,7 +4,8 @@ What two tgsync programs must agree on to share a vault. Sections 1-10 are versi
 CLI in `src/tgsync/` writes it). Sections 11-13 add version 2: admins, signed records, notes merged
 with Loro; the Rust core (`core/`) is its reference and also reads and writes version 1 vaults
 (section 14). `spec/vectors.json` holds fixed examples; the Python, TypeScript and Rust code all
-test against them.
+test against them. `spec/vectors_v2.json` is a fixed v2 log with the state each
+person must reach from it (regenerate with `cargo run -p tgsync-sim --bin make_vectors_v2`).
 
 Local state (cursor, synced hashes, history) is private to each implementation and not part of
 this document. Only the messages in the group are shared.
