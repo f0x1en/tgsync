@@ -182,7 +182,15 @@ fn big_pushes_split_into_records_of_at_most_500_entries() {
 fn a_file_replaced_by_a_folder_is_deleted_first() {
     let r = me();
     let mut disk = BTreeMap::new();
-    disk.insert("a".to_string(), LocalFile { sha: "dir".into(), size: 0, mtime: 0.0, content: Content::Dir });
+    disk.insert(
+        "a".to_string(),
+        LocalFile {
+            sha: "dir".into(),
+            size: 0,
+            mtime: 0.0,
+            content: Content::Dir,
+        },
+    );
     let synced: BTreeMap<String, String> = [("a".to_string(), "aa".to_string())].into();
     let p = plan_push(&r, &disk, &synced, &[], 1, &mut no_doc).unwrap();
     let ops: Vec<&str> = p.entries.iter().map(|e| e["op"].as_str().unwrap()).collect();

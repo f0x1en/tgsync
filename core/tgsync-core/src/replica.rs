@@ -157,10 +157,17 @@ impl Replica {
         }
         let text = self.texts.import(doc, inline_bytes(e, payload)?).ok()?;
         let mtime = e.get("mtime").and_then(Value::as_f64).unwrap_or(ts);
-        Some(
-            self.tree
-                .apply_text(&path, doc, &sha_hex(&text), text.len() as i64, mtime, e.get("base").and_then(Value::as_str), author, ts, id),
-        )
+        Some(self.tree.apply_text(
+            &path,
+            doc,
+            &sha_hex(&text),
+            text.len() as i64,
+            mtime,
+            e.get("base").and_then(Value::as_str),
+            author,
+            ts,
+            id,
+        ))
     }
 
     /// Text of the note at `path`, if it is a merged text note.

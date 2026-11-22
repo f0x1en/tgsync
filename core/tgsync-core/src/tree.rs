@@ -180,7 +180,18 @@ impl Tree {
     /// Same doc at the path, or no node: the note now has the merged text (an edit beats a delete).
     /// Another file at the path, or a case clash: the note lands at a conflict-copy path.
     /// `base`: the sha the writer last synced; a plain (non-note) file with that sha is taken over.
-    pub fn apply_text(&mut self, path: &str, doc: &str, sha: &str, size: i64, mtime: f64, base: Option<&str>, author: &str, ts: f64, msg_id: i64) -> Applied {
+    pub fn apply_text(
+        &mut self,
+        path: &str,
+        doc: &str,
+        sha: &str,
+        size: i64,
+        mtime: f64,
+        base: Option<&str>,
+        author: &str,
+        ts: f64,
+        msg_id: i64,
+    ) -> Applied {
         let node = Node {
             path: path.to_owned(),
             sha: sha.to_owned(),

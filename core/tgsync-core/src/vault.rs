@@ -67,7 +67,11 @@ impl Vault {
         // v1 vaults (no admins): unsigned v1 records, readable by older clients.
         // v2 readers reject unsigned records, so never write one there.
         let signing = if self.replica.admins.is_some() {
-            Some(me.signing.as_ref().ok_or_else(|| Error::Crypto("no signing key: this vault needs signed records".into()))?)
+            Some(
+                me.signing
+                    .as_ref()
+                    .ok_or_else(|| Error::Crypto("no signing key: this vault needs signed records".into()))?,
+            )
         } else {
             None
         };

@@ -562,7 +562,8 @@ fn a_replayed_old_key_record_is_not_sent_again() {
 #[test]
 fn a_bad_note_update_leaves_no_empty_doc() {
     let (mut g, ring, a, _, mut ra, _) = pair();
-    let e = json!({"op": "text", "path": "n.md", "doc": "dd", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, 3]}});
+    let e =
+        json!({"op": "text", "path": "n.md", "doc": "dd", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, 3]}});
     g.record_with(&ring, &a, 1, 1.0, vec![e], b"bad".to_vec());
     g.pull(&mut ra);
     assert_eq!(ra.texts.doc_ids().count(), 0);

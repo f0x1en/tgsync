@@ -125,7 +125,11 @@ pub fn plan_push(
         let is_dir = matches!(now.map(|f| &f.content), Some(Content::Dir));
         if let (Some(_), Some(_)) = (now, then) {
             if was_dir != is_dir {
-                push.entries.push(if was_dir { json!({"op": "rmdir", "path": p}) } else { json!({"op": "delete", "path": p, "base": base}) });
+                push.entries.push(if was_dir {
+                    json!({"op": "rmdir", "path": p})
+                } else {
+                    json!({"op": "delete", "path": p, "base": base})
+                });
                 base = None;
             }
         }

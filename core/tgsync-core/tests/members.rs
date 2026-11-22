@@ -114,7 +114,10 @@ fn vault_keeps_resends_until_posted_and_never_writes_unsigned_records() {
     g.post(d);
     let mut v = Vault::new(a.clone(), None);
     g.pull(&mut v.replica);
-    v.resend.push(Resend { entry: serde_json::json!({"op": "mkdir", "path": "x"}), bytes: vec![] });
+    v.resend.push(Resend {
+        entry: serde_json::json!({"op": "mkdir", "path": "x"}),
+        bytes: vec![],
+    });
     let (seq, plan) = v.plan_push(&Default::default(), &mut || "0000000000000000".into()).unwrap();
     assert_eq!(plan.resent, 1);
     v.seal_record(seq, &plan, 1.0, &[1; 12]).unwrap();
@@ -123,7 +126,10 @@ fn vault_keeps_resends_until_posted_and_never_writes_unsigned_records() {
     assert!(v.resend.is_empty());
     // An identity without a signing key cannot write in this (v2) vault.
     v.replica.me.signing = None;
-    v.resend.push(Resend { entry: serde_json::json!({"op": "mkdir", "path": "y"}), bytes: vec![] });
+    v.resend.push(Resend {
+        entry: serde_json::json!({"op": "mkdir", "path": "y"}),
+        bytes: vec![],
+    });
     let (seq, plan) = v.plan_push(&Default::default(), &mut || "0000000000000000".into()).unwrap();
     assert!(v.seal_record(seq, &plan, 1.0, &[1; 12]).is_err());
 }

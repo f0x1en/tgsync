@@ -51,7 +51,11 @@ pub fn create(
 
 /// The one member `target` names (key, member id or name). Names are not unique: refuse if several match.
 fn one_match<'a>(r: &'a Replica, target: &str) -> Result<&'a Member> {
-    let hits: Vec<&Member> = r.members.iter().filter(|m| target == m.recipient || target == m.id() || target == m.name).collect();
+    let hits: Vec<&Member> = r
+        .members
+        .iter()
+        .filter(|m| target == m.recipient || target == m.id() || target == m.name)
+        .collect();
     match hits.len() {
         0 => Err(err(&format!("no such member: {target}"))),
         1 => Ok(hits[0]),
