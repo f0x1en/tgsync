@@ -169,7 +169,7 @@ def main() -> int:
         if MERGES:
             merged = files(A).get("shared.md", "")
             check("owner edit" in merged and "friend edit" in merged, "the note holds both edits (merged)")
-            check(not [p for p in files(A) if p.startswith("shared (conflict")], "the note made no conflict copy")
+            check(not [p for p in files(A) if p.startswith("shared (conflict") and p.endswith(".md")], "the note made no conflict copy")
             check(len([p for p in files(A) if p.startswith("shared (conflict") and p.endswith(".bin")]) == 1,
                   "the binary file kept both versions (one conflict copy)")
         else:
