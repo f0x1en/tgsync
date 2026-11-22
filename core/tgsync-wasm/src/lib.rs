@@ -138,6 +138,11 @@ impl Engine {
         let t: BTreeMap<&String, Value> = self.vault.replica.tree.nodes.iter().map(|(p, n)| (p, n.to_json())).collect();
         serde_json::to_string(&t).unwrap()
     }
+    /// JSON `{path: sha}` of what was last synced.
+    pub fn synced(&self) -> String {
+        serde_json::to_string(&self.vault.synced).unwrap()
+    }
+
     /// Text of a merged note.
     pub fn text(&self, path: &str) -> Option<String> {
         self.vault.replica.text(path)
@@ -177,7 +182,8 @@ impl Engine {
     // ------------------------------------------------------------------ push
 
     /// Plan the next record from the folder listing `disk_json`:
-    /// `{path: {"sha", "size", "mtime", "text"?: string, "bytes"?: b64, "blob"?: object, "dir"?: true}}`.
+    /// `{path: {"sha", "size", "mtime", "text"?: string, "bytes"?: b64, "blob"?: object, "dir"?: true, "keep"?: true}}`.
+    /// `keep`: unchanged since the last sync (same sha as `synced()`), so no content is needed.
     /// Returns JSON `{"seq", "entries", "done"}` or `null` if there is nothing to send.
     #[wasm_bindgen(js_name = planPush)]
     pub fn plan_push(&mut self, disk_json: &str, seed: &[u8]) -> Result<JsValue, JsError> {
@@ -192,6 +198,12 @@ impl Engine {
                 Content::Small(B64.decode(b).map_err(js)?)
             } else if let Some(blob) = f.get("blob") {
                 Content::Big(blob.clone())
+            } else if f.get("keep").and_then(Value::as_bool) == Some(true) {
+                let sha = f.get("sha").and_then(Value::as_str).unwrap_or("");
+                if self.vault.synced.get(&p).map(String::as_str) != Some(sha) {
+                    return Err(js(format!("{p}: `keep` but it changed since the last sync")));
+                }
+                Content::Small(vec![])
             } else {
                 return Err(js(format!("{p}: needs text, bytes, blob or dir")));
             };
