@@ -26,7 +26,7 @@ fn main() {
         }
     }
     println!(
-        "{seeds} seeds x {steps} steps ok in {:.1}s: {msgs} messages, {conflicts} conflict copies, {problems} skipped messages, {stale} records sealed with an old key",
+        "{seeds} seeds x {steps} steps ok in {:.1}s: {msgs} messages, {conflicts} conflict copies, {problems} skipped messages, {stale} records rejected for an old key (re-sent)",
         t.elapsed().as_secs_f64()
     );
 }

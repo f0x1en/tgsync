@@ -53,9 +53,9 @@ impl Group {
     }
 
     fn record(&mut self, ring: &KeyRing, author: &Identity, seq: u64, ts: f64, entries: Vec<Value>) -> i64 {
-        let rec = Record { author: author.id(), seq, ts, entries, payload: vec![] };
+        let rec = Record { author: author.id(), seq, ts, entries, payload: vec![], signer: None };
         let nonce = self.nonce();
-        let body = encode_record(ring, &rec, &nonce).unwrap();
+        let body = encode_record(ring, &rec, &nonce, author.signing.as_ref()).unwrap();
         self.post('r', body)
     }
 
@@ -316,4 +316,76 @@ fn real_removal_in_admin_vault() {
     g.pull(&mut rb);
     assert!(rb.removed);
     assert_eq!(ra.members.len(), 1);
+}
+
+// ------------------------------------------------------------------ signed records (PROTOCOL.md section 12)
+
+#[test]
+fn removed_member_cannot_write() {
+    let (mut g, mut ring, a, b, mut ra, _) = admin_pair();
+    let old = ring.clone();
+    ring.add(2, &[2u8; 32]).unwrap();
+    g.descriptor_v2(&ring, &[smember(&a, "alice")], Some(1), &[a.signer().unwrap()], &[1; 32]);
+    g.record(&old, &b, 1, 1.0, vec![put("spam.md", "x", None)]); // bob still has the old key
+    let rep = g.pull(&mut ra);
+    assert!(ra.tree.get("spam.md").is_none());
+    assert_eq!(rep.problems[0].1, "record not signed by a member");
+}
+
+#[test]
+fn stale_key_record_rejected_and_handed_back_to_its_writer() {
+    let (mut g, mut ring, a, b, _, mut rb) = admin_pair();
+    let carol = admin_person(3);
+    let three = [smember(&a, "alice"), smember(&b, "bob"), smember(&carol, "carol")];
+    g.descriptor_v2(&ring, &three, None, &[a.signer().unwrap()], &[1; 32]);
+    g.pull(&mut rb);
+    let old = ring.clone();
+    ring.add(2, &[2u8; 32]).unwrap();
+    g.descriptor_v2(&ring, &three[..2], Some(1), &[a.signer().unwrap()], &[1; 32]); // carol removed
+    // bob has not pulled the rotation and writes with the old key carol still holds.
+    g.record(&old, &b, 1, 1.0, vec![put("n.md", "s1", None)]);
+    let rep = g.pull(&mut rb);
+    assert!(rb.tree.get("n.md").is_none());
+    assert!(rep.problems[0].1.contains("already replaced"));
+    assert_eq!(rep.resend.len(), 1, "bob's own entry comes back for re-sending");
+    // Re-sent with the new key: applied.
+    g.record(&ring, &b, 2, 2.0, rep.resend.clone());
+    g.pull(&mut rb);
+    assert_eq!(rb.tree.get("n.md").unwrap().sha, "s1");
+}
+
+#[test]
+fn unsigned_record_rejected_in_admin_vault() {
+    let (mut g, ring, _, b, mut ra, _) = admin_pair();
+    let mut unsigned = b.clone();
+    unsigned.signing = None;
+    g.record(&ring, &unsigned, 1, 1.0, vec![put("n.md", "s1", None)]);
+    assert_eq!(g.pull(&mut ra).problems[0].1, "unsigned record in a vault that has admins");
+}
+
+#[test]
+fn record_signed_by_someone_else_rejected() {
+    let (mut g, ring, a, b, mut ra, _) = admin_pair();
+    let mut forger = b.clone();
+    forger.signing = a.signing; // alice's key, bob's name
+    g.record(&ring, &forger, 1, 1.0, vec![put("n.md", "s1", None)]);
+    assert_eq!(g.pull(&mut ra).problems[0].1, "record not signed by a member");
+}
+
+#[test]
+fn late_joiner_agrees_with_old_member_on_rejected_records() {
+    let (mut g, mut ring, a, b, mut ra, _) = admin_pair();
+    let old = ring.clone();
+    ring.add(2, &[2u8; 32]).unwrap();
+    g.descriptor_v2(&ring, &[smember(&a, "alice")], Some(1), &[a.signer().unwrap()], &[1; 32]); // bob removed
+    g.record(&old, &b, 1, 1.0, vec![put("late.md", "x", None)]);
+    g.record(&ring, &a, 1, 2.0, vec![put("ok.md", "y", None)]);
+    let dave = admin_person(4);
+    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&dave, "dave")], None, &[a.signer().unwrap()], &[1; 32]);
+    let mut rd = Replica::new(dave, None);
+    g.pull(&mut ra);
+    g.pull(&mut rd);
+    assert_eq!(rd.tree, ra.tree);
+    assert_eq!(rd.tree.nodes.keys().collect::<Vec<_>>(), ["ok.md"]);
+    assert_eq!(rd.history.len(), ra.history.len());
 }

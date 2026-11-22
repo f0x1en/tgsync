@@ -56,6 +56,9 @@ struct Client {
     synced: BTreeMap<String, String>,
     /// Last seq we posted, saved before posting (write-ahead), so a crash never reuses a seq.
     sent_seq: u64,
+    /// Entries of our records that readers rejected (old key): uploaded again, same content and base,
+    /// with the next push. The content comes from the old record, not from disk.
+    resend: Vec<serde_json::Value>,
 }
 
 pub struct Sim {
@@ -67,6 +70,11 @@ pub struct Sim {
     clock: f64,
     /// Off while settling: the network is healthy at the end.
     faults: bool,
+    /// (client, record msg id, path, content or None for a delete) for every change the client
+    /// marked as uploaded.
+    promised: Vec<(usize, i64, String, Option<String>)>,
+    /// (client, record msg id at that time, path) for every local edit or delete.
+    touched: Vec<(usize, i64, String)>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -86,7 +94,20 @@ fn person(rng: &mut Rng) -> Identity {
         .unwrap()
         .to_uppercase();
     let id: age::x25519::Identity = secret.parse().unwrap();
-    Identity::new(id.to_string().expose_secret(), &id.to_public().to_string())
+    let mut p = Identity::new(id.to_string().expose_secret(), &id.to_public().to_string());
+    p.signing = Some(rng.bytes());
+    p
+}
+
+fn member(p: &Identity, name: &str) -> Member {
+    Member { signer: p.signer(), ..Member::new(&p.recipient, name) }
+}
+
+/// A v2 descriptor signed by the admin c0.
+fn admin_descriptor(rng: &mut Rng, admin: &Identity, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>) -> Vec<u8> {
+    let admins = [admin.signer().unwrap()];
+    let signing = descriptor::Signing { admins: &admins, key: admin.signing.as_ref().unwrap() };
+    descriptor::build(ring, "5eed5eed5eed5eed", members, proof_epoch, 0, Some(signing), &mut || rng.bytes()).unwrap()
 }
 
 impl Sim {
@@ -96,13 +117,13 @@ impl Sim {
         ring.add(1, &rng.bytes::<32>()).unwrap();
         let people: Vec<Identity> = (0..n_clients).map(|_| person(&mut rng)).collect();
         let members: Vec<Member> =
-            people.iter().enumerate().map(|(i, p)| Member::new(&p.recipient, &format!("c{i}"))).collect();
-        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, None, 0, None, &mut || rng.bytes()).unwrap();
+            people.iter().enumerate().map(|(i, p)| member(p, &format!("c{i}"))).collect();
+        let desc = admin_descriptor(&mut rng, &people[0], &ring, &members, None);
         let clients = people
             .into_iter()
-            .map(|p| Client { replica: Replica::new(p, None), disk: BTreeMap::new(), synced: BTreeMap::new(), sent_seq: 0 })
+            .map(|p| Client { replica: Replica::new(p, None), disk: BTreeMap::new(), synced: BTreeMap::new(), sent_seq: 0, resend: vec![] })
             .collect();
-        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true }
+        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![] }
     }
 
     fn post(&mut self, kind: char, body: Vec<u8>) {
@@ -144,14 +165,15 @@ impl Sim {
             self.trace.push(format!("c0 removes c{k} (epoch {})", old + 1));
             Some(old)
         } else {
-            members.push(Member::new(&target, &format!("c{k}")));
             let me = self.clients[k].replica.me.clone();
+            members.push(member(&me, &format!("c{k}")));
             self.clients[k].replica = Replica::new(me, None);
             self.clients[k].synced.clear();
             self.trace.push(format!("c0 adds c{k} back"));
             None
         };
-        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, proof_epoch, 0, None, &mut || self.rng.bytes()).unwrap();
+        let admin = self.clients[0].replica.me.clone();
+        let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, proof_epoch);
         self.post(KIND_DESCRIPTOR, desc);
     }
 
@@ -159,11 +181,12 @@ impl Sim {
         let admin = &self.clients[0].replica;
         let (ring, mut members) = (admin.keys.clone(), admin.members.clone());
         let me = self.clients[k].replica.me.clone();
-        members.push(Member::new(&me.recipient, &format!("c{k}")));
+        members.push(member(&me, &format!("c{k}")));
         self.clients[k].replica = Replica::new(me, None);
         self.clients[k].synced.clear();
         self.trace.push(format!("c0 adds c{k} back"));
-        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, None, 0, None, &mut || self.rng.bytes()).unwrap();
+        let admin = self.clients[0].replica.me.clone();
+        let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, None);
         self.post(KIND_DESCRIPTOR, desc);
     }
 
@@ -177,6 +200,7 @@ impl Sim {
             format!("k{}", self.next_content - 1)
         };
         self.trace.push(format!("c{c} edit {path} = {content}"));
+        self.touched.push((c, self.group.len() as i64, path.clone()));
         self.clients[c].disk.insert(path, content);
     }
 
@@ -187,6 +211,7 @@ impl Sim {
         }
         let path = paths[self.rng.below(paths.len())].clone();
         self.trace.push(format!("c{c} delete {path}"));
+        self.touched.push((c, self.group.len() as i64, path.clone()));
         self.clients[c].disk.remove(&path);
     }
 
@@ -197,7 +222,7 @@ impl Sim {
         if cl.replica.removed || !cl.replica.has_keys() {
             return;
         }
-        let mut entries = vec![];
+        let mut entries = cl.resend.clone();
         let mut done = vec![];
         let paths: BTreeSet<&String> = cl.disk.keys().chain(cl.synced.keys()).collect();
         for p in paths {
@@ -219,13 +244,16 @@ impl Sim {
             self.trace.push(format!("c{c} push refused (flood wait), nothing sent"));
             return;
         }
+        let resent = std::mem::take(&mut self.clients[c].resend).len();
+        let cl = &self.clients[c];
         let seq = cl.sent_seq.max(cl.replica.next_seq() - 1) + 1;
         self.clients[c].sent_seq = seq;
-        let rec = Record { author: self.clients[c].replica.me.id(), seq, ts: self.clock, entries, payload: vec![] };
-        let body = encode_record(&self.clients[c].replica.keys, &rec, &self.rng.bytes()).unwrap();
+        let me = &self.clients[c].replica.me;
+        let rec = Record { author: me.id(), seq, ts: self.clock, entries, payload: vec![], signer: None };
+        let body = encode_record(&self.clients[c].replica.keys, &rec, &self.rng.bytes(), me.signing.as_ref()).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
-        self.trace.push(format!("c{c} push seq {seq} {} entries{}{}", done.len(),
+        self.trace.push(format!("c{c} push seq {seq} {} entries, {resent} sent again{}{}", done.len(),
             if twice { " (delivered twice)" } else { "" }, if crash { " (crash before marking synced)" } else { "" }));
         self.post(KIND_RECORD, body.clone());
         if twice {
@@ -234,7 +262,9 @@ impl Sim {
         if crash {
             return;
         }
+        let msg_id = self.group.len() as i64 - i64::from(twice);
         for (p, sha) in done {
+            self.promised.push((c, msg_id, p.clone(), sha.clone()));
             match sha {
                 Some(s) => self.clients[c].synced.insert(p, s),
                 None => self.clients[c].synced.remove(&p),
@@ -261,7 +291,9 @@ impl Sim {
                 break;
             }
         }
-        self.trace.push(format!("c{c} pull to msg {} ({} applied)", r.cursor, rep.applied.len()));
+        self.trace.push(format!("c{c} pull to msg {} ({} applied, {} to send again)", r.cursor, rep.applied.len(), rep.resend.len()));
+        // Our records that readers skip (sealed with a replaced key): queue them to upload again.
+        self.clients[c].resend.extend(rep.resend.iter().cloned());
         self.materialize(c);
         rep
     }
@@ -356,13 +388,10 @@ impl Sim {
         let mut bases: BTreeSet<(String, String)> = BTreeSet::new();
         for (id, kind, body) in &self.group {
             let before = r.authors.clone();
-            if *kind == KIND_RECORD && r.has_keys() {
-                if let Ok(e) = tgsync_core::crypto::blob_epoch(body) {
-                    stats.stale_epoch += usize::from(e < r.keys.current_epoch().unwrap());
-                }
-            }
             r.feed(*id, *kind, body, &mut rep);
-            if *kind == KIND_RECORD && r.authors != before {
+            // Applied = new seq and no problem other than a gap note for this message.
+            let rejected = rep.problems.last().is_some_and(|(at, why)| at == id && !why.starts_with("gap"));
+            if *kind == KIND_RECORD && r.authors != before && !rejected {
                 let rec = tgsync_core::oplog::decode_record(&r.keys, body).unwrap();
                 for e in &rec.entries {
                     let path = e["path"].as_str().unwrap().to_string();
@@ -376,6 +405,7 @@ impl Sim {
             }
         }
         stats.problems = rep.problems.len();
+        stats.stale_epoch = rep.problems.iter().filter(|(_, why)| why.contains("already replaced")).count();
         stats.conflicts = rep.applied.iter().filter(|a| matches!(a.4, tgsync_core::tree::Applied::Conflict(..))).count();
         for (path, sha) in puts {
             // Knowingly replaced: someone later wrote this path with base = this content.
@@ -383,6 +413,22 @@ impl Sim {
             let replaced = bases.iter().any(|(_, b)| *b == sha);
             if !in_tree.contains(sha.as_str()) && !replaced {
                 return Err(format!("edit lost: {path} = {sha} is nowhere in the tree and nobody replaced it"));
+            }
+        }
+        // Every upload a client marked as done, while it was a member, must survive the same way
+        // (this catches records that readers rejected, e.g. sealed with a replaced key, and never re-sent).
+        for (c, msg_id, path, sha) in &self.promised {
+            let Some(sha) = sha else { continue };
+            let me = self.clients[*c].replica.me.id();
+            let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
+            // The same person changed or deleted this path on their own disk afterwards.
+            let superseded = self.touched.iter().any(|(c2, m2, p2)| c2 == c && m2 >= msg_id && p2 == path);
+            if member && !superseded && !in_tree.contains(sha.as_str()) && !bases.iter().any(|(_, b)| b == sha) {
+                let cl = &self.clients[*c];
+                let puts_of_it: Vec<String> = self.promised.iter().filter(|p| p.0 == *c && p.2 == *path).map(|p| format!("msg {} {:?}", p.1, p.3)).collect();
+                return Err(format!("upload lost: c{c} marked {path} = {sha} (msg {msg_id}) as uploaded; it is gone. \
+                    c{c} disk {:?}, synced {:?}, tree {:?}; c{c}'s uploads of {path}: {puts_of_it:?}",
+                    cl.disk.get(path), cl.synced.get(path), cl.replica.tree.get(path).map(|n| &n.sha)));
             }
         }
         Ok(stats)

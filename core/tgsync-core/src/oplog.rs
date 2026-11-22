@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Records (batches of file operations) and chunks of big files (PROTOCOL.md sections 5 and 6).
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{json, Value};
 
-use crate::crypto::{KeyRing, NONCE_LEN};
+use crate::crypto::{blob_epoch, KeyRing, NONCE_LEN};
+use crate::descriptor::signer_of;
 use crate::{Error, Result};
 
 pub const CAPTION_PREFIX: &str = "tgs1:";
@@ -20,17 +24,36 @@ pub struct Record {
     /// Entries stay JSON: replay validates each one and skips bad ones.
     pub entries: Vec<Value>,
     pub payload: Vec<u8>,
+    /// v2: the author's Ed25519 public key (b64); the signature was checked when decoding.
+    pub signer: Option<String>,
 }
 
-pub fn encode_record(keys: &KeyRing, rec: &Record, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>> {
-    let header = serde_json::to_vec(&json!({
-        "v": 1, "author": rec.author, "seq": rec.seq, "ts": rec.ts, "entries": rec.entries,
-    }))
-    .unwrap();
-    let plain = [&(header.len() as u32).to_be_bytes()[..], &header, &rec.payload].concat();
+const SIG_DOMAIN: &[u8] = b"tgsync/rec/v2";
+const SIG_LEN: usize = 64;
+
+/// What a v2 record signs: domain, the epoch it is sealed with, header and payload.
+fn signed_bytes(epoch: u32, header: &[u8], payload: &[u8]) -> Vec<u8> {
+    [SIG_DOMAIN, &epoch.to_be_bytes(), &(header.len() as u32).to_be_bytes(), header, payload].concat()
+}
+
+/// `signing: Some(key)` writes a v2 record signed by `key` (PROTOCOL.md section 12); `None` a v1 record.
+pub fn encode_record(keys: &KeyRing, rec: &Record, nonce: &[u8; NONCE_LEN], signing: Option<&[u8; 32]>) -> Result<Vec<u8>> {
+    let mut h = json!({"v": 1, "author": rec.author, "seq": rec.seq, "ts": rec.ts, "entries": rec.entries});
+    if let Some(key) = signing {
+        h["v"] = Value::from(2);
+        h["signer"] = Value::from(signer_of(key));
+    }
+    let header = serde_json::to_vec(&h).unwrap();
+    let mut plain = [&(header.len() as u32).to_be_bytes()[..], &header, &rec.payload].concat();
+    if let Some(key) = signing {
+        let msg = signed_bytes(keys.current_epoch()?, &header, &rec.payload);
+        plain.extend_from_slice(&SigningKey::from_bytes(key).sign(&msg).to_bytes());
+    }
     keys.seal(b"record", b"", &plain, nonce, None)
 }
 
+/// Open a record. A v2 record's signature must verify against its `signer` (who that signer
+/// belongs to is checked by the replica, against the members at the record's position).
 pub fn decode_record(keys: &KeyRing, blob: &[u8]) -> Result<Record> {
     let plain = keys.open(b"record", b"", blob)?;
     let bad = |m: &str| Error::Crypto(format!("malformed record: {m}"));
@@ -41,9 +64,26 @@ pub fn decode_record(keys: &KeyRing, blob: &[u8]) -> Result<Record> {
     if hl > plain.len() - 4 {
         return Err(Error::Crypto("record header length invalid".into()));
     }
-    let h: Value = serde_json::from_slice(&plain[4..4 + hl]).map_err(|e| bad(&e.to_string()))?;
-    if h.get("v").and_then(Value::as_i64) != Some(1) {
-        return Err(Error::Crypto(format!("unsupported record version {}", h.get("v").unwrap_or(&Value::Null))));
+    let header = &plain[4..4 + hl];
+    let h: Value = serde_json::from_slice(header).map_err(|e| bad(&e.to_string()))?;
+    let (mut payload, mut signer) = (&plain[4 + hl..], None);
+    match h.get("v").and_then(Value::as_i64) {
+        Some(1) => {}
+        Some(2) => {
+            if payload.len() < SIG_LEN {
+                return Err(bad("signature missing"));
+            }
+            let (body, sig) = payload.split_at(payload.len() - SIG_LEN);
+            let s = h.get("signer").and_then(Value::as_str).ok_or_else(|| bad("signer"))?;
+            let pk: [u8; 32] = B64.decode(s).ok().and_then(|b| b.try_into().ok()).ok_or_else(|| bad("signer"))?;
+            let msg = signed_bytes(blob_epoch(blob)?, header, body);
+            VerifyingKey::from_bytes(&pk)
+                .and_then(|k| k.verify(&msg, &Signature::from_bytes(sig.try_into().unwrap())))
+                .map_err(|_| Error::Crypto("record signature is invalid".into()))?;
+            payload = body;
+            signer = Some(s.to_owned());
+        }
+        _ => return Err(Error::Crypto(format!("unsupported record version {}", h.get("v").unwrap_or(&Value::Null)))),
     }
     let seq = h.get("seq").and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)));
     Ok(Record {
@@ -51,7 +91,8 @@ pub fn decode_record(keys: &KeyRing, blob: &[u8]) -> Result<Record> {
         seq: seq.ok_or_else(|| bad("seq"))?,
         ts: h.get("ts").and_then(Value::as_f64).ok_or_else(|| bad("ts"))?,
         entries: h.get("entries").and_then(Value::as_array).ok_or_else(|| bad("entries"))?.clone(),
-        payload: plain[4 + hl..].to_vec(),
+        payload: payload.to_vec(),
+        signer,
     })
 }
 

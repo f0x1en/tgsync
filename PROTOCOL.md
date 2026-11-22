@@ -234,3 +234,32 @@ from one person to another.
   **give admin** to a member (add their signer); **drop admin** (remove yourself; refused if you are the
   last admin).
 - Records are unchanged: any member writes files.
+
+## 12. Signed records and membership history (vaults with admins; Rust core only)
+
+In a vault whose descriptors are `v: 2` (section 11), every record is signed by its author, and a
+record counts only if its author was a member, using the newest key, at the record's place in the log.
+This stops a removed member from writing, and keeps new notes away from keys a removed member holds.
+
+**Record v2.** Header `v: 2` plus `"signer": "<b64 Ed25519 public key>"`. The sealed plaintext is
+```
+u32be(len(header)) || header || payload || sig        # sig: 64 bytes
+sig = Ed25519(signer, "tgsync/rec/v2" || u32be(epoch) || u32be(len(header)) || header || payload)
+```
+where `epoch` is the epoch in the blob header (the key it is sealed with). The signature is inside the
+seal, so Telegram does not see who wrote what.
+
+**Membership history.** Every client keeps, for each valid descriptor in log order, (message id, epoch,
+roster, admins). A descriptor is valid for the history if, with keys the client holds, its proof and
+keycheck verify, its roster opens, its epoch is not below the previous entry's, and (v2) its signature
+and admin rules from section 11 hold. This includes descriptors that do not list the client. A client
+that joins later checks the earlier descriptors once it has the keys (a descriptor carries every
+epoch key), so every client builds the same history.
+
+**Checking a record** at message id `m` against the last history entry before `m`:
+- if that entry is `v: 1` (no admins): no check (section 9 as before);
+- unsigned record: skip it (problem "unsigned record in a vault that has admins");
+- no member has both id == `author` and signer == `signer`: skip (problem "record not signed by a member");
+- sealed with an epoch below the entry's epoch: skip, but count its `seq` (problem "record sealed with a
+  key that was already replaced"). If we are its author, upload its entries again with the next push:
+  same content (read from the old record, which we can still open) and same `base`. Nothing is lost.

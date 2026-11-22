@@ -331,3 +331,66 @@ pub fn accept(
     *ring = candidate;
     Ok(Some(Descriptor { vault_id, epoch, members, admins, raw: d }))
 }
+
+/// What one descriptor says about the vault: the key epoch and members from its log position on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub epoch: u32,
+    pub members: Vec<Member>,
+    pub admins: Option<Vec<String>>,
+}
+
+/// Validate a descriptor with keys we already hold, whether or not it includes us, and read its
+/// roster. Used to build the membership history every replica agrees on (records are checked against
+/// the members and epoch at their position). `prev` = the last snapshot in the history.
+pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, prev: Option<&Snapshot>) -> Result<Snapshot> {
+    let d = parse(data)?;
+    let v2 = d["v"].as_i64() == Some(2);
+    let vault_id = d["vault_id"].as_str().ok_or_else(|| err("malformed descriptor: vault_id"))?;
+    if expected_vault_id.is_some_and(|v| !v.is_empty() && v != vault_id) {
+        return Err(err("descriptor belongs to a different vault"));
+    }
+    let epoch = d["epoch"].as_u64().and_then(|e| u32::try_from(e).ok()).ok_or_else(|| err("malformed descriptor: epoch"))?;
+    if prev.is_some_and(|p| epoch < p.epoch) {
+        return Err(err("descriptor epoch is older than ours (replay?)"));
+    }
+    let prev_admins = prev.and_then(|p| p.admins.as_deref());
+    if prev_admins.is_some() && !v2 {
+        return Err(err("v1 descriptor in a vault that has admins"));
+    }
+    let admins = if v2 { Some(check_v2(&d, prev_admins)?) } else { None };
+    let proof_epoch = d["proof_epoch"].as_u64().and_then(|e| u32::try_from(e).ok()).ok_or_else(|| err("bad proof epoch"))?;
+    if proof_epoch != epoch && proof_epoch + 1 != epoch {
+        return Err(err("bad proof epoch"));
+    }
+    let mut body = d.clone();
+    body.as_object_mut().unwrap().remove("proof");
+    body.as_object_mut().unwrap().remove("sig");
+    let digest = ring.open(b"descproof", format!("{vault_id}:{epoch}").as_bytes(), &b64d(&d["proof"])?)?;
+    if digest != sha(&body) {
+        return Err(err("descriptor proof does not match body"));
+    }
+    if d["keycheck"].as_str() != Some(keycheck(ring.key(epoch)?, vault_id, epoch).as_str()) {
+        return Err(err("descriptor keycheck mismatch"));
+    }
+    let roster: Value = serde_json::from_slice(&ring.open(b"roster", vault_id.as_bytes(), &b64d(&d["roster"])?)?)
+        .map_err(|e| err(format!("cannot read roster: {e}")))?;
+    let members = roster
+        .as_array()
+        .ok_or_else(|| err("cannot read roster: not a list"))?
+        .iter()
+        .map(|r| {
+            Ok(Member {
+                recipient: r.get("recipient").and_then(Value::as_str).ok_or_else(|| err("cannot read roster: recipient"))?.to_owned(),
+                name: r.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+                signer: r.get("signer").and_then(Value::as_str).map(str::to_owned),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(admins) = &admins {
+        if !admins.iter().all(|a| members.iter().any(|m| m.signer.as_ref() == Some(a))) {
+            return Err(err("an admin is not a member"));
+        }
+    }
+    Ok(Snapshot { epoch, members, admins })
+}
