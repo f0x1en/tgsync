@@ -161,7 +161,9 @@ Vault paths are relative, `/`-separated, NFC-normalized. A path is **unsafe** (e
 empty or longer than 240 chars; starts with `/` or a drive letter `X:`; contains `< > : " | ? * \`
 or a control char (0x00-0x1f); has an empty, `.` or `..` component; a component ends with `.` or
 space; a component's part before the first `.` is a reserved Windows name (`CON PRN AUX NUL COM1-9 LPT1-9`,
-any case); the first component is `.tgsync` or `.git`; it ends with `.tgsync-tmp`.
+any case); the first component is `.tgsync` or `.git`; it ends with `.tgsync-tmp`. (The Rust core
+compares these last two in any case, since `.TGSYNC` is the same folder as `.tgsync` on macOS and
+Windows; Python and the TypeScript engine compare them exactly.)
 
 **Conflict copy name** for `path` written by `author` (member id) at `ts`:
 `<dir>/<stem> (conflict <author[:6]> <YYYY-MM-DD HHMM in UTC of ts>)<ext>`, where ext is the last
@@ -294,8 +296,10 @@ start a new doc.
    kept even when their file is deleted.
 2. The node gets `sha` = SHA-256 of the doc's text after the import, `doc` = the doc id.
 3. Place it: if the doc already sits at another path (a conflict copy), it stays there. Else, if
-   the path has no node or a node of the same doc, set it there (an edit beats a delete). Else
-   (another file or doc at that path, or a case clash) it goes to a conflict-copy path (section 8).
+   the path has no node or a node of the same doc, set it there (an edit beats a delete). If the
+   path holds a plain file (no doc) whose sha is the entry's `base`, the note takes it over (e.g. a
+   note that was too big to merge before). Else (another file or doc at that path, or a case clash)
+   it goes to a conflict-copy path (section 8).
 
 Loro merges concurrent operations the same way in every replica, so every client ends with the same
 text. `put` and `delete` still work on note paths with the section 9 rules (sha = SHA-256 of the text).

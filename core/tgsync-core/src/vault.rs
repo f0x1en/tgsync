@@ -52,8 +52,8 @@ impl Vault {
         Ok((seq, plan_push(&self.replica, disk, &self.synced, &self.resend, seq, new_doc)?))
     }
 
-    /// Seal the planned record. Records `seq` as used and drops the re-send queue (it is in this
-    /// record): save the vault before posting.
+    /// Seal the planned record. Records `seq` as used (save the vault before posting, so a crash never
+    /// reuses it). The re-send queue is emptied by `pushed`, once the record is posted.
     pub fn seal_record(&mut self, seq: u64, push: &Push, ts: f64, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>> {
         let me = &self.replica.me;
         let rec = Record {
@@ -65,15 +65,21 @@ impl Vault {
             signer: None,
         };
         // v1 vaults (no admins): unsigned v1 records, readable by older clients.
-        let signing = if self.replica.admins.is_some() { me.signing.as_ref() } else { None };
+        // v2 readers reject unsigned records, so never write one there.
+        let signing = if self.replica.admins.is_some() {
+            Some(me.signing.as_ref().ok_or_else(|| Error::Crypto("no signing key: this vault needs signed records".into()))?)
+        } else {
+            None
+        };
         let body = encode_record(&self.replica.keys, &rec, nonce, signing)?;
         self.sent_seq = seq;
-        self.resend.clear();
         Ok(body)
     }
 
     /// The record is posted: its files count as synced.
     pub fn pushed(&mut self, push: &Push) {
+        // The re-sent entries went out with this record.
+        self.resend.drain(..push.resent.min(self.resend.len()));
         for (p, sha) in &push.done {
             match sha {
                 Some(s) => self.synced.insert(p.clone(), s.clone()),

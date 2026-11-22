@@ -518,3 +518,63 @@ fn bad_text_update_is_skipped() {
     g.pull(&mut ra);
     assert!(ra.tree.get("n.md").is_none());
 }
+
+// ------------------------------------------------------------------ regressions from the code review
+
+#[test]
+fn note_edit_takes_over_a_plain_file_it_was_based_on() {
+    let (mut g, ring, a, _, mut ra, _) = pair();
+    let big = "x".repeat(10);
+    let sha = tgsync_core::text::sha_hex(&big);
+    // n.md arrived as a plain put (e.g. it was too big to merge, or written by an older client).
+    g.record(&ring, &a, 1, 1.0, vec![put("n.md", &sha, None)]);
+    g.pull(&mut ra);
+    // Now edited as a note, based on that version: it replaces the file, no conflict copy.
+    text_edit(&mut g, &ring, &a, &ra, 2, "n.md", Some(&sha), "short now", "d9");
+    g.pull(&mut ra);
+    assert_eq!(ra.text("n.md").unwrap(), "short now");
+    assert_eq!(ra.tree.nodes.len(), 1);
+    // Not based on it: someone else's file, so a conflict copy as before.
+    let (mut g, ring, a, b, mut ra, rb) = pair();
+    g.record(&ring, &a, 1, 1.0, vec![put("m.md", &sha, None)]);
+    text_edit(&mut g, &ring, &b, &rb, 1, "m.md", None, "bob's own", "db");
+    g.pull(&mut ra);
+    assert_eq!(ra.tree.nodes.len(), 2);
+}
+
+#[test]
+fn a_replayed_old_key_record_is_not_sent_again() {
+    let (mut g, mut ring, a, b, _, mut rb) = admin_pair();
+    let carol = admin_person(3);
+    let three = [smember(&a, "alice"), smember(&b, "bob"), smember(&carol, "carol")];
+    g.descriptor_v2(&ring, &three, None, &[a.signer().unwrap()], &[1; 32]);
+    g.pull(&mut rb);
+    let old = ring.clone();
+    ring.add(2, &[2u8; 32]).unwrap();
+    g.descriptor_v2(&ring, &three[..2], Some(1), &[a.signer().unwrap()], &[1; 32]);
+    let id = g.record(&old, &b, 1, 1.0, vec![put("n.md", "s1", None)]);
+    assert_eq!(g.pull(&mut rb).resend.len(), 1);
+    let copy = g.msgs[id as usize - 1].2.clone();
+    g.post('r', copy); // someone posts it again
+    assert_eq!(g.pull(&mut rb).resend.len(), 0, "the replay must not queue the old content again");
+}
+
+#[test]
+fn a_bad_note_update_leaves_no_empty_doc() {
+    let (mut g, ring, a, _, mut ra, _) = pair();
+    let e = json!({"op": "text", "path": "n.md", "doc": "dd", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, 3]}});
+    g.record_with(&ring, &a, 1, 1.0, vec![e], b"bad".to_vec());
+    g.pull(&mut ra);
+    assert_eq!(ra.texts.doc_ids().count(), 0);
+}
+
+#[test]
+fn a_huge_proof_epoch_is_rejected_not_a_crash() {
+    let (mut g, ring, a, _, mut ra, _) = pair();
+    g.descriptor(&ring, &[member(&a, "alice")], None);
+    let last = g.msgs.len() - 1;
+    let mut d: Value = serde_json::from_slice(&g.msgs[last].2).unwrap();
+    d["proof_epoch"] = json!(u64::MAX);
+    g.msgs[last].2 = serde_json::to_vec(&d).unwrap();
+    assert!(g.pull(&mut ra).problems[0].1.contains("bad proof epoch"));
+}

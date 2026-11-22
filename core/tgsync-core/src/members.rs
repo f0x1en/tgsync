@@ -49,6 +49,19 @@ pub fn create(
     signed(&ring, vault_id, &[me_as_member(me, name)?], &admins, me, None, created, nonce)
 }
 
+/// The one member `target` names (key, member id or name). Names are not unique: refuse if several match.
+fn one_match<'a>(r: &'a Replica, target: &str) -> Result<&'a Member> {
+    let hits: Vec<&Member> = r.members.iter().filter(|m| target == m.recipient || target == m.id() || target == m.name).collect();
+    match hits.len() {
+        0 => Err(err(&format!("no such member: {target}"))),
+        1 => Ok(hits[0]),
+        _ => Err(err(&format!(
+            "several members match '{target}'; use a member id instead: {}",
+            hits.iter().map(|m| m.id()).collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
 fn admin_state(r: &Replica) -> Result<(&str, Vec<String>)> {
     let vault_id = r.vault_id.as_deref().ok_or_else(|| err("vault id unknown"))?;
     let admins = r
@@ -97,6 +110,7 @@ pub fn add(
 /// They lose admin rights too. Refused for the last member or the last admin.
 pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
     let (vault_id, admins) = admin_state(r)?;
+    one_match(r, target)?;
     let (gone, keep): (Vec<Member>, Vec<Member>) = r
         .members
         .iter()
@@ -124,11 +138,7 @@ pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce
 /// Make a member an admin.
 pub fn give_admin(r: &Replica, target: &str, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
     let (vault_id, mut admins) = admin_state(r)?;
-    let m = r
-        .members
-        .iter()
-        .find(|m| target == m.recipient || target == m.id() || target == m.name)
-        .ok_or_else(|| err(&format!("no such member: {target}")))?;
+    let m = one_match(r, target)?;
     let s = m
         .signer
         .clone()

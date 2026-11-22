@@ -177,3 +177,29 @@ fn big_pushes_split_into_records_of_at_most_500_entries() {
     }
     assert_eq!(sizes, [500, 500, 200]);
 }
+
+#[test]
+fn a_file_replaced_by_a_folder_is_deleted_first() {
+    let r = me();
+    let mut disk = BTreeMap::new();
+    disk.insert("a".to_string(), LocalFile { sha: "dir".into(), size: 0, mtime: 0.0, content: Content::Dir });
+    let synced: BTreeMap<String, String> = [("a".to_string(), "aa".to_string())].into();
+    let p = plan_push(&r, &disk, &synced, &[], 1, &mut no_doc).unwrap();
+    let ops: Vec<&str> = p.entries.iter().map(|e| e["op"].as_str().unwrap()).collect();
+    assert_eq!(ops, ["delete", "mkdir"]);
+    assert_eq!(p.entries[0]["base"], "aa");
+    // And a folder replaced by a file: rmdir, then a new file.
+    let disk = files(&[("a", b"now a file")]);
+    let synced: BTreeMap<String, String> = [("a".to_string(), "dir".to_string())].into();
+    let p = plan_push(&r, &disk, &synced, &[], 1, &mut no_doc).unwrap();
+    let ops: Vec<&str> = p.entries.iter().map(|e| e["op"].as_str().unwrap()).collect();
+    assert_eq!(ops, ["rmdir", "put"]);
+    assert_eq!(p.entries[1]["base"], serde_json::Value::Null);
+}
+
+#[test]
+fn paths_reserved_in_any_case() {
+    for bad in [".TGSYNC/state.json", ".Git/hooks/post-checkout", "x.TGSYNC-TMP"] {
+        assert!(tgsync_core::paths::normalize(bad).is_err(), "{bad}");
+    }
+}

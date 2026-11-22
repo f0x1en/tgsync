@@ -282,7 +282,7 @@ pub fn accept(
     }
     let admins = if v2 { Some(check_v2(&d, prev_admins)?) } else { None };
     let proof_epoch = d["proof_epoch"].as_u64().ok_or_else(|| err("bad proof epoch"))?;
-    if proof_epoch != u64::from(epoch) && proof_epoch + 1 != u64::from(epoch) {
+    if proof_epoch != u64::from(epoch) && proof_epoch.checked_add(1) != Some(u64::from(epoch)) {
         return Err(err("bad proof epoch"));
     }
     let mut body = d.clone();
@@ -407,7 +407,7 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
         .as_u64()
         .and_then(|e| u32::try_from(e).ok())
         .ok_or_else(|| err("bad proof epoch"))?;
-    if proof_epoch != epoch && proof_epoch + 1 != epoch {
+    if proof_epoch != epoch && proof_epoch.checked_add(1) != Some(epoch) {
         return Err(err("bad proof epoch"));
     }
     let mut body = d.clone();

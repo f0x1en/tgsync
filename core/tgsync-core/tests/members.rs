@@ -85,3 +85,45 @@ fn create_add_give_drop_remove() {
     assert_eq!(rb.members.len(), 1);
     assert!(rb.keys.has(2) && !ra.keys.has(2));
 }
+
+#[test]
+fn ambiguous_names_are_refused() {
+    let (a, b, c) = (person(1), person(2), person(3));
+    let mut g = Group(vec![], 0);
+    let d = members::create(&a, "alice", "00112233aabbccdd", &[5; 32], 1, &mut g.n()).unwrap();
+    g.post(d);
+    let mut ra = Replica::new(a.clone(), None);
+    g.pull(&mut ra);
+    for p in [&b, &c] {
+        let d = members::add(&ra, &p.recipient, "phone", p.signer().as_deref(), 2, &mut g.n()).unwrap();
+        g.post(d);
+        g.pull(&mut ra);
+    }
+    let e = members::remove(&ra, "phone", &[6; 32], 3, &mut g.n()).unwrap_err().to_string();
+    assert!(e.contains("several members match"), "{e}");
+    assert!(members::remove(&ra, &b.id(), &[6; 32], 3, &mut g.n()).is_ok());
+}
+
+#[test]
+fn vault_keeps_resends_until_posted_and_never_writes_unsigned_records() {
+    use tgsync_core::replica::Resend;
+    use tgsync_core::vault::Vault;
+    let a = person(1);
+    let mut g = Group(vec![], 0);
+    let d = members::create(&a, "alice", "00112233aabbccdd", &[5; 32], 1, &mut g.n()).unwrap();
+    g.post(d);
+    let mut v = Vault::new(a.clone(), None);
+    g.pull(&mut v.replica);
+    v.resend.push(Resend { entry: serde_json::json!({"op": "mkdir", "path": "x"}), bytes: vec![] });
+    let (seq, plan) = v.plan_push(&Default::default(), &mut || "0000000000000000".into()).unwrap();
+    assert_eq!(plan.resent, 1);
+    v.seal_record(seq, &plan, 1.0, &[1; 12]).unwrap();
+    assert_eq!(v.resend.len(), 1, "kept until the record is posted");
+    v.pushed(&plan);
+    assert!(v.resend.is_empty());
+    // An identity without a signing key cannot write in this (v2) vault.
+    v.replica.me.signing = None;
+    v.resend.push(Resend { entry: serde_json::json!({"op": "mkdir", "path": "y"}), bytes: vec![] });
+    let (seq, plan) = v.plan_push(&Default::default(), &mut || "0000000000000000".into()).unwrap();
+    assert!(v.seal_record(seq, &plan, 1.0, &[1; 12]).is_err());
+}

@@ -130,8 +130,15 @@ impl Texts {
 
     /// Replay: import an update. Returns the doc's text afterwards. Importing twice is harmless.
     pub fn import(&mut self, doc: &str, update: &[u8]) -> Result<String> {
+        let new = !self.docs.contains_key(doc);
         let d = self.docs.entry(doc.to_owned()).or_default();
-        d.import(update).map_err(|e| err(format!("bad text update: {e}")))?;
+        if let Err(e) = d.import(update) {
+            if new {
+                self.docs.remove(doc); // a bad update must not leave an empty doc behind
+            }
+            return Err(err(format!("bad text update: {e}")));
+        }
+        let d = &self.docs[doc];
         let text = d.get_text(TEXT).to_string();
         self.versions.insert((doc.to_owned(), sha_hex(&text)), d.oplog_frontiers().encode());
         Ok(text)

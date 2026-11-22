@@ -179,7 +179,8 @@ impl Tree {
     /// Apply a `text` entry whose update was already imported into doc `doc` (text sha `sha`).
     /// Same doc at the path, or no node: the note now has the merged text (an edit beats a delete).
     /// Another file at the path, or a case clash: the note lands at a conflict-copy path.
-    pub fn apply_text(&mut self, path: &str, doc: &str, sha: &str, size: i64, mtime: f64, author: &str, ts: f64, msg_id: i64) -> Applied {
+    /// `base`: the sha the writer last synced; a plain (non-note) file with that sha is taken over.
+    pub fn apply_text(&mut self, path: &str, doc: &str, sha: &str, size: i64, mtime: f64, base: Option<&str>, author: &str, ts: f64, msg_id: i64) -> Applied {
         let node = Node {
             path: path.to_owned(),
             sha: sha.to_owned(),
@@ -207,7 +208,11 @@ impl Tree {
             return self.conflict(node, author, ts);
         }
         match self.nodes.get(path) {
-            Some(cur) if cur.doc.as_deref() != Some(doc) => self.conflict(node, author, ts),
+            // A plain file at the path that the writer saw (e.g. a note that was too big to merge):
+            // the note takes it over. Anything else is someone else's file: conflict copy.
+            Some(cur) if cur.doc.as_deref() != Some(doc) && !(cur.doc.is_none() && cur.sha != DIR && Some(cur.sha.as_str()) == base) => {
+                self.conflict(node, author, ts)
+            }
             _ => {
                 self.set(node);
                 Applied::Text(path.to_owned())

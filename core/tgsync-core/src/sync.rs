@@ -59,6 +59,8 @@ pub struct Push {
     pub payload: Vec<u8>,
     /// path -> sha to record as synced once the record is posted (`None`: no longer synced).
     pub done: Vec<(String, Option<String>)>,
+    /// How many queued re-send entries this record carries (they leave the queue once it is posted).
+    pub resent: usize,
 }
 
 impl Push {
@@ -93,11 +95,15 @@ pub fn plan_push(
 ) -> Result<Push> {
     let mut push = Push::default();
     for r in resend {
+        if push.entries.len() >= MAX_ENTRIES_PER_RECORD || push.payload.len() >= RECORD_PAYLOAD_MAX {
+            break; // the rest waits for the next record
+        }
         let mut e = r.entry.clone();
         if !r.bytes.is_empty() {
             e["blob"]["inline"] = push.inline(&r.bytes);
         }
         push.entries.push(e);
+        push.resent += 1;
     }
     let me = replica.me.id();
     // A vault without admins is a protocol v1 vault (older clients may share it): notes go as plain
@@ -112,7 +118,17 @@ pub fn plan_push(
         if push.entries.len() >= MAX_ENTRIES_PER_RECORD || push.payload.len() >= RECORD_PAYLOAD_MAX {
             break; // the rest goes in the next record
         }
-        let base = then.cloned();
+        let mut base = then.cloned();
+        // A file became a folder of the same name, or the other way round: remove the old kind first,
+        // else replay keeps it (a folder never replaces a file) and the next pull writes it back.
+        let was_dir = then.map(String::as_str) == Some(DIR);
+        let is_dir = matches!(now.map(|f| &f.content), Some(Content::Dir));
+        if let (Some(_), Some(_)) = (now, then) {
+            if was_dir != is_dir {
+                push.entries.push(if was_dir { json!({"op": "rmdir", "path": p}) } else { json!({"op": "delete", "path": p, "base": base}) });
+                base = None;
+            }
+        }
         let entry = match now {
             None if then.map(String::as_str) == Some(DIR) => json!({"op": "rmdir", "path": p}),
             None => json!({"op": "delete", "path": p, "base": base}),

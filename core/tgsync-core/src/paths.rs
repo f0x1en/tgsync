@@ -48,10 +48,12 @@ pub fn normalize(rel: &str) -> Result<String> {
             return Err(err(format!("reserved Windows name in {rel:?}")));
         }
     }
-    if parts[0] == INTERNAL_DIR || parts[0] == ".git" {
+    // Case-insensitive: on macOS and Windows `.TGSYNC` is the same folder as `.tgsync`.
+    let first = parts[0].to_lowercase();
+    if first == INTERNAL_DIR || first == ".git" {
         return Err(err(format!("reserved directory: {rel:?}")));
     }
-    if rel.ends_with(TMP_SUFFIX) {
+    if rel.to_lowercase().ends_with(TMP_SUFFIX) {
         return Err(err("reserved suffix"));
     }
     Ok(rel)

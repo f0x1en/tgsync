@@ -159,7 +159,7 @@ impl Replica {
         let mtime = e.get("mtime").and_then(Value::as_f64).unwrap_or(ts);
         Some(
             self.tree
-                .apply_text(&path, doc, &sha_hex(&text), text.len() as i64, mtime, author, ts, id),
+                .apply_text(&path, doc, &sha_hex(&text), text.len() as i64, mtime, e.get("base").and_then(Value::as_str), author, ts, id),
         )
     }
 
@@ -377,9 +377,10 @@ impl Replica {
                         if let Err(why) = self.check_record(id, body, &rec) {
                             if why == STALE {
                                 // Authentic but sealed with a replaced key: count its seq, apply nothing.
-                                self.authors
-                                    .insert(rec.author.clone(), rec.seq.max(self.authors.get(&rec.author).copied().unwrap_or(0)));
-                                if rec.author == self.me.id() {
+                                let prev = self.authors.get(&rec.author).copied().unwrap_or(0);
+                                self.authors.insert(rec.author.clone(), rec.seq.max(prev));
+                                // Ours, and not a replay of a record we already handled: send it again.
+                                if rec.author == self.me.id() && rec.seq > prev {
                                     rep.resend.extend(rec.entries.iter().map(|e| Resend {
                                         entry: e.clone(),
                                         bytes: inline_bytes(e, &rec.payload).unwrap_or_default().to_vec(),
