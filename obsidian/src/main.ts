@@ -40,7 +40,7 @@ export default class TgsyncPlugin extends Plugin {
     this.addCommand({ id: "push", name: "Push (upload your changes)", callback: () => this.push() });
     this.addSettingTab(new TgsyncSettingTab(this.app, this));
     // Warn as soon as you open a note someone else changed.
-    this.registerEvent(this.app.workspace.on("file-open", (f) => this.warnIfIncoming(f)));
+    this.registerEvent(this.app.workspace.on("file-open", (f) => this.warnIfIncoming(f, true)));
     this.app.workspace.onLayoutReady(() => { this.check(false); this.schedule(); });
   }
 
@@ -98,6 +98,7 @@ export default class TgsyncPlugin extends Plugin {
       const theirs = s.incoming.length;
       this.show(theirs || mine ? [theirs && `${theirs} to pull`, mine && `${mine} to push`].filter(Boolean).join(", ") : "up to date");
       const key = JSON.stringify(s.incoming.map((x) => [x.op, x.path, x.who]));
+      if (key !== this.lastIncoming) this.warned.clear();
       if (theirs && (loud || key !== this.lastIncoming)) {
         const who = [...new Set(s.incoming.map((x) => x.who))].join(", ");
         new Notice(`tgsync: ${theirs} change${theirs > 1 ? "s" : ""} from ${who}. Run "tgsync: Pull" to get ${theirs > 1 ? "them" : "it"}.`, 8000);
@@ -111,9 +112,15 @@ export default class TgsyncPlugin extends Plugin {
     }
   }
 
-  private warnIfIncoming(f: TFile | null): void {
+  /** Paths already warned about since the incoming changes last changed (no nagging every check). */
+  private warned = new Set<string>();
+
+  /** `opened`: the user just opened the note, so tell them even if we did before. */
+  private warnIfIncoming(f: TFile | null, opened = false): void {
     const x = f && this.incoming.find((i) => i.path === f.path);
-    if (x) new Notice(`tgsync: ${x.who} changed this note; pull before you edit it`, 8000);
+    if (!x || (!opened && this.warned.has(x.path))) return;
+    this.warned.add(x.path);
+    new Notice(`tgsync: ${x.who} changed this note; pull before you edit it`, 8000);
   }
 
   private async act(what: "pull" | "push"): Promise<void> {

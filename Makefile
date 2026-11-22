@@ -19,7 +19,7 @@ ts: wasm ## TypeScript host + Node CLI on the Rust core: type check, tests, and 
 	TGSYNC_CLI="node $(CURDIR)/ts/dist/tgsync.mjs" $(PY) -m pytest -q tests/test_sandbox.py
 
 plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm install` in obsidian/ once
-	cd obsidian && npm run build
+	cd obsidian && npm run build && npm test
 
 rust:   ## Rust core (core/): tests, incl. spec/vectors.json
 	cd core && cargo test
