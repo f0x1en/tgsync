@@ -12,7 +12,7 @@ from tgsync.errors import CryptoError, PathError
 from tgsync.identity import Identity, member_id
 from tgsync.tree import Tree
 
-V = json.loads((Path(__file__).parent.parent / "spec" / "vectors.json").read_text())
+V = json.loads((Path(__file__).parent.parent / "spec" / "vectors.json").read_text("utf-8"))
 X = bytes.fromhex
 
 
