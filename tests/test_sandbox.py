@@ -60,7 +60,7 @@ def test_two_people_in_the_sandbox(tmp_path):
     assert (B / "hello.md").read_text() == "hi bob\n"
     assert not out["report"]["conflicts"], out
     assert out["report"]["pushed_paths"] == [], out           # files he already had are not uploaded again
-    assert list((B / ".tgsync").glob("state.*.removed-*"))   # old state kept, not deleted
+    assert list((B / ".tgsync").glob("*.removed-*"))   # old state kept, not deleted
 
 
 def test_json_errors_are_json_and_never_ask(tmp_path):

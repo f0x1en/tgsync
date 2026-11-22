@@ -17,7 +17,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 import { fingerprint, memberId, shortCode } from "../crypto.ts";
 import { INTERNAL_DIR, normalize } from "../paths.ts";
 import { decodeInvite, encodeInvite, type Identity } from "../protocol.ts";
-import { State, STATE_FILE } from "../state.ts";
+import { ENGINE_FILE, LOCAL_FILE, OLD_STATE } from "../vault.ts";
 import type { Transport } from "../transport.ts";
 import { Vault, type Incoming, type Report } from "../vault.ts";
 import { NodeFiles } from "../node/files.ts";
@@ -127,9 +127,14 @@ const knownVaults = () => (mem().vaults ?? []).filter((v) => existsSync(cfgPath(
 
 /** -> [vault id, were we removed from it] for a vault folder; [null, false] if none. */
 async function vaultAt(folder: string): Promise<[string | null, boolean]> {
-  if (!existsSync(join(folder, STATE_FILE))) return [null, false];
-  const st = await State.load(new NodeFiles(folder));
-  return [st.d.vault_id, st.d.removed];
+  for (const [file, pick] of [[ENGINE_FILE, (d: any) => d.replica], [OLD_STATE, (d: any) => d]] as const) {
+    if (!existsSync(join(folder, file))) continue;
+    try {
+      const d = pick(JSON.parse(readFileSync(join(folder, file), "utf8")));
+      return [d.vault_id ?? null, !!d.removed];
+    } catch { return [null, false]; }
+  }
+  return [null, false];
 }
 
 function notAVault(vault: string, cmd = "status"): CliError {
@@ -422,8 +427,11 @@ const COMMANDS: { [name: string]: Command } = {
         throw new CliError("KEY FINGERPRINT MISMATCH between the invite and the vault - refusing to join");
       }
       if (rejoin) { // start the vault state fresh; the old one is kept next to it, files stay
-        const st = join(folder, STATE_FILE);
-        renameSync(st, `${st}.removed-${Math.floor(Date.now() / 1000)}`);
+        const stamp = Math.floor(Date.now() / 1000);
+        for (const f of [ENGINE_FILE, LOCAL_FILE, OLD_STATE]) {
+          const st = join(folder, f);
+          if (existsSync(st)) renameSync(st, `${st}.removed-${stamp}`);
+        }
       }
       mkdirSync(folder, { recursive: true });
       const v = await Vault.join(new NodeFiles(resolve(folder)), ident, tr, inv.vaultId);

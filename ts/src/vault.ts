@@ -12,9 +12,9 @@ import { w } from "./core.ts";
 export const BIG_FILE = 8 * 1024 * 1024; // files at least this big get a heads-up while moving
 const HASH_PIECE = 4 * 1024 * 1024;
 const RACY_MS = 2000; // a file modified this close to when we hashed it is hashed again
-const ENGINE_FILE = ".tgsync/engine.json";
-const LOCAL_FILE = ".tgsync/local.json";
-const OLD_STATE = ".tgsync/state.json"; // folders of the TypeScript engine: their vault id is reused
+export const ENGINE_FILE = ".tgsync/engine.json";
+export const LOCAL_FILE = ".tgsync/local.json";
+export const OLD_STATE = ".tgsync/state.json"; // folders of the TypeScript engine: their vault id is reused
 
 export class VaultError extends Error {}
 
