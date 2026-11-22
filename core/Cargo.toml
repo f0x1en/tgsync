@@ -2,6 +2,10 @@
 resolver = "2"
 members = ["tgsync-core", "tgsync-sim", "tgsync-wasm"]
 
+# Sans-IO functions take every input (keys, nonces, clock) as an argument: long argument lists are expected.
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-or-later"

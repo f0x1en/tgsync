@@ -20,7 +20,6 @@ fn me_as_member(me: &Identity, name: &str) -> Result<Member> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn signed(
     ring: &KeyRing,
     vault_id: &str,

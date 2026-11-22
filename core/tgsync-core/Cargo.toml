@@ -21,3 +21,6 @@ unicode-normalization = "0.1"
 [dev-dependencies]
 hex = "0.4"
 serde_json = "1"
+
+[lints]
+workspace = true

@@ -179,8 +179,7 @@ impl Tree {
     /// Apply a `text` entry whose update was already imported into doc `doc` (text sha `sha`).
     /// Same doc at the path, or no node: the note now has the merged text (an edit beats a delete).
     /// Another file at the path, or a case clash: the note lands at a conflict-copy path.
-    #[allow(clippy::too_many_arguments)]
-    pub fn apply_text(&mut self, path: &str, doc: &str, sha: &str, size: i64, mtime: f64, author: &str, ts: f64, msg_id: i64) -> Applied {
+        pub fn apply_text(&mut self, path: &str, doc: &str, sha: &str, size: i64, mtime: f64, author: &str, ts: f64, msg_id: i64) -> Applied {
         let node = Node {
             path: path.to_owned(),
             sha: sha.to_owned(),
