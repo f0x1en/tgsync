@@ -309,7 +309,7 @@ export class Vault {
       if (ids.length >= count) break;
       h.update(part);
       total += part.length;
-      ids.push(await this.transport.send(KIND.chunk, this.engine.seal_chunk(fileId, ids.length, count, part, seed())));
+      ids.push(await this.transport.send(KIND.chunk, this.engine.sealChunk(fileId, ids.length, count, part, seed())));
     }
     if (ids.length !== count || total !== size) throw new Error("changed while uploading; run `tgsync push` again");
     return { sha: hexOf(h.digest()), blob: { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null } };
@@ -405,7 +405,7 @@ export class Vault {
     const wr = await this.files.writer(path);
     try {
       for (const [i, mid] of ids.entries()) {
-        const part = this.engine.open_chunk(blob.file_id, i, ids.length, await this.transport.fetch(mid));
+        const part = this.engine.openChunk(blob.file_id, i, ids.length, await this.transport.fetch(mid));
         h.update(part);
         await wr.write(part);
       }

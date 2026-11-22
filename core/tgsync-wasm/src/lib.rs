@@ -22,22 +22,27 @@ fn js(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
 }
 
-/// Deterministic stream of random bytes from one caller-provided seed.
+/// Deterministic stream of random bytes from one caller-provided seed. Never pass the same seed
+/// twice (AES-GCM nonces come from it); `label` keeps different uses of one seed apart anyway.
 struct Stream {
     seed: Vec<u8>,
+    label: &'static str,
     n: u64,
 }
 
 impl Stream {
-    fn new(seed: &[u8]) -> Result<Stream, JsError> {
+    fn new(seed: &[u8], label: &'static str) -> Result<Stream, JsError> {
         if seed.len() < 32 {
             return Err(js("seed must be at least 32 random bytes"));
         }
-        Ok(Stream { seed: seed.to_vec(), n: 0 })
+        Ok(Stream { seed: seed.to_vec(), label, n: 0 })
     }
     fn block(&mut self) -> [u8; 32] {
         self.n += 1;
         Sha256::new()
+            .chain_update(b"tgsync/wasm-stream/v1\0")
+            .chain_update(self.label.as_bytes())
+            .chain_update([0u8])
             .chain_update(&self.seed)
             .chain_update(self.n.to_be_bytes())
             .finalize()
@@ -52,6 +57,32 @@ impl Stream {
     fn hex8(&mut self) -> String {
         hex::encode(&self.block()[..8])
     }
+}
+
+/// A message id or unix time from JS: a finite, non-negative whole number.
+fn whole(x: f64, what: &str) -> Result<i64, JsError> {
+    if x.is_finite() && x >= 0.0 && x.fract() == 0.0 && x < 9.0e15 {
+        Ok(x as i64)
+    } else {
+        Err(js(format!("bad {what}: {x}")))
+    }
+}
+
+/// A message kind: exactly one character.
+fn kind_of(kind: &str) -> Result<char, JsError> {
+    let mut c = kind.chars();
+    match (c.next(), c.next()) {
+        (Some(k), None) => Ok(k),
+        _ => Err(js(format!("bad message kind {kind:?}"))),
+    }
+}
+
+/// A signer key from an untrusted join request: base64 of a valid Ed25519 public key.
+fn valid_signer(s: &str) -> bool {
+    B64.decode(s)
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .is_some_and(|k| ed25519_dalek::VerifyingKey::from_bytes(&k).is_ok())
 }
 
 fn identity(secret: &str, recipient: &str, signing_hex: Option<String>) -> Result<Identity, JsError> {
@@ -83,7 +114,8 @@ fn applied_json(a: &Applied) -> Value {
 pub struct Engine {
     vault: Vault,
     report: Report,
-    plan: Option<(u64, Push)>,
+    /// The planned record: (seq, plan, sealed yet).
+    plan: Option<(u64, Push, bool)>,
 }
 
 #[wasm_bindgen]
@@ -173,13 +205,17 @@ impl Engine {
     }
     #[wasm_bindgen(js_name = wantsBody)]
     pub fn wants_body(&self, kind: &str, id: f64) -> bool {
-        kind.chars().next().is_some_and(|k| self.vault.replica.wants_body(k, id as i64))
-    }
-    /// Feed message `id` (in increasing id order, after `cursor()`).
-    pub fn feed(&mut self, id: f64, kind: &str, body: &[u8]) {
-        if let Some(k) = kind.chars().next() {
-            self.vault.replica.feed(id as i64, k, body, &mut self.report);
+        match (kind_of(kind), whole(id, "message id")) {
+            (Ok(k), Ok(id)) => self.vault.replica.wants_body(k, id),
+            _ => false,
         }
+    }
+    /// Feed message `id` (in increasing id order, after `cursor()`). A message of a kind we do not
+    /// know (even an empty or long one) is skipped, and the cursor moves past it.
+    pub fn feed(&mut self, id: f64, kind: &str, body: &[u8]) -> Result<(), JsError> {
+        let k = kind_of(kind).unwrap_or('?');
+        self.vault.replica.feed(whole(id, "message id")?, k, body, &mut self.report);
+        Ok(())
     }
     /// End of a pull: returns the report as JSON and queues our rejected edits for re-sending.
     #[wasm_bindgen(js_name = finishPull)]
@@ -204,6 +240,7 @@ impl Engine {
     /// Returns JSON `{"seq", "entries", "done"}` or `null` if there is nothing to send.
     #[wasm_bindgen(js_name = planPush)]
     pub fn plan_push(&mut self, disk_json: &str, seed: &[u8]) -> Result<JsValue, JsError> {
+        self.plan = None; // a failed plan must not leave an older one behind
         let d: BTreeMap<String, Value> = serde_json::from_str(disk_json).map_err(js)?;
         let mut disk = BTreeMap::new();
         for (p, f) in d {
@@ -229,47 +266,50 @@ impl Engine {
                 .and_then(Value::as_str)
                 .ok_or_else(|| js(format!("{p}: sha missing")))?
                 .to_owned();
-            disk.insert(
-                p,
-                LocalFile {
-                    sha,
-                    size: f["size"].as_u64().unwrap_or(0),
-                    mtime: f["mtime"].as_f64().unwrap_or(0.0),
-                    content,
-                },
-            );
+            let size = f["size"].as_u64().ok_or_else(|| js(format!("{p}: size missing")))?;
+            let mtime = f["mtime"].as_f64().ok_or_else(|| js(format!("{p}: mtime missing")))?;
+            disk.insert(p, LocalFile { sha, size, mtime, content });
         }
-        let mut s = Stream::new(seed)?;
+        let mut s = Stream::new(seed, "plan")?;
         let (seq, push) = self.vault.plan_push(&disk, &mut || s.hex8()).map_err(js)?;
         if push.is_empty() {
             self.plan = None;
             return Ok(JsValue::NULL);
         }
         let out = json!({"seq": seq, "entries": push.entries, "done": push.done}).to_string();
-        self.plan = Some((seq, push));
+        self.plan = Some((seq, push, false));
         Ok(JsValue::from_str(&out))
     }
 
     /// Seal the planned record (sets the seq: save the engine before posting).
     #[wasm_bindgen(js_name = sealRecord)]
     pub fn seal_record(&mut self, ts: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        let (seq, push) = self.plan.as_ref().ok_or_else(|| js("no planned push"))?;
-        let nonce = Stream::new(seed)?.nonce();
-        let (seq, push) = (*seq, push.clone());
-        self.vault.seal_record(seq, &push, ts, &nonce).map_err(js)
+        let (seq, push, sealed) = self.plan.as_mut().ok_or_else(|| js("no planned push"))?;
+        let nonce = Stream::new(seed, "record")?.nonce();
+        let body = self.vault.seal_record(*seq, push, ts, &nonce).map_err(js)?;
+        *sealed = true;
+        Ok(body)
     }
 
     /// The record is posted: mark its files synced.
     pub fn pushed(&mut self) -> Result<(), JsError> {
-        let (_, push) = self.plan.take().ok_or_else(|| js("no planned push"))?;
-        self.vault.pushed(&push);
+        match self.plan.take() {
+            Some((_, push, true)) => self.vault.pushed(&push),
+            Some((seq, push, false)) => {
+                self.plan = Some((seq, push, false));
+                return Err(js("the planned record was not sealed (call sealRecord, then post it)"));
+            }
+            None => return Err(js("no planned push")),
+        }
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = sealChunk)]
     pub fn seal_chunk(&self, file_id: &str, index: u32, count: u32, data: &[u8], seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        oplog::seal_chunk(&self.vault.replica.keys, file_id, index, count, data, &Stream::new(seed)?.nonce()).map_err(js)
+        oplog::seal_chunk(&self.vault.replica.keys, file_id, index, count, data, &Stream::new(seed, "chunk")?.nonce()).map_err(js)
     }
 
+    #[wasm_bindgen(js_name = openChunk)]
     pub fn open_chunk(&self, file_id: &str, index: u32, count: u32, blob: &[u8]) -> Result<Vec<u8>, JsError> {
         oplog::open_chunk(&self.vault.replica.keys, file_id, index, count, blob).map_err(js)
     }
@@ -340,27 +380,27 @@ impl Engine {
 
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(&self, recipient: &str, name: &str, signer: Option<String>, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        let mut s = Stream::new(seed)?;
-        members::add(&self.vault.replica, recipient, name, signer.as_deref(), created as i64, &mut || {
+        let mut s = Stream::new(seed, "add")?;
+        members::add(&self.vault.replica, recipient, name, signer.as_deref(), whole(created, "time")?, &mut || {
             s.nonce()
         })
         .map_err(js)
     }
     #[wasm_bindgen(js_name = removeMember)]
     pub fn remove_member(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        let mut s = Stream::new(seed)?;
+        let mut s = Stream::new(seed, "remove")?;
         let key = s.key();
-        members::remove(&self.vault.replica, target, &key, created as i64, &mut || s.nonce()).map_err(js)
+        members::remove(&self.vault.replica, target, &key, whole(created, "time")?, &mut || s.nonce()).map_err(js)
     }
     #[wasm_bindgen(js_name = giveAdmin)]
     pub fn give_admin(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        let mut s = Stream::new(seed)?;
-        members::give_admin(&self.vault.replica, target, created as i64, &mut || s.nonce()).map_err(js)
+        let mut s = Stream::new(seed, "give")?;
+        members::give_admin(&self.vault.replica, target, whole(created, "time")?, &mut || s.nonce()).map_err(js)
     }
     #[wasm_bindgen(js_name = dropAdmin)]
     pub fn drop_admin(&self, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        let mut s = Stream::new(seed)?;
-        members::drop_admin(&self.vault.replica, created as i64, &mut || s.nonce()).map_err(js)
+        let mut s = Stream::new(seed, "drop")?;
+        members::drop_admin(&self.vault.replica, whole(created, "time")?, &mut || s.nonce()).map_err(js)
     }
 }
 
@@ -368,10 +408,10 @@ impl Engine {
 #[wasm_bindgen(js_name = createVault)]
 pub fn create_vault(secret: &str, recipient: &str, signing_hex: &str, name: &str, created: f64, seed: &[u8]) -> Result<String, JsError> {
     let me = identity(secret, recipient, Some(signing_hex.to_owned()))?;
-    let mut s = Stream::new(seed)?;
+    let mut s = Stream::new(seed, "create")?;
     let vault_id = s.hex8();
     let key = s.key();
-    let d = members::create(&me, name, &vault_id, &key, created as i64, &mut || s.nonce()).map_err(js)?;
+    let d = members::create(&me, name, &vault_id, &key, whole(created, "time")?, &mut || s.nonce()).map_err(js)?;
     Ok(json!({"vault_id": vault_id, "descriptor": B64.encode(d)}).to_string())
 }
 
@@ -398,14 +438,18 @@ pub fn decode_invite(code: &str) -> Result<String, JsError> {
 }
 
 #[wasm_bindgen(js_name = encodeInvite)]
-pub fn encode_invite(link: &str, vault_id: &str, fingerprint: &str, api_id: Option<f64>, api_hash: Option<String>) -> String {
-    let api = api_id.zip(api_hash).map(|(i, h)| (i as i64, h));
-    invites::encode_invite(&invites::Invite {
+pub fn encode_invite(link: &str, vault_id: &str, fingerprint: &str, api_id: Option<f64>, api_hash: Option<String>) -> Result<String, JsError> {
+    let api = match (api_id, api_hash) {
+        (Some(i), Some(h)) => Some((whole(i, "api id")?, h)),
+        (None, None) => None,
+        _ => return Err(js("give both the api id and the api hash, or neither")),
+    };
+    Ok(invites::encode_invite(&invites::Invite {
         link: link.into(),
         vault_id: vault_id.into(),
         fingerprint: fingerprint.into(),
         api,
-    })
+    }))
 }
 
 #[wasm_bindgen(js_name = encodeJoinRequest)]
@@ -422,7 +466,8 @@ pub fn encode_join_request(vault_id: &str, recipient: &str, name: &str, signer: 
 pub fn decode_join_request(body: &[u8]) -> String {
     let signer = serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|v| v.get("signer").and_then(Value::as_str).map(str::to_owned));
+        .and_then(|v| v.get("signer").and_then(Value::as_str).map(str::to_owned))
+        .filter(|s| valid_signer(s)); // a broken key is dropped: such a request cannot be accepted
     match invites::decode_request(body) {
         Some(r) => json!({"vault_id": r.vault_id, "recipient": r.recipient, "name": r.name, "signer": signer,
                           "code": short_code(&r.recipient)})

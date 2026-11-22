@@ -133,3 +133,20 @@ fn vault_keeps_resends_until_posted_and_never_writes_unsigned_records() {
     let (seq, plan) = v.plan_push(&Default::default(), &mut || "0000000000000000".into()).unwrap();
     assert!(v.seal_record(seq, &plan, 1.0, &[1; 12]).is_err());
 }
+
+#[test]
+fn a_join_request_cannot_borrow_someone_elses_signing_key() {
+    let (a, b) = (person(1), person(2));
+    let mut g = Group(vec![], 0);
+    let d = members::create(&a, "alice", "00112233aabbccdd", &[5; 32], 1, &mut g.n()).unwrap();
+    g.post(d);
+    let mut ra = Replica::new(a.clone(), None);
+    g.pull(&mut ra);
+    // bob's request claims alice's (the admin's) signer: refused.
+    let e = members::add(&ra, &b.recipient, "bob", a.signer().as_deref(), 2, &mut g.n()).unwrap_err().to_string();
+    assert!(e.contains("another member's signing key"), "{e}");
+    // A key that is not an Ed25519 public key: refused.
+    let e = members::add(&ra, &b.recipient, "bob", Some("AAAA"), 2, &mut g.n()).unwrap_err().to_string();
+    assert!(e.contains("broken signing key"), "{e}");
+    assert!(members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 2, &mut g.n()).is_ok());
+}

@@ -3,6 +3,8 @@
 //! sections 4 and 11). Each function returns the descriptor bytes to post. Randomness (keys, nonces)
 //! and the clock come from the caller.
 
+use base64::Engine;
+
 use crate::crypto::{KeyRing, NONCE_LEN};
 use crate::descriptor::{build, Identity, Member, Signing};
 use crate::replica::Replica;
@@ -100,6 +102,21 @@ pub fn add(
         return Err(err(
             "their join request has no signing key; they need a current tgsync and must ask to join again",
         ));
+    }
+    let s = signer.unwrap();
+    // The signer comes from an untrusted join request; the short code covers only the recipient.
+    // It must be a real Ed25519 key and nobody else's (else the newcomer would look like that member,
+    // e.g. an admin).
+    let valid = base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .is_some_and(|k| ed25519_dalek::VerifyingKey::from_bytes(&k).is_ok());
+    if !valid {
+        return Err(err("their join request has a broken signing key; they must ask to join again"));
+    }
+    if r.members.iter().any(|m| m.signer.as_deref() == Some(s)) {
+        return Err(err("their join request uses another member's signing key; refusing (it may be an impersonation attempt)"));
     }
     let mut members = r.members.clone();
     members.push(Member {
