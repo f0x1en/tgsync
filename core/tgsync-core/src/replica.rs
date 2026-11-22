@@ -43,6 +43,8 @@ pub struct Replica {
     pub vault_id: Option<String>,
     pub keys: KeyRing,
     pub members: Vec<Member>,
+    /// Admins of the last accepted v2 descriptor (`None` until the vault has one).
+    pub admins: Option<Vec<String>>,
     pub tree: Tree,
     /// Last message id fully processed.
     pub cursor: i64,
@@ -63,6 +65,7 @@ impl Replica {
             vault_id,
             keys: KeyRing::new(),
             members: vec![],
+            admins: None,
             tree: Tree::new(),
             cursor: 0,
             authors: BTreeMap::new(),
@@ -88,8 +91,11 @@ impl Replica {
 
     /// Re-load a descriptor stored by an earlier pull (already validated then).
     pub fn load_descriptor(&mut self, data: &[u8]) {
-        if let Ok(Some(d)) = descriptor::accept(data, &self.me, &mut self.keys, self.vault_id.as_deref(), true) {
+        if let Ok(Some(d)) = descriptor::accept(data, &self.me, &mut self.keys, self.vault_id.as_deref(), true, self.admins.as_deref()) {
             self.members = d.members;
+            if d.admins.is_some() {
+                self.admins = d.admins;
+            }
         }
     }
 
@@ -111,11 +117,12 @@ impl Replica {
         match kind {
             KIND_DESCRIPTOR if id > self.desc_seen => {
                 self.desc_seen = id;
-                match descriptor::accept(body, &self.me, &mut self.keys, self.vault_id.as_deref(), false) {
+                match descriptor::accept(body, &self.me, &mut self.keys, self.vault_id.as_deref(), false, self.admins.as_deref()) {
                     Ok(None) if self.has_keys() && !self.active => {
                         // Dropped before we ever synced: a later re-add is a fresh join.
                         self.keys = KeyRing::new();
                         self.members.clear();
+                        self.admins = None;
                     }
                     Ok(None) => {
                         if self.has_keys() {
@@ -125,6 +132,9 @@ impl Replica {
                     Ok(Some(d)) => {
                         self.vault_id.get_or_insert(d.vault_id);
                         self.members = d.members;
+                        if d.admins.is_some() {
+                            self.admins = d.admins;
+                        }
                         rep.descriptors.push((id, body.to_vec()));
                     }
                     Err(e) => rep.problems.push((id, format!("rejected descriptor: {e}"))),

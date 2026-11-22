@@ -9,13 +9,14 @@ fn main() {
     };
     let (seeds, start, steps) = (arg("--seeds", 1000), arg("--start", 0), arg("--steps", 200) as usize);
     let t = std::time::Instant::now();
-    let (mut msgs, mut conflicts, mut problems) = (0, 0, 0);
+    let (mut msgs, mut conflicts, mut problems, mut stale) = (0, 0, 0, 0);
     for seed in start..start + seeds {
         match tgsync_sim::run(seed, steps) {
             Ok(s) => {
                 msgs += s.messages;
                 conflicts += s.conflicts;
                 problems += s.problems;
+                stale += s.stale_epoch;
             }
             Err(e) => {
                 eprintln!("{e}");
@@ -25,7 +26,7 @@ fn main() {
         }
     }
     println!(
-        "{seeds} seeds x {steps} steps ok in {:.1}s: {msgs} messages, {conflicts} conflict copies, {problems} skipped messages",
+        "{seeds} seeds x {steps} steps ok in {:.1}s: {msgs} messages, {conflicts} conflict copies, {problems} skipped messages, {stale} records sealed with an old key",
         t.elapsed().as_secs_f64()
     );
 }

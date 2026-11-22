@@ -62,7 +62,6 @@ pub struct Sim {
     pub rng: Rng,
     pub trace: Vec<String>,
     group: Vec<(i64, char, Vec<u8>)>,
-    ring: KeyRing,
     clients: Vec<Client>,
     next_content: u64,
     clock: f64,
@@ -75,6 +74,9 @@ pub struct Stats {
     pub messages: usize,
     pub conflicts: usize,
     pub problems: usize,
+    /// Records sealed with an older epoch than the newest the group had at that point
+    /// (the writer had not pulled a key rotation yet).
+    pub stale_epoch: usize,
 }
 
 /// An age identity derived from the seed, so member ids (and conflict-copy names) replay exactly.
@@ -84,7 +86,7 @@ fn person(rng: &mut Rng) -> Identity {
         .unwrap()
         .to_uppercase();
     let id: age::x25519::Identity = secret.parse().unwrap();
-    Identity { secret: id.to_string().expose_secret().to_string(), recipient: id.to_public().to_string() }
+    Identity::new(id.to_string().expose_secret(), &id.to_public().to_string())
 }
 
 impl Sim {
@@ -94,13 +96,13 @@ impl Sim {
         ring.add(1, &rng.bytes::<32>()).unwrap();
         let people: Vec<Identity> = (0..n_clients).map(|_| person(&mut rng)).collect();
         let members: Vec<Member> =
-            people.iter().enumerate().map(|(i, p)| Member { recipient: p.recipient.clone(), name: format!("c{i}") }).collect();
-        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, None, 0, &mut || rng.bytes()).unwrap();
+            people.iter().enumerate().map(|(i, p)| Member::new(&p.recipient, &format!("c{i}"))).collect();
+        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, None, 0, None, &mut || rng.bytes()).unwrap();
         let clients = people
             .into_iter()
             .map(|p| Client { replica: Replica::new(p, None), disk: BTreeMap::new(), synced: BTreeMap::new(), sent_seq: 0 })
             .collect();
-        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], ring, clients, next_content: 0, clock: 1_762_850_000.0, faults: true }
+        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true }
     }
 
     fn post(&mut self, kind: char, body: Vec<u8>) {
@@ -112,6 +114,10 @@ impl Sim {
     pub fn step(&mut self) {
         self.clock += 1.0 + self.rng.below(120) as f64;
         let c = self.rng.below(self.clients.len());
+        if self.clients.len() > 1 && self.rng.chance(3) {
+            self.churn();
+            return;
+        }
         match self.rng.below(10) {
             0..=3 => self.edit(c),
             4 => self.delete(c),
@@ -120,6 +126,45 @@ impl Sim {
                 self.pull(c, true);
             }
         }
+    }
+
+    /// The admin (c0) removes a member (new epoch key) or adds a removed one back.
+    /// A re-added member joins afresh: new replica, nothing synced, files on disk kept.
+    fn churn(&mut self) {
+        self.pull(0, false);
+        let k = 1 + self.rng.below(self.clients.len() - 1);
+        let target = self.clients[k].replica.me.recipient.clone();
+        let admin = &self.clients[0].replica;
+        let mut ring = admin.keys.clone();
+        let mut members = admin.members.clone();
+        let proof_epoch = if members.iter().any(|m| m.recipient == target) {
+            members.retain(|m| m.recipient != target);
+            let old = ring.current_epoch().unwrap();
+            ring.add(old + 1, &self.rng.bytes::<32>()).unwrap();
+            self.trace.push(format!("c0 removes c{k} (epoch {})", old + 1));
+            Some(old)
+        } else {
+            members.push(Member::new(&target, &format!("c{k}")));
+            let me = self.clients[k].replica.me.clone();
+            self.clients[k].replica = Replica::new(me, None);
+            self.clients[k].synced.clear();
+            self.trace.push(format!("c0 adds c{k} back"));
+            None
+        };
+        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, proof_epoch, 0, None, &mut || self.rng.bytes()).unwrap();
+        self.post(KIND_DESCRIPTOR, desc);
+    }
+
+    fn churn_add(&mut self, k: usize) {
+        let admin = &self.clients[0].replica;
+        let (ring, mut members) = (admin.keys.clone(), admin.members.clone());
+        let me = self.clients[k].replica.me.clone();
+        members.push(Member::new(&me.recipient, &format!("c{k}")));
+        self.clients[k].replica = Replica::new(me, None);
+        self.clients[k].synced.clear();
+        self.trace.push(format!("c0 adds c{k} back"));
+        let desc = descriptor::build(&ring, "5eed5eed5eed5eed", &members, None, 0, None, &mut || self.rng.bytes()).unwrap();
+        self.post(KIND_DESCRIPTOR, desc);
     }
 
     fn edit(&mut self, c: usize) {
@@ -149,6 +194,9 @@ impl Sim {
     /// synced; Telegram delivering the same upload twice.
     fn push(&mut self, c: usize) {
         let cl = &self.clients[c];
+        if cl.replica.removed || !cl.replica.has_keys() {
+            return;
+        }
         let mut entries = vec![];
         let mut done = vec![];
         let paths: BTreeSet<&String> = cl.disk.keys().chain(cl.synced.keys()).collect();
@@ -174,7 +222,7 @@ impl Sim {
         let seq = cl.sent_seq.max(cl.replica.next_seq() - 1) + 1;
         self.clients[c].sent_seq = seq;
         let rec = Record { author: self.clients[c].replica.me.id(), seq, ts: self.clock, entries, payload: vec![] };
-        let body = encode_record(&self.ring, &rec, &self.rng.bytes()).unwrap();
+        let body = encode_record(&self.clients[c].replica.keys, &rec, &self.rng.bytes()).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
         self.trace.push(format!("c{c} push seq {seq} {} entries{}{}", done.len(),
@@ -194,10 +242,12 @@ impl Sim {
         }
     }
 
-    /// Replay the log and write the tree to disk. `lag`: this client may see only part of the log.
+    /// Replay the log and write the tree to disk. `lag`: the newest messages may not be visible yet.
     fn pull(&mut self, c: usize, lag: bool) -> Report {
         let cursor = self.clients[c].replica.cursor as usize;
-        let visible = if lag && self.rng.chance(30) { cursor + self.rng.below(self.group.len() - cursor + 1) } else { self.group.len() };
+        // Telegram may not show the newest few messages yet; it never hides old ones.
+        let len = self.group.len();
+        let visible = if lag && self.rng.chance(30) { len - self.rng.below((len - cursor).min(3) + 1) } else { len };
         let mut rep = Report::default();
         let r = &mut self.clients[c].replica;
         for _ in 0..2 {
@@ -219,7 +269,9 @@ impl Sim {
     /// PROTOCOL.md section 9 "Materialize": write what changed, never clobber unpushed local edits.
     fn materialize(&mut self, c: usize) {
         let cl = &mut self.clients[c];
-        cl.replica.active = true;
+        if cl.replica.has_keys() {
+            cl.replica.active = true;
+        }
         let tree: BTreeMap<String, String> =
             cl.replica.tree.nodes.values().filter(|n| n.sha != DIR).map(|n| (n.path.clone(), n.sha.clone())).collect();
         for (p, sha) in &tree {
@@ -244,6 +296,20 @@ impl Sim {
     pub fn settle_and_check(&mut self) -> Result<Stats, String> {
         self.trace.push("-- settle".into());
         self.faults = false;
+        for k in 1..self.clients.len() {
+            self.pull(0, false);
+            self.pull(k, false); // learn whether we were removed
+            let recipient = self.clients[k].replica.me.recipient.clone();
+            if !self.clients[0].replica.members.iter().any(|m| m.recipient == recipient) {
+                self.churn_add(k);
+            } else if self.clients[k].replica.removed {
+                // Saw its removal but was added back since: the user runs `tgsync join` again.
+                let me = self.clients[k].replica.me.clone();
+                self.clients[k].replica = Replica::new(me, None);
+                self.clients[k].synced.clear();
+                self.trace.push(format!("c{k} joins again"));
+            }
+        }
         for round in 0.. {
             let before = self.group.len();
             for c in 0..self.clients.len() {
@@ -263,7 +329,13 @@ impl Sim {
         let first = &self.clients[0].replica.tree;
         for (i, cl) in self.clients.iter().enumerate() {
             if cl.replica.tree != *first {
-                return Err(format!("c{i}'s tree differs from c0's"));
+                let (a, b) = (&first.nodes, &cl.replica.tree.nodes);
+                let diff: Vec<String> = a.keys().chain(b.keys()).collect::<BTreeSet<_>>().into_iter()
+                    .filter(|p| a.get(*p).map(|n| (&n.sha, n.msg_id)) != b.get(*p).map(|n| (&n.sha, n.msg_id)))
+                    .map(|p| format!("{p}: c0 {:?} / c{i} {:?}", a.get(p).map(|n| (&n.sha, n.msg_id)), b.get(p).map(|n| (&n.sha, n.msg_id))))
+                    .collect();
+                return Err(format!("c{i}'s tree differs from c0's (c{i} cursor {}, removed {}):\n  {}",
+                    cl.replica.cursor, cl.replica.removed, diff.join("\n  ")));
             }
             let tree: BTreeMap<String, String> =
                 cl.replica.tree.nodes.values().filter(|n| n.sha != DIR).map(|n| (n.path.clone(), n.sha.clone())).collect();
@@ -284,6 +356,11 @@ impl Sim {
         let mut bases: BTreeSet<(String, String)> = BTreeSet::new();
         for (id, kind, body) in &self.group {
             let before = r.authors.clone();
+            if *kind == KIND_RECORD && r.has_keys() {
+                if let Ok(e) = tgsync_core::crypto::blob_epoch(body) {
+                    stats.stale_epoch += usize::from(e < r.keys.current_epoch().unwrap());
+                }
+            }
             r.feed(*id, *kind, body, &mut rep);
             if *kind == KIND_RECORD && r.authors != before {
                 let rec = tgsync_core::oplog::decode_record(&r.keys, body).unwrap();

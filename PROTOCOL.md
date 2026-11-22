@@ -85,7 +85,10 @@ Says who the members are and gives each of them the vault keys. Canonical JSON:
 **Accepting a descriptor** (with our identity and our current ring):
 1. Parse; `v` must be 1; all fields above present. If we know the vault id, it must match.
 2. If our ring is not empty and `epoch` < our highest epoch: reject (replay).
-3. Find our member id in `members`. Not there -> the descriptor is valid but **excludes us** (result: none).
+3. Find our member id in `members`. Not there -> the descriptor **excludes us** (result: none). If our ring
+   is not empty, first verify `proof` with our ring as in step 6 (the proof epoch must be one we hold);
+   if that fails, reject it. Otherwise anyone who can post in the group could make us believe we were
+   removed. (Python and the TypeScript engine skip this check; the Rust core does it.)
 4. Unwrap our keys. They must contain `epoch`. Every epoch we already hold must have the same key, else reject.
 5. Check `keycheck`. `proof_epoch` must be `epoch` or `epoch - 1`.
 6. Verify `proof` (open it, compare to the digest of the body without `proof`):
@@ -207,7 +210,7 @@ Messages carry `v: 1` (descriptor, record header, join request), `TGS1` (sealed 
 (captions), `tgsync1-` (invites). Readers reject versions they do not know. New optional fields may
 be added; readers ignore unknown fields. Changing the meaning of a field needs a new version.
 
-## 11. Admins (descriptor `v: 2`, planned; the TypeScript engine implements it, Python does not)
+## 11. Admins (descriptor `v: 2`; implemented in the Rust core `core/`, not in Python or TypeScript)
 
 Only **admins** may change who is in the vault. Everyone else can only sync. Admin rights pass
 from one person to another.

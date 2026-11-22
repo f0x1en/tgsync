@@ -11,11 +11,11 @@ use tgsync_core::tree::Applied;
 
 fn person() -> Identity {
     let id = age::x25519::Identity::generate();
-    Identity { secret: id.to_string().expose_secret().to_string(), recipient: id.to_public().to_string() }
+    Identity::new(id.to_string().expose_secret(), &id.to_public().to_string())
 }
 
 fn member(p: &Identity, name: &str) -> Member {
-    Member { recipient: p.recipient.clone(), name: name.into() }
+    Member::new(&p.recipient, name)
 }
 
 /// The group: an ordered list of (id, kind, body).
@@ -39,7 +39,15 @@ impl Group {
 
     fn descriptor(&mut self, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>) {
         let mut n = self.n;
-        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, &mut || { n = n.wrapping_add(1); [n; 12] }).unwrap();
+        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, None, &mut || { n = n.wrapping_add(1); [n; 12] }).unwrap();
+        self.n = n;
+        self.post('d', data);
+    }
+
+    fn descriptor_v2(&mut self, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>, admins: &[String], key: &[u8; 32]) {
+        let mut n = self.n;
+        let signing = descriptor::Signing { admins, key };
+        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, Some(signing), &mut || { n = n.wrapping_add(1); [n; 12] }).unwrap();
         self.n = n;
         self.post('d', data);
     }
@@ -195,4 +203,117 @@ fn late_joiner_receives_history_and_non_member_gets_nothing() {
     g.pull(&mut rc);
     assert_eq!(rc.tree.get("old.md").unwrap().sha, "s1");
     assert_eq!(rc.cursor, 3);
+}
+
+// ------------------------------------------------------------------ admins (PROTOCOL.md section 11)
+
+fn admin_person(k: u8) -> Identity {
+    let mut p = person();
+    p.signing = Some([k; 32]);
+    p
+}
+
+fn smember(p: &Identity, name: &str) -> Member {
+    Member { signer: p.signer(), ..member(p, name) }
+}
+
+/// alice (admin) + bob in a v2 vault.
+fn admin_pair() -> (Group, KeyRing, Identity, Identity, Replica, Replica) {
+    let (a, b) = (admin_person(1), admin_person(2));
+    let mut g = Group::default();
+    let ring = ring1();
+    let admins = [a.signer().unwrap()];
+    g.descriptor_v2(&ring, &[smember(&a, "alice")], None, &admins, &[1; 32]);
+    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob")], None, &admins, &[1; 32]);
+    let (mut ra, mut rb) = (Replica::new(a.clone(), None), Replica::new(b.clone(), None));
+    assert!(g.pull(&mut ra).problems.is_empty());
+    assert!(g.pull(&mut rb).problems.is_empty());
+    (g, ring, a, b, ra, rb)
+}
+
+#[test]
+fn admin_vault_accepts_its_admin() {
+    let (_, _, a, b, ra, rb) = admin_pair();
+    assert_eq!(ra.admins, Some(vec![a.signer().unwrap()]));
+    assert_eq!(rb.members.len(), 2);
+    assert_eq!(rb.members[1].signer, b.signer());
+}
+
+#[test]
+fn non_admin_member_cannot_change_members() {
+    let (mut g, ring, a, b, mut ra, _) = admin_pair();
+    let carol = admin_person(3);
+    // bob holds the vault key (valid proof) but is not an admin.
+    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob"), smember(&carol, "carol")], None, &[b.signer().unwrap()], &[2; 32]);
+    let rep = g.pull(&mut ra);
+    assert_eq!(rep.problems[0].1, "rejected descriptor: descriptor not signed by an admin");
+    assert_eq!(ra.members.len(), 2);
+}
+
+#[test]
+fn give_admin_then_drop_admin() {
+    let (mut g, ring, a, b, mut ra, _) = admin_pair();
+    let both = vec![a.signer().unwrap(), b.signer().unwrap()];
+    let members = [smember(&a, "alice"), smember(&b, "bob")];
+    g.descriptor_v2(&ring, &members, None, &both, &[1; 32]); // alice gives admin to bob
+    g.descriptor_v2(&ring, &members, None, &[b.signer().unwrap()], &[2; 32]); // bob: alice drops out
+    assert!(g.pull(&mut ra).problems.is_empty());
+    assert_eq!(ra.admins, Some(vec![b.signer().unwrap()]));
+    g.descriptor_v2(&ring, &members, None, &both, &[1; 32]); // alice is no longer allowed
+    assert!(g.pull(&mut ra).problems[0].1.contains("not signed by an admin"));
+}
+
+#[test]
+fn v1_descriptor_rejected_after_v2() {
+    let (mut g, ring, a, b, mut ra, _) = admin_pair();
+    g.descriptor(&ring, &[member(&a, "alice"), member(&b, "bob"), member(&person(), "x")], None);
+    assert!(g.pull(&mut ra).problems[0].1.contains("v1 descriptor in a vault that has admins"));
+}
+
+#[test]
+fn tampered_signature_rejected() {
+    let (mut g, ring, a, b, mut ra, _) = admin_pair();
+    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob")], None, &[a.signer().unwrap()], &[1; 32]);
+    let last = g.msgs.len() - 1;
+    let text = String::from_utf8(g.msgs[last].2.clone()).unwrap().replace("\"created\":1", "\"created\":2");
+    g.msgs[last].2 = text.into_bytes();
+    assert!(g.pull(&mut ra).problems[0].1.contains("signature is invalid"));
+}
+
+#[test]
+fn admin_must_be_a_member() {
+    let (mut g, ring, a, b, mut ra, _) = admin_pair();
+    let outsider = admin_person(9);
+    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob")], None, &[a.signer().unwrap(), outsider.signer().unwrap()], &[1; 32]);
+    assert!(g.pull(&mut ra).problems[0].1.contains("an admin is not a member"));
+}
+
+#[test]
+fn forged_removal_does_not_remove_us() {
+    // v1 and v2 alike: an outsider posts a descriptor without bob, proven with a key bob does not know.
+    for v2 in [false, true] {
+        let (mut g, _, a, _, _, mut rb) = if v2 { admin_pair() } else { pair() };
+        let mut fake = KeyRing::new();
+        fake.add(1, &[9u8; 32]).unwrap();
+        fake.add(2, &[8u8; 32]).unwrap();
+        if v2 {
+            g.descriptor_v2(&fake, &[smember(&a, "alice")], Some(1), &[a.signer().unwrap()], &[1; 32]);
+        } else {
+            g.descriptor(&fake, &[member(&a, "alice")], Some(1));
+        }
+        let rep = g.pull(&mut rb);
+        assert!(!rb.removed, "v2={v2}: a forged removal must not remove us");
+        assert!(rep.problems[0].1.starts_with("rejected descriptor"), "v2={v2}: {:?}", rep.problems);
+    }
+}
+
+#[test]
+fn real_removal_in_admin_vault() {
+    let (mut g, mut ring, a, _, mut ra, mut rb) = admin_pair();
+    ring.add(2, &[2u8; 32]).unwrap();
+    g.descriptor_v2(&ring, &[smember(&a, "alice")], Some(1), &[a.signer().unwrap()], &[1; 32]);
+    assert!(g.pull(&mut ra).problems.is_empty());
+    g.pull(&mut rb);
+    assert!(rb.removed);
+    assert_eq!(ra.members.len(), 1);
 }

@@ -121,7 +121,7 @@ use tgsync_core::tree::{Applied, Tree};
 
 fn ident(v: &Value, who: &str) -> Identity {
     let i = &v["identities"][who];
-    Identity { secret: s(&i["secret"]).into(), recipient: s(&i["recipient"]).into() }
+    Identity::new(s(&i["secret"]), s(&i["recipient"]))
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn descriptor_sequence() {
         let want = d[format!("expect_{who}")].as_array().unwrap();
         assert_eq!(seq.len(), want.len());
         for (data, want) in seq.iter().zip(want) {
-            let got = descriptor::accept(s(data).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false).unwrap();
+            let got = descriptor::accept(s(data).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false, None).unwrap();
             if want == "excluded" {
                 assert!(got.is_none(), "{who}: expected excluded");
             } else {
@@ -158,9 +158,9 @@ fn forged_descriptor_rejected() {
     let d = &v["descriptors"];
     let me = ident(&v, "alice");
     let mut ring = KeyRing::new();
-    descriptor::accept(s(&d["sequence"][0]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false).unwrap();
+    descriptor::accept(s(&d["sequence"][0]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false, None).unwrap();
     let before = ring.clone();
-    assert!(descriptor::accept(s(&d["forged_after_d1"]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false).is_err());
+    assert!(descriptor::accept(s(&d["forged_after_d1"]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false, None).is_err());
     assert_eq!(ring, before, "a rejected descriptor must not change the ring");
 }
 
@@ -171,14 +171,14 @@ fn descriptor_roundtrip() {
     let mut ring = KeyRing::new();
     ring.add(1, &[7u8; 32]).unwrap();
     let members = [
-        descriptor::Member { recipient: alice.recipient.clone(), name: "alice ü".into() },
-        descriptor::Member { recipient: bob.recipient.clone(), name: "bob".into() },
+        descriptor::Member::new(&alice.recipient, "alice ü"),
+        descriptor::Member::new(&bob.recipient, "bob"),
     ];
     let mut n = 0u8;
     let mut nonce = || { n += 1; [n; 12] };
-    let data = descriptor::build(&ring, "a1b2c3d4e5f60718", &members, None, 1_762_850_000, &mut nonce).unwrap();
+    let data = descriptor::build(&ring, "a1b2c3d4e5f60718", &members, None, 1_762_850_000, None, &mut nonce).unwrap();
     let mut bob_ring = KeyRing::new();
-    let got = descriptor::accept(&data, &bob, &mut bob_ring, None, false).unwrap().unwrap();
+    let got = descriptor::accept(&data, &bob, &mut bob_ring, None, false, None).unwrap().unwrap();
     assert_eq!(got.members, members);
     assert_eq!(bob_ring, ring);
 }
