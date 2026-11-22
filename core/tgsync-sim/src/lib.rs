@@ -685,6 +685,10 @@ pub fn run(seed: u64, steps: usize) -> Result<Stats, String> {
         .map_err(|e| format!("seed {seed}: {e}\ntrace:\n  {}", sim.trace.join("\n  ")))
 }
 
+fn hex8(b: [u8; 8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -726,8 +730,4 @@ mod tests {
         };
         assert_eq!(trace(7), trace(7));
     }
-}
-
-fn hex8(b: [u8; 8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
