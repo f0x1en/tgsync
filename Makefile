@@ -1,7 +1,7 @@
 # Dev shortcuts. Run `uv venv && uv pip install -e ".[dev]"` once first.
 PY ?= .venv/bin/python
 
-.PHONY: check test live ts plugin
+.PHONY: check test live ts plugin rust
 
 check:  ## lint + types + tests (same as CI)
 	$(PY) -m ruff check src tests scripts
@@ -20,3 +20,6 @@ ts:     ## TypeScript engine + Node CLI: type check, tests, and the Python CLI's
 
 plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm install` in obsidian/ once
 	cd obsidian && npm run build
+
+rust:   ## Rust core (core/): tests, incl. spec/vectors.json
+	cd core && cargo test
