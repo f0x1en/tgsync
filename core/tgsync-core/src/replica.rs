@@ -321,10 +321,9 @@ impl Replica {
                 }
                 match decode_record(&self.keys, body) {
                     Err(e) => {
-                        if blob_epoch(body).is_ok_and(|ep| !self.keys.has(ep)) {
-                            self.blocked = true; // sealed with a key we will get later
-                            return;
-                        }
+                        // Not blocking here: once we hold keys, the descriptor with any newer key
+                        // comes earlier in the log than records sealed with it. A record with an
+                        // epoch we never got is junk; waiting for it would stop us for good.
                         rep.problems.push((id, format!("unreadable record: {e}")));
                     }
                     Ok(rec) => {

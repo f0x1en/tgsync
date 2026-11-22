@@ -172,6 +172,10 @@ impl Sim {
             self.restart(c);
             return;
         }
+        if self.faults && self.rng.chance(2) {
+            self.garbage();
+            return;
+        }
         match self.rng.below(10) {
             0..=3 => self.edit(c),
             4 => self.delete(c),
@@ -208,6 +212,31 @@ impl Sim {
         self.clients[k].vault.synced.clear();
         self.trace.push(format!("c0 adds c{k} back"));
         self.post(KIND_DESCRIPTOR, desc);
+    }
+
+    /// Someone in the group (not a member, or a buggy client) posts junk: random bytes, or a real
+    /// message with bits flipped, under any kind. Replicas must skip it without panicking.
+    fn garbage(&mut self) {
+        let kind = ['d', 'r', 'c', 'j', 'x'][self.rng.below(5)];
+        // (Copies flip bits only in the first 48 bytes: message bytes are not the same in every run,
+        // because Loro's encoding is not byte-stable, so a position based on the length would make
+        // the run differ.)
+        let (body, what) = if self.rng.chance(50) || self.group.is_empty() {
+            let n = self.rng.below(300);
+            ((0..n).map(|_| self.rng.next() as u8).collect::<Vec<u8>>(), format!("{n} random bytes"))
+        } else {
+            let src = self.rng.below(self.group.len());
+            let mut b = self.group[src].2.clone();
+            for _ in 0..1 + self.rng.below(4) {
+                let i = self.rng.below(48);
+                if i < b.len() {
+                    b[i] ^= 1 << self.rng.below(8);
+                }
+            }
+            (b, format!("copy of msg {} with bits flipped", src + 1))
+        };
+        self.trace.push(format!("junk message, kind {kind}: {what}"));
+        self.post(kind, body);
     }
 
     /// The program stops and starts again: the replica is saved and loaded back (keys come back
