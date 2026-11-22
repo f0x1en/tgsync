@@ -3,9 +3,13 @@
 //! Callers pass in nonces, keys and timestamps. See PROTOCOL.md.
 
 pub mod crypto;
+pub mod descriptor;
+pub mod identity;
 pub mod invites;
 pub mod oplog;
 pub mod paths;
+pub mod replica;
+pub mod tree;
 
 /// Every failure the engine reports. The message is meant for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]

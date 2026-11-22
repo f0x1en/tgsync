@@ -115,3 +115,99 @@ fn paths_and_conflict_names() {
         assert_eq!(paths::conflict_name(s(&c["path"]), s(&c["author"]), c["ts"].as_f64().unwrap()), s(&c["out"]));
     }
 }
+
+use tgsync_core::descriptor::{self, Identity};
+use tgsync_core::tree::{Applied, Tree};
+
+fn ident(v: &Value, who: &str) -> Identity {
+    let i = &v["identities"][who];
+    Identity { secret: s(&i["secret"]).into(), recipient: s(&i["recipient"]).into() }
+}
+
+#[test]
+fn descriptor_sequence() {
+    let v = v();
+    let d = &v["descriptors"];
+    for who in ["alice", "bob"] {
+        let me = ident(&v, who);
+        let mut ring = KeyRing::new();
+        let seq = d["sequence"].as_array().unwrap();
+        let want = d[format!("expect_{who}")].as_array().unwrap();
+        assert_eq!(seq.len(), want.len());
+        for (data, want) in seq.iter().zip(want) {
+            let got = descriptor::accept(s(data).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false).unwrap();
+            if want == "excluded" {
+                assert!(got.is_none(), "{who}: expected excluded");
+            } else {
+                let got = got.unwrap();
+                assert_eq!(u64::from(got.epoch), want["epoch"].as_u64().unwrap());
+                let names: Vec<&str> = got.members.iter().map(|m| m.name.as_str()).collect();
+                let want_names: Vec<&str> = want["members"].as_array().unwrap().iter().map(s).collect();
+                assert_eq!(names, want_names);
+            }
+        }
+        if who == "alice" {
+            assert_eq!(hex::encode(ring.key(2).unwrap()), s(&d["epoch2_key"]));
+        }
+    }
+}
+
+#[test]
+fn forged_descriptor_rejected() {
+    let v = v();
+    let d = &v["descriptors"];
+    let me = ident(&v, "alice");
+    let mut ring = KeyRing::new();
+    descriptor::accept(s(&d["sequence"][0]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false).unwrap();
+    let before = ring.clone();
+    assert!(descriptor::accept(s(&d["forged_after_d1"]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false).is_err());
+    assert_eq!(ring, before, "a rejected descriptor must not change the ring");
+}
+
+#[test]
+fn descriptor_roundtrip() {
+    let v = v();
+    let (alice, bob) = (ident(&v, "alice"), ident(&v, "bob"));
+    let mut ring = KeyRing::new();
+    ring.add(1, &[7u8; 32]).unwrap();
+    let members = [
+        descriptor::Member { recipient: alice.recipient.clone(), name: "alice ü".into() },
+        descriptor::Member { recipient: bob.recipient.clone(), name: "bob".into() },
+    ];
+    let mut n = 0u8;
+    let mut nonce = || { n += 1; [n; 12] };
+    let data = descriptor::build(&ring, "a1b2c3d4e5f60718", &members, None, 1_762_850_000, &mut nonce).unwrap();
+    let mut bob_ring = KeyRing::new();
+    let got = descriptor::accept(&data, &bob, &mut bob_ring, None, false).unwrap().unwrap();
+    assert_eq!(got.members, members);
+    assert_eq!(bob_ring, ring);
+}
+
+#[test]
+fn replay() {
+    let v = v();
+    let rv = &v["replay"];
+    let mut t = Tree::new();
+    let mut results = vec![];
+    for m in rv["log"].as_array().unwrap() {
+        for e in m["entries"].as_array().unwrap() {
+            let r = t.apply_entry(e, s(&m["author"]), m["ts"].as_f64().unwrap(), m["msg_id"].as_i64().unwrap());
+            results.push(match r {
+                None => Value::Null,
+                Some(Applied::Put(p)) => serde_json::json!(["put", p, null]),
+                Some(Applied::Noop(p)) => serde_json::json!(["noop", p, null]),
+                Some(Applied::Delete(p)) => serde_json::json!(["delete", p, null]),
+                Some(Applied::Mkdir(p)) => serde_json::json!(["mkdir", p, null]),
+                Some(Applied::Rmdir(p)) => serde_json::json!(["rmdir", p, null]),
+                Some(Applied::Conflict(p, c)) => serde_json::json!(["conflict", p, c]),
+            });
+        }
+    }
+    assert_eq!(Value::from(results), rv["results"]);
+    let tree: serde_json::Map<String, Value> = t
+        .nodes
+        .iter()
+        .map(|(p, n)| (p.clone(), serde_json::json!({"sha": n.sha, "author": n.author, "msg_id": n.msg_id, "payload_msg": n.blob.get("payload_msg")})))
+        .collect();
+    assert_eq!(Value::from(tree), rv["tree"]);
+}

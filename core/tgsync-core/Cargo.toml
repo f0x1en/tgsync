@@ -7,6 +7,7 @@ description = "tgsync engine: crypto, op log and replay. No I/O."
 
 [dependencies]
 aes-gcm = "0.10"
+age = { version = "0.11", default-features = false }
 base64 = "0.22"
 hex = "0.4"
 hkdf = "0.12"
