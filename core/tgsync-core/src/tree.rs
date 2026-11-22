@@ -45,6 +45,26 @@ pub struct Tree {
     fold: BTreeMap<String, String>,
 }
 
+impl Node {
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({"path": self.path, "sha": self.sha, "size": self.size, "mtime": self.mtime, "blob": self.blob,
+                           "author": self.author, "msg_id": self.msg_id, "doc": self.doc})
+    }
+
+    pub fn from_json(v: &Value) -> Option<Node> {
+        Some(Node {
+            path: v.get("path")?.as_str()?.to_owned(),
+            sha: v.get("sha")?.as_str()?.to_owned(),
+            size: v.get("size")?.as_i64()?,
+            mtime: v.get("mtime")?.as_f64()?,
+            blob: v.get("blob")?.as_object()?.clone(),
+            author: v.get("author")?.as_str()?.to_owned(),
+            msg_id: v.get("msg_id")?.as_i64()?,
+            doc: v.get("doc").and_then(Value::as_str).map(str::to_owned),
+        })
+    }
+}
+
 impl Tree {
     pub fn new() -> Self {
         Self::default()

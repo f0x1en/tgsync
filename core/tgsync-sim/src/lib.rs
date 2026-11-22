@@ -173,6 +173,10 @@ impl Sim {
             self.churn();
             return;
         }
+        if self.rng.chance(3) {
+            self.restart(c);
+            return;
+        }
         match self.rng.below(10) {
             0..=3 => self.edit(c),
             4 => self.delete(c),
@@ -222,6 +226,15 @@ impl Sim {
         let admin = self.clients[0].replica.me.clone();
         let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, None);
         self.post(KIND_DESCRIPTOR, desc);
+    }
+
+    /// The program stops and starts again: the replica is saved and loaded back (keys come back
+    /// from the stored descriptors, never from the saved state).
+    fn restart(&mut self, c: usize) {
+        let r = &self.clients[c].replica;
+        let loaded = Replica::load(r.me.clone(), &r.save()).unwrap();
+        self.trace.push(format!("c{c} restarts"));
+        self.clients[c].replica = loaded;
     }
 
     fn edit(&mut self, c: usize) {
@@ -397,6 +410,16 @@ impl Sim {
             }
             if round > 20 {
                 return Err("clients never settle (they keep uploading)".into());
+            }
+        }
+        for (i, cl) in self.clients.iter().enumerate() {
+            let back = Replica::load(cl.replica.me.clone(), &cl.replica.save()).map_err(|e| format!("c{i}: load failed: {e}"))?;
+            let (a, b): (serde_json::Value, serde_json::Value) =
+                (serde_json::from_slice(&cl.replica.save()).unwrap(), serde_json::from_slice(&back.save()).unwrap());
+            // Loro snapshot bytes are not stable when re-exported: compare notes by content instead.
+            let differs: Vec<&String> = a.as_object().unwrap().keys().filter(|k| *k != "texts" && a[*k] != b[*k]).collect();
+            if !differs.is_empty() || back.texts != cl.replica.texts || back.keys != cl.replica.keys || back.members != cl.replica.members {
+                return Err(format!("c{i}: saving and loading the replica changes {differs:?}"));
             }
         }
         let first = &self.clients[0].replica.tree;

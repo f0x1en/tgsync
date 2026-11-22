@@ -85,6 +85,9 @@ pub struct Replica {
     pending: Vec<(i64, Vec<u8>)>,
     /// Every descriptor seen, in order (to rebuild the history after a fresh re-join).
     all_descriptors: Vec<(i64, Vec<u8>)>,
+    /// Descriptors that included us, in order: re-reading them with our identity gives back the
+    /// vault keys when the replica is loaded (keys are never saved).
+    accepted: Vec<(i64, Vec<u8>)>,
     desc_seen: i64,
     blocked: bool,
 }
@@ -106,6 +109,7 @@ impl Replica {
             history: vec![],
             pending: vec![],
             all_descriptors: vec![],
+            accepted: vec![],
             desc_seen: 0,
             blocked: false,
         }
@@ -196,6 +200,72 @@ impl Replica {
         Ok(())
     }
 
+    /// Everything needed to continue later, as JSON bytes. Holds no keys: [`Replica::load`] gets them
+    /// back by unwrapping the stored descriptors with our identity.
+    pub fn save(&self) -> Vec<u8> {
+        use base64::Engine;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let msgs = |l: &[(i64, Vec<u8>)]| l.iter().map(|(i, b)| serde_json::json!([i, b64(b)])).collect::<Vec<_>>();
+        let member = |m: &Member| serde_json::json!({"recipient": m.recipient, "name": m.name, "signer": m.signer});
+        let history: Vec<Value> = self
+            .history
+            .iter()
+            .map(|(i, s)| serde_json::json!([i, s.epoch, s.members.iter().map(member).collect::<Vec<_>>(), s.admins]))
+            .collect();
+        serde_json::to_vec(&serde_json::json!({
+            "v": 1, "vault_id": self.vault_id, "cursor": self.cursor, "authors": self.authors,
+            "removed": self.removed, "active": self.active, "desc_seen": self.desc_seen,
+            "accepted": msgs(&self.accepted), "all_descriptors": msgs(&self.all_descriptors), "pending": msgs(&self.pending),
+            "history": history, "tree": self.tree.nodes.values().map(|n| n.to_json()).collect::<Vec<_>>(),
+            "texts": self.texts.save(),
+        }))
+        .unwrap()
+    }
+
+    pub fn load(me: Identity, data: &[u8]) -> crate::Result<Replica> {
+        use base64::Engine;
+        let bad = || crate::Error::Crypto("bad saved state".into());
+        let v: Value = serde_json::from_slice(data).map_err(|_| bad())?;
+        let msgs = |k: &str| -> crate::Result<Vec<(i64, Vec<u8>)>> {
+            v.get(k)
+                .and_then(Value::as_array)
+                .ok_or_else(bad)?
+                .iter()
+                .map(|x| {
+                    let b = x[1].as_str().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).ok_or_else(bad)?;
+                    Ok((x[0].as_i64().ok_or_else(bad)?, b))
+                })
+                .collect()
+        };
+        let member = |m: &Value| Member {
+            recipient: m["recipient"].as_str().unwrap_or("").to_owned(),
+            name: m["name"].as_str().unwrap_or("").to_owned(),
+            signer: m["signer"].as_str().map(str::to_owned),
+        };
+        let mut r = Replica::new(me, v["vault_id"].as_str().map(str::to_owned));
+        r.cursor = v["cursor"].as_i64().ok_or_else(bad)?;
+        r.desc_seen = v["desc_seen"].as_i64().ok_or_else(bad)?;
+        r.removed = v["removed"].as_bool().ok_or_else(bad)?;
+        r.active = v["active"].as_bool().ok_or_else(bad)?;
+        r.authors = v["authors"].as_object().ok_or_else(bad)?.iter().map(|(k, s)| (k.clone(), s.as_u64().unwrap_or(0))).collect();
+        r.all_descriptors = msgs("all_descriptors")?;
+        r.pending = msgs("pending")?;
+        for (_, d) in msgs("accepted")? {
+            r.load_descriptor(&d);
+        }
+        r.accepted = msgs("accepted")?;
+        for h in v["history"].as_array().ok_or_else(bad)? {
+            let admins = h[3].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect());
+            let members = h[2].as_array().ok_or_else(bad)?.iter().map(member).collect();
+            r.history.push((h[0].as_i64().ok_or_else(bad)?, Snapshot { epoch: h[1].as_u64().ok_or_else(bad)? as u32, members, admins }));
+        }
+        for n in v["tree"].as_array().ok_or_else(bad)? {
+            r.tree.set(crate::tree::Node::from_json(n).ok_or_else(bad)?);
+        }
+        r.texts = Texts::load(&v["texts"])?;
+        Ok(r)
+    }
+
     pub fn begin_pass(&mut self) {
         self.blocked = false;
     }
@@ -224,6 +294,7 @@ impl Replica {
                         self.admins = None;
                         self.history.clear();
                         self.pending = self.all_descriptors.clone();
+                        self.accepted.clear();
                     }
                     Ok(None) => {
                         if self.has_keys() {
@@ -231,6 +302,7 @@ impl Replica {
                         }
                     }
                     Ok(Some(d)) => {
+                        self.accepted.push((id, body.to_vec()));
                         self.vault_id.get_or_insert(d.vault_id);
                         self.members = d.members;
                         if d.admins.is_some() {

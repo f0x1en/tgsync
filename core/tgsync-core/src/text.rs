@@ -41,6 +41,17 @@ impl std::fmt::Debug for Texts {
     }
 }
 
+/// Same docs with the same operations and text, and the same version index (snapshot bytes may differ).
+impl PartialEq for Texts {
+    fn eq(&self, other: &Self) -> bool {
+        self.versions == other.versions
+            && self.docs.len() == other.docs.len()
+            && self.docs.iter().zip(&other.docs).all(|((ia, a), (ib, b))| {
+                ia == ib && a.oplog_vv() == b.oplog_vv() && a.get_text(TEXT).to_string() == b.get_text(TEXT).to_string()
+            })
+    }
+}
+
 /// An edit ready to send: the doc id and the Loro update bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
@@ -65,6 +76,32 @@ impl Texts {
     /// Some doc that once had text sha `sha` (the lowest doc id, so the choice is stable).
     pub fn doc_with_version(&self, sha: &str) -> Option<String> {
         self.versions.keys().find(|(_, s)| s == sha).map(|(d, _)| d.clone())
+    }
+
+    /// Save every doc (Loro snapshot) and the version index.
+    pub fn save(&self) -> serde_json::Value {
+        use base64::Engine;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let docs: Vec<_> = self.docs.iter().map(|(id, d)| serde_json::json!([id, b64(&d.export(ExportMode::Snapshot).unwrap())])).collect();
+        let versions: Vec<_> = self.versions.iter().map(|((d, s), f)| serde_json::json!([d, s, b64(f)])).collect();
+        serde_json::json!({"docs": docs, "versions": versions})
+    }
+
+    pub fn load(v: &serde_json::Value) -> Result<Texts> {
+        use base64::Engine;
+        let bad = || err("bad saved text state");
+        let unb64 = |x: &serde_json::Value| x.as_str().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).ok_or_else(bad);
+        let mut t = Texts::default();
+        for d in v.get("docs").and_then(|x| x.as_array()).ok_or_else(bad)? {
+            let doc = LoroDoc::new();
+            doc.import(&unb64(&d[1])?).map_err(|e| err(e.to_string()))?;
+            t.docs.insert(d[0].as_str().ok_or_else(bad)?.to_owned(), doc);
+        }
+        for x in v.get("versions").and_then(|x| x.as_array()).ok_or_else(bad)? {
+            let key = (x[0].as_str().ok_or_else(bad)?.to_owned(), x[1].as_str().ok_or_else(bad)?.to_owned());
+            t.versions.insert(key, unb64(&x[2])?);
+        }
+        Ok(t)
     }
 
     /// Does doc `doc` already contain every operation of `update`? (Checks that an edit was merged.)
