@@ -607,7 +607,7 @@ const COMMANDS: { [name: string]: Command } = {
           for (const x of incoming) {
             const mark = x.op === "delete" || x.op === "rmdir" ? "D" : "M";
             echo(`  ${mark} ${x.path}${x.op === "mkdir" || x.op === "rmdir" ? "/" : ""}   (${x.who})`);
-            if (x.also_local) echo(yellow("      you changed this too: `tgsync push` then `tgsync pull` keeps both versions (a conflict copy)"));
+            if (x.also_local) echo(yellow(`      you changed this too: \`tgsync push\` then \`tgsync pull\` ${x.path.toLowerCase().endsWith(".md") && v.members.some((m) => m.admin) ? "merges both edits" : "keeps both versions (a conflict copy)"}`));
           }
           echo("get them:  tgsync pull");
         } else echo("  nothing new from others");
