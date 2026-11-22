@@ -56,7 +56,10 @@ fn record(log: &mut Log, r: &Replica, synced: &mut Map, files: &mut Map, notes: 
     for (p, t) in notes {
         files.insert(p.to_string(), t.to_string());
     }
-    let disk = files.iter().map(|(p, t)| (p.clone(), LocalFile::from_bytes(p, t.as_bytes().to_vec(), 1.0))).collect();
+    let disk = files
+        .iter()
+        .map(|(p, t)| (p.clone(), LocalFile::from_bytes(p, t.as_bytes().to_vec(), 1.0)))
+        .collect();
     let mut docs = 0;
     let push = plan_push(r, &disk, synced, &[], seq, &mut || {
         docs += 1;
@@ -69,7 +72,14 @@ fn record(log: &mut Log, r: &Replica, synced: &mut Map, files: &mut Map, notes: 
             None => synced.remove(p),
         };
     }
-    let rec = Record { author: r.me.id(), seq, ts: 1_762_850_000.0 + seq as f64, entries: push.entries, payload: push.payload, signer: None };
+    let rec = Record {
+        author: r.me.id(),
+        seq,
+        ts: 1_762_850_000.0 + seq as f64,
+        entries: push.entries,
+        payload: push.payload,
+        signer: None,
+    };
     encode_record(keys, &rec, &log.nonce(), r.me.signing.as_ref()).unwrap()
 }
 
@@ -96,7 +106,10 @@ fn main() {
     let mut people = rb.members.clone();
     people.push(Member::new(&mallory, "mallory"));
     let admins = [b.signer().unwrap()];
-    let signing = Signing { admins: &admins, key: b.signing.as_ref().unwrap() };
+    let signing = Signing {
+        admins: &admins,
+        key: b.signing.as_ref().unwrap(),
+    };
     let d = descriptor::build(&rb.keys, vid, &people, None, 1_762_850_002, Some(signing), &mut || log.nonce()).unwrap();
     log.post('d', d, "bob, not an admin, tries to add mallory: rejected");
 
