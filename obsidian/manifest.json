@@ -3,7 +3,7 @@
   "name": "tgsync",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "End-to-end encrypted sync of this vault through a private Telegram group.",
+  "description": "End-to-end encrypted shared vault through a private Telegram group (drives the tgsync program).",
   "author": "f0x1en",
-  "isDesktopOnly": false
+  "isDesktopOnly": true
 }

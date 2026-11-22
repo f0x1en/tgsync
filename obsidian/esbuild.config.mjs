@@ -7,7 +7,7 @@ const ctx = await esbuild.context({
   format: "cjs",
   target: "es2022",
   platform: "browser",
-  external: ["obsidian", "electron"],
+  external: ["obsidian", "electron", "child_process"], // child_process: provided by the desktop app
   outfile: "main.js",
   sourcemap: process.argv.includes("--watch") ? "inline" : false,
   logLevel: "info",
