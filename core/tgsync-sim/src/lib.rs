@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use age::secrecy::ExposeSecret;
-use tgsync_core::crypto::KeyRing;
-use tgsync_core::descriptor::{self, Identity, Member};
+use tgsync_core::descriptor::Identity;
+use tgsync_core::members;
 use tgsync_core::replica::{Replica, Report, KIND_DESCRIPTOR, KIND_RECORD};
 use tgsync_core::sync::{Content, DiskOp, LocalFile};
 use tgsync_core::vault::Vault;
@@ -127,31 +127,32 @@ fn person(rng: &mut Rng) -> Identity {
     p
 }
 
-fn member(p: &Identity, name: &str) -> Member {
-    Member { signer: p.signer(), ..Member::new(&p.recipient, name) }
-}
-
-/// A v2 descriptor signed by the admin c0.
-fn admin_descriptor(rng: &mut Rng, admin: &Identity, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>) -> Vec<u8> {
-    let admins = [admin.signer().unwrap()];
-    let signing = descriptor::Signing { admins: &admins, key: admin.signing.as_ref().unwrap() };
-    descriptor::build(ring, "5eed5eed5eed5eed", members, proof_epoch, 0, Some(signing), &mut || rng.bytes()).unwrap()
-}
-
 impl Sim {
     pub fn new(seed: u64, n_clients: usize) -> Self {
         let mut rng = Rng::new(seed);
-        let mut ring = KeyRing::new();
-        ring.add(1, &rng.bytes::<32>()).unwrap();
         let people: Vec<Identity> = (0..n_clients).map(|_| person(&mut rng)).collect();
-        let members: Vec<Member> =
-            people.iter().enumerate().map(|(i, p)| member(p, &format!("c{i}"))).collect();
-        let desc = admin_descriptor(&mut rng, &people[0], &ring, &members, None);
+        let key = rng.bytes::<32>();
+        let mut group = vec![];
+        let mut post = |d: Vec<u8>| {
+            let id = group.len() as i64 + 1;
+            group.push((id, KIND_DESCRIPTOR, d));
+        };
+        post(members::create(&people[0], "c0", "5eed5eed5eed5eed", &key, 0, &mut || rng.bytes()).unwrap());
+        // The admin adds everyone else (as it would after their join requests).
+        let mut admin = Replica::new(people[0].clone(), None);
+        let mut rep = Report::default();
+        admin.feed(1, KIND_DESCRIPTOR, &group[0].2, &mut rep);
+        for (i, p) in people.iter().enumerate().skip(1) {
+            let d = members::add(&admin, &p.recipient, &format!("c{i}"), p.signer().as_deref(), 0, &mut || rng.bytes()).unwrap();
+            let id = group.len() as i64 + 1;
+            admin.feed(id, KIND_DESCRIPTOR, &d, &mut rep);
+            group.push((id, KIND_DESCRIPTOR, d));
+        }
         let clients = people
             .into_iter()
             .map(|p| Client { vault: Vault::new(p, None), disk: BTreeMap::new() })
             .collect();
-        Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![], text_promised: vec![] }
+        Sim { rng, trace: vec![], group, clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![], text_promised: vec![] }
     }
 
     fn post(&mut self, kind: char, body: Vec<u8>) {
@@ -187,38 +188,25 @@ impl Sim {
         self.pull(0, false);
         let k = 1 + self.rng.below(self.clients.len() - 1);
         let target = self.clients[k].vault.replica.me.recipient.clone();
-        let admin = &self.clients[0].vault.replica;
-        let mut ring = admin.keys.clone();
-        let mut members = admin.members.clone();
-        let proof_epoch = if members.iter().any(|m| m.recipient == target) {
-            members.retain(|m| m.recipient != target);
-            let old = ring.current_epoch().unwrap();
-            ring.add(old + 1, &self.rng.bytes::<32>()).unwrap();
-            self.trace.push(format!("c0 removes c{k} (epoch {})", old + 1));
-            Some(old)
+        if self.clients[0].vault.replica.members.iter().any(|m| m.recipient == target) {
+            let key = self.rng.bytes::<32>();
+            let Sim { clients, rng, .. } = self;
+            let desc = members::remove(&clients[0].vault.replica, &target, &key, 0, &mut || rng.bytes()).unwrap();
+            self.trace.push(format!("c0 removes c{k}"));
+            self.post(KIND_DESCRIPTOR, desc);
         } else {
-            let me = self.clients[k].vault.replica.me.clone();
-            members.push(member(&me, &format!("c{k}")));
-            self.clients[k].vault.replica = Replica::new(me, None);
-            self.clients[k].vault.synced.clear();
-            self.trace.push(format!("c0 adds c{k} back"));
-            None
-        };
-        let admin = self.clients[0].vault.replica.me.clone();
-        let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, proof_epoch);
-        self.post(KIND_DESCRIPTOR, desc);
+            self.churn_add(k);
+        }
     }
 
+    /// The admin adds c{k} back; c{k} joins afresh (new replica, nothing synced, files kept).
     fn churn_add(&mut self, k: usize) {
-        let admin = &self.clients[0].vault.replica;
-        let (ring, mut members) = (admin.keys.clone(), admin.members.clone());
         let me = self.clients[k].vault.replica.me.clone();
-        members.push(member(&me, &format!("c{k}")));
+        let Sim { clients, rng, .. } = self;
+        let desc = members::add(&clients[0].vault.replica, &me.recipient, &format!("c{k}"), me.signer().as_deref(), 0, &mut || rng.bytes()).unwrap();
         self.clients[k].vault.replica = Replica::new(me, None);
         self.clients[k].vault.synced.clear();
         self.trace.push(format!("c0 adds c{k} back"));
-        let admin = self.clients[0].vault.replica.me.clone();
-        let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, None);
         self.post(KIND_DESCRIPTOR, desc);
     }
 
@@ -234,8 +222,7 @@ impl Sim {
     fn edit(&mut self, c: usize) {
         let path = PATHS[self.rng.below(PATHS.len())].to_string();
         if is_text_path(&path) {
-            // Insert one new word at a random place: words are never removed from a note, so
-            // every uploaded word must survive the merges.
+            // Insert one new word at a random place.
             self.next_content += 1;
             let word = format!("k{}", self.next_content - 1);
             let mut ws: Vec<String> = self.clients[c].disk.get(&path).map(|t| words(t).map(str::to_owned).collect()).unwrap_or_default();

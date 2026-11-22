@@ -6,6 +6,7 @@ pub mod crypto;
 pub mod descriptor;
 pub mod identity;
 pub mod invites;
+pub mod members;
 pub mod oplog;
 pub mod paths;
 pub mod replica;
