@@ -417,8 +417,12 @@ fn concurrent_note_edits_merge_without_conflict_copy() {
     text_edit(&mut g, &ring, &a, &ra, 2, "n.md", Some(&base), "hello brave world", "x");
     text_edit(&mut g, &ring, &b, &rb, 1, "n.md", Some(&base), "hello world!", "y");
     g.pull(&mut ra);
-    g.pull(&mut rb);
+    let rep = g.pull(&mut rb);
     assert_eq!(ra.text("n.md").unwrap(), "hello brave world!");
+    // Every version stays readable (for `tgsync restore`).
+    let (_, _, doc, sha) = rep.text_versions.last().unwrap().clone();
+    assert_eq!(rb.texts.text_at(&doc, &sha).unwrap(), "hello brave world!");
+    assert_eq!(rb.texts.text_at(&doc, &base).unwrap(), "hello world");
     assert_eq!(ra.tree, rb.tree);
     assert_eq!(ra.tree.nodes.len(), 1, "no conflict copy");
 }

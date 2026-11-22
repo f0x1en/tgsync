@@ -69,6 +69,12 @@ impl Texts {
         self.docs.keys()
     }
 
+    /// The text of `doc` as it was when its sha was `sha` (a version seen during replay).
+    pub fn text_at(&self, doc: &str, sha: &str) -> Option<String> {
+        let f = Frontiers::decode(self.versions.get(&(doc.to_owned(), sha.to_owned()))?).ok()?;
+        Some(self.docs.get(doc)?.fork_at(&f).ok()?.get_text(TEXT).to_string())
+    }
+
     pub fn has_version(&self, doc: &str, sha: &str) -> bool {
         self.versions.contains_key(&(doc.to_owned(), sha.to_owned()))
     }

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::oplog::INLINE_MAX;
+use crate::oplog::{INLINE_MAX, MAX_ENTRIES_PER_RECORD, RECORD_PAYLOAD_MAX};
 use crate::replica::{Replica, Resend};
 use crate::text::is_text_path;
 use crate::tree::DIR;
@@ -79,7 +79,9 @@ pub fn text_peer(author: &str, seq: u64, index: usize) -> u64 {
 }
 
 /// Plan the next record: entries to re-send first (old-key rejections), then every difference
-/// between the folder (`disk`) and what was last synced (`synced`: path -> sha).
+/// between the folder (`disk`) and what was last synced (`synced`: path -> sha). One record holds at
+/// most 500 entries and about 4 MiB of payload: the caller posts it, marks it pushed and plans again
+/// until the plan is empty.
 /// `seq` is the record's seq; `new_doc` gives a fresh 16-hex doc id for a new note.
 pub fn plan_push(
     replica: &Replica,
@@ -103,6 +105,9 @@ pub fn plan_push(
         let (now, then) = (disk.get(p), synced.get(p));
         if now.map(|f| &f.sha) == then {
             continue;
+        }
+        if push.entries.len() >= MAX_ENTRIES_PER_RECORD || push.payload.len() >= RECORD_PAYLOAD_MAX {
+            break; // the rest goes in the next record
         }
         let base = then.cloned();
         let entry = match now {

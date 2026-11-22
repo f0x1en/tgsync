@@ -44,6 +44,9 @@ pub struct Report {
     /// already replaced. The caller must upload these entries again with the next push: same
     /// content (read it from the old record, which we can still open, not from disk) and same `base`.
     pub resend: Vec<Resend>,
+    /// For each note edit applied: (msg id, entry index, doc id, text sha after it). With
+    /// `Texts::text_at` this gives every version of a note back (`tgsync restore`).
+    pub text_versions: Vec<(i64, usize, String, String)>,
 }
 
 /// One of our entries to upload again, with the content bytes it pointed to (empty if none).
@@ -353,7 +356,12 @@ impl Replica {
                             self.authors.insert(rec.author.clone(), rec.seq);
                             for (i, e) in rec.entries.iter().enumerate() {
                                 let applied = if e.get("op").and_then(Value::as_str) == Some("text") {
-                                    self.apply_text(e, &rec.payload, &rec.author, rec.ts, id)
+                                    let a = self.apply_text(e, &rec.payload, &rec.author, rec.ts, id);
+                                    if let Some(Applied::Text(p)) = &a {
+                                        let n = self.tree.get(p).unwrap();
+                                        rep.text_versions.push((id, i, n.doc.clone().unwrap(), n.sha.clone()));
+                                    }
+                                    a
                                 } else {
                                     self.tree.apply_entry(e, &rec.author, rec.ts, id)
                                 };

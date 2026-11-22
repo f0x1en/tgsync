@@ -83,3 +83,23 @@ fn materialize_writes_remote_changes_but_never_local_edits() {
     assert_eq!(out.get("theirs.bin").map(String::as_str), Some("t2"));
     assert!(!out.contains_key("removed.bin"));
 }
+
+#[test]
+fn big_pushes_split_into_records_of_at_most_500_entries() {
+    let r = me();
+    let names: Vec<String> = (0..1200).map(|i| format!("f{i:04}.bin")).collect();
+    let disk: BTreeMap<String, LocalFile> = names.iter().map(|n| (n.clone(), LocalFile::from_bytes(n, n.as_bytes().to_vec(), 1.0))).collect();
+    let mut synced = BTreeMap::new();
+    let mut sizes = vec![];
+    loop {
+        let p = plan_push(&r, &disk, &synced, &[], 1, &mut no_doc).unwrap();
+        if p.is_empty() {
+            break;
+        }
+        sizes.push(p.entries.len());
+        for (path, sha) in p.done {
+            synced.insert(path, sha.unwrap());
+        }
+    }
+    assert_eq!(sizes, [500, 500, 200]);
+}

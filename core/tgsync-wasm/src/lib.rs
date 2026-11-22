@@ -169,6 +169,7 @@ impl Engine {
             "problems": rep.problems,
             "descriptors": rep.descriptors.len(),
             "resend": rep.resend.len(),
+            "text_versions": rep.text_versions,
         })
         .to_string()
     }
@@ -232,9 +233,34 @@ impl Engine {
         oplog::open_chunk(&self.vault.replica.keys, file_id, index, count, blob).map_err(js)
     }
 
-    /// The inline bytes of record `blob` (to fetch a small file's content from its record).
-    pub fn open_record_payload(&self, record: &[u8]) -> Result<Vec<u8>, JsError> {
+    /// The payload of a record (small files ride in it; entries point into it with `inline`).
+    #[wasm_bindgen(js_name = recordPayload)]
+    pub fn record_payload(&self, record: &[u8]) -> Result<Vec<u8>, JsError> {
         Ok(oplog::decode_record(&self.vault.replica.keys, record).map_err(js)?.payload)
+    }
+
+    /// A record's header as JSON `{"author", "seq", "ts", "entries"}` (e.g. to restore an old version).
+    #[wasm_bindgen(js_name = openRecord)]
+    pub fn open_record(&self, record: &[u8]) -> Result<String, JsError> {
+        let r = oplog::decode_record(&self.vault.replica.keys, record).map_err(js)?;
+        Ok(json!({"author": r.author, "seq": r.seq, "ts": r.ts, "entries": r.entries}).to_string())
+    }
+
+    /// A note as it was at text sha `sha` (from `finishPull().text_versions`).
+    #[wasm_bindgen(js_name = textAt)]
+    pub fn text_at(&self, doc: &str, sha: &str) -> Option<String> {
+        self.vault.replica.texts.text_at(doc, sha)
+    }
+
+    /// Our member id.
+    #[wasm_bindgen(js_name = myId)]
+    pub fn my_id(&self) -> String {
+        self.vault.replica.me.id()
+    }
+
+    /// Key epoch new data is sealed with.
+    pub fn epoch(&self) -> Option<u32> {
+        self.vault.replica.keys.current_epoch().ok()
     }
 
     // ------------------------------------------------------------------ materialize
