@@ -12,9 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use age::secrecy::ExposeSecret;
 use tgsync_core::crypto::KeyRing;
 use tgsync_core::descriptor::{self, Identity, Member};
-use tgsync_core::oplog::{encode_record, Record};
-use tgsync_core::replica::{Replica, Report, Resend, KIND_DESCRIPTOR, KIND_RECORD};
-use tgsync_core::sync::{plan_materialize, plan_push, Content, DiskOp, LocalFile};
+use tgsync_core::replica::{Replica, Report, KIND_DESCRIPTOR, KIND_RECORD};
+use tgsync_core::sync::{Content, DiskOp, LocalFile};
+use tgsync_core::vault::Vault;
 use tgsync_core::text::{is_text_path, sha_hex};
 use tgsync_core::tree::DIR;
 
@@ -81,16 +81,10 @@ impl Rng {
 const PATHS: &[&str] = &["a.md", "A.md", "b.md", "notes/x.md", "notes/X.md", "notes/y.md", "img.png"];
 
 struct Client {
-    replica: Replica,
+    /// Replica, synced map, re-send queue, last seq: the state a real host saves per folder.
+    vault: Vault,
     /// path -> content: the text of a note, or a content id that stands in for other file bytes.
     disk: BTreeMap<String, String>,
-    /// path -> sha at the last sync (what `base` is taken from).
-    synced: BTreeMap<String, String>,
-    /// Last seq we posted, saved before posting (write-ahead), so a crash never reuses a seq.
-    sent_seq: u64,
-    /// Entries of our records that readers rejected (old key): uploaded again, same content and base,
-    /// with the next push. The content comes from the old record, not from disk.
-    resend: Vec<Resend>,
 }
 
 pub struct Sim {
@@ -155,7 +149,7 @@ impl Sim {
         let desc = admin_descriptor(&mut rng, &people[0], &ring, &members, None);
         let clients = people
             .into_iter()
-            .map(|p| Client { replica: Replica::new(p, None), disk: BTreeMap::new(), synced: BTreeMap::new(), sent_seq: 0, resend: vec![] })
+            .map(|p| Client { vault: Vault::new(p, None), disk: BTreeMap::new() })
             .collect();
         Sim { rng, trace: vec![], group: vec![(1, KIND_DESCRIPTOR, desc)], clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![], text_promised: vec![] }
     }
@@ -192,8 +186,8 @@ impl Sim {
     fn churn(&mut self) {
         self.pull(0, false);
         let k = 1 + self.rng.below(self.clients.len() - 1);
-        let target = self.clients[k].replica.me.recipient.clone();
-        let admin = &self.clients[0].replica;
+        let target = self.clients[k].vault.replica.me.recipient.clone();
+        let admin = &self.clients[0].vault.replica;
         let mut ring = admin.keys.clone();
         let mut members = admin.members.clone();
         let proof_epoch = if members.iter().any(|m| m.recipient == target) {
@@ -203,27 +197,27 @@ impl Sim {
             self.trace.push(format!("c0 removes c{k} (epoch {})", old + 1));
             Some(old)
         } else {
-            let me = self.clients[k].replica.me.clone();
+            let me = self.clients[k].vault.replica.me.clone();
             members.push(member(&me, &format!("c{k}")));
-            self.clients[k].replica = Replica::new(me, None);
-            self.clients[k].synced.clear();
+            self.clients[k].vault.replica = Replica::new(me, None);
+            self.clients[k].vault.synced.clear();
             self.trace.push(format!("c0 adds c{k} back"));
             None
         };
-        let admin = self.clients[0].replica.me.clone();
+        let admin = self.clients[0].vault.replica.me.clone();
         let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, proof_epoch);
         self.post(KIND_DESCRIPTOR, desc);
     }
 
     fn churn_add(&mut self, k: usize) {
-        let admin = &self.clients[0].replica;
+        let admin = &self.clients[0].vault.replica;
         let (ring, mut members) = (admin.keys.clone(), admin.members.clone());
-        let me = self.clients[k].replica.me.clone();
+        let me = self.clients[k].vault.replica.me.clone();
         members.push(member(&me, &format!("c{k}")));
-        self.clients[k].replica = Replica::new(me, None);
-        self.clients[k].synced.clear();
+        self.clients[k].vault.replica = Replica::new(me, None);
+        self.clients[k].vault.synced.clear();
         self.trace.push(format!("c0 adds c{k} back"));
-        let admin = self.clients[0].replica.me.clone();
+        let admin = self.clients[0].vault.replica.me.clone();
         let desc = admin_descriptor(&mut self.rng, &admin, &ring, &members, None);
         self.post(KIND_DESCRIPTOR, desc);
     }
@@ -231,10 +225,10 @@ impl Sim {
     /// The program stops and starts again: the replica is saved and loaded back (keys come back
     /// from the stored descriptors, never from the saved state).
     fn restart(&mut self, c: usize) {
-        let r = &self.clients[c].replica;
-        let loaded = Replica::load(r.me.clone(), &r.save()).unwrap();
+        let v = &self.clients[c].vault;
+        let loaded = Vault::load(v.replica.me.clone(), &v.save()).unwrap();
         self.trace.push(format!("c{c} restarts"));
-        self.clients[c].replica = loaded;
+        self.clients[c].vault = loaded;
     }
 
     fn edit(&mut self, c: usize) {
@@ -280,13 +274,12 @@ impl Sim {
     /// synced; Telegram delivering the same upload twice.
     fn push(&mut self, c: usize) {
         let Sim { clients, rng, .. } = self;
-        let cl = &clients[c];
-        if cl.replica.removed || !cl.replica.has_keys() {
+        let v = &clients[c].vault;
+        if v.replica.removed || !v.replica.has_keys() {
             return;
         }
-        let disk: BTreeMap<String, LocalFile> = cl.disk.iter().map(|(p, content)| (p.clone(), local_file(p, content))).collect();
-        let seq = cl.sent_seq.max(cl.replica.next_seq() - 1) + 1;
-        let plan = plan_push(&cl.replica, &disk, &cl.synced, &cl.resend, seq, &mut || hex8(rng.bytes::<8>())).unwrap();
+        let disk: BTreeMap<String, LocalFile> = clients[c].disk.iter().map(|(p, content)| (p.clone(), local_file(p, content))).collect();
+        let (seq, plan) = v.plan_push(&disk, &mut || hex8(rng.bytes::<8>())).unwrap();
         if plan.is_empty() {
             return;
         }
@@ -294,9 +287,7 @@ impl Sim {
             self.trace.push(format!("c{c} push refused (flood wait), nothing sent"));
             return;
         }
-        let resent = std::mem::take(&mut self.clients[c].resend).len();
-        self.clients[c].sent_seq = seq;
-        let me = &self.clients[c].replica.me;
+        let resent = self.clients[c].vault.resend.len();
         let text_docs: Vec<(String, Vec<u8>)> = plan
             .entries
             .iter()
@@ -306,8 +297,8 @@ impl Sim {
                 (e["doc"].as_str().unwrap().to_owned(), plan.payload[off..off + len].to_vec())
             })
             .collect();
-        let rec = Record { author: me.id(), seq, ts: self.clock, entries: plan.entries, payload: plan.payload, signer: None };
-        let body = encode_record(&self.clients[c].replica.keys, &rec, &self.rng.bytes(), me.signing.as_ref()).unwrap();
+        let nonce = self.rng.bytes();
+        let body = self.clients[c].vault.seal_record(seq, &plan, self.clock, &nonce).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
         self.trace.push(format!("c{c} push seq {seq} {} entries, {resent} sent again{}{}", plan.done.len(),
@@ -323,24 +314,21 @@ impl Sim {
         for (doc, update) in text_docs {
             self.text_promised.push((c, msg_id, doc, update));
         }
-        for (p, sha) in plan.done {
-            let content = self.clients[c].disk.get(&p).cloned();
+        for (p, _) in &plan.done {
+            let content = self.clients[c].disk.get(p).cloned();
             self.promised.push((c, msg_id, p.clone(), content));
-            match sha {
-                Some(s) => self.clients[c].synced.insert(p, s),
-                None => self.clients[c].synced.remove(&p),
-            };
         }
+        self.clients[c].vault.pushed(&plan);
     }
 
     /// Replay the log and write the tree to disk. `lag`: the newest messages may not be visible yet.
     fn pull(&mut self, c: usize, lag: bool) -> Report {
-        let cursor = self.clients[c].replica.cursor as usize;
+        let cursor = self.clients[c].vault.replica.cursor as usize;
         // Telegram may not show the newest few messages yet; it never hides old ones.
         let len = self.group.len();
         let visible = if lag && self.rng.chance(30) { len - self.rng.below((len - cursor).min(3) + 1) } else { len };
         let mut rep = Report::default();
-        let r = &mut self.clients[c].replica;
+        let r = &mut self.clients[c].vault.replica;
         for _ in 0..2 {
             r.begin_pass();
             let from = r.cursor as usize;
@@ -354,19 +342,16 @@ impl Sim {
         }
         self.trace.push(format!("c{c} pull to msg {} ({} applied, {} to send again)", r.cursor, rep.applied.len(), rep.resend.len()));
         // Our records that readers skip (sealed with a replaced key): queue them to upload again.
-        self.clients[c].resend.extend(rep.resend.iter().cloned());
+        self.clients[c].vault.pulled(&rep);
         self.materialize(c);
         rep
     }
 
-    /// Write the tree to disk as `tgsync_core::sync::plan_materialize` says.
+    /// Write the tree to disk as the vault plans it.
     fn materialize(&mut self, c: usize) {
         let cl = &mut self.clients[c];
-        if cl.replica.has_keys() {
-            cl.replica.active = true;
-        }
         let disk: BTreeMap<String, String> = cl.disk.iter().map(|(p, content)| (p.clone(), base_of(p, Some(content)).unwrap())).collect();
-        let (ops, synced) = plan_materialize(&cl.replica, &disk, &cl.synced);
+        let (ops, synced) = cl.vault.plan_materialize(&disk);
         for op in ops {
             match op {
                 DiskOp::Write { path, text: Some(t), .. } => cl.disk.insert(path, t),
@@ -375,7 +360,7 @@ impl Sim {
                 DiskOp::Mkdir { .. } | DiskOp::Rmdir { .. } => None,
             };
         }
-        cl.synced = synced;
+        cl.vault.materialized(synced);
     }
 
     /// Everyone pushes and pulls until nothing moves, then check the invariants.
@@ -385,14 +370,14 @@ impl Sim {
         for k in 1..self.clients.len() {
             self.pull(0, false);
             self.pull(k, false); // learn whether we were removed
-            let recipient = self.clients[k].replica.me.recipient.clone();
-            if !self.clients[0].replica.members.iter().any(|m| m.recipient == recipient) {
+            let recipient = self.clients[k].vault.replica.me.recipient.clone();
+            if !self.clients[0].vault.replica.members.iter().any(|m| m.recipient == recipient) {
                 self.churn_add(k);
-            } else if self.clients[k].replica.removed {
+            } else if self.clients[k].vault.replica.removed {
                 // Saw its removal but was added back since: the user runs `tgsync join` again.
-                let me = self.clients[k].replica.me.clone();
-                self.clients[k].replica = Replica::new(me, None);
-                self.clients[k].synced.clear();
+                let me = self.clients[k].vault.replica.me.clone();
+                self.clients[k].vault.replica = Replica::new(me, None);
+                self.clients[k].vault.synced.clear();
                 self.trace.push(format!("c{k} joins again"));
             }
         }
@@ -413,29 +398,29 @@ impl Sim {
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {
-            let back = Replica::load(cl.replica.me.clone(), &cl.replica.save()).map_err(|e| format!("c{i}: load failed: {e}"))?;
+            let back = Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save()).map_err(|e| format!("c{i}: load failed: {e}"))?;
             let (a, b): (serde_json::Value, serde_json::Value) =
-                (serde_json::from_slice(&cl.replica.save()).unwrap(), serde_json::from_slice(&back.save()).unwrap());
+                (serde_json::from_slice(&cl.vault.replica.save()).unwrap(), serde_json::from_slice(&back.save()).unwrap());
             // Loro snapshot bytes are not stable when re-exported: compare notes by content instead.
             let differs: Vec<&String> = a.as_object().unwrap().keys().filter(|k| *k != "texts" && a[*k] != b[*k]).collect();
-            if !differs.is_empty() || back.texts != cl.replica.texts || back.keys != cl.replica.keys || back.members != cl.replica.members {
+            if !differs.is_empty() || back.texts != cl.vault.replica.texts || back.keys != cl.vault.replica.keys || back.members != cl.vault.replica.members {
                 return Err(format!("c{i}: saving and loading the replica changes {differs:?}"));
             }
         }
-        let first = &self.clients[0].replica.tree;
+        let first = &self.clients[0].vault.replica.tree;
         for (i, cl) in self.clients.iter().enumerate() {
-            if cl.replica.tree != *first {
-                let (a, b) = (&first.nodes, &cl.replica.tree.nodes);
+            if cl.vault.replica.tree != *first {
+                let (a, b) = (&first.nodes, &cl.vault.replica.tree.nodes);
                 let diff: Vec<String> = a.keys().chain(b.keys()).collect::<BTreeSet<_>>().into_iter()
                     .filter(|p| a.get(*p).map(|n| (&n.sha, n.msg_id)) != b.get(*p).map(|n| (&n.sha, n.msg_id)))
                     .map(|p| format!("{p}: c0 {:?} / c{i} {:?}", a.get(p).map(|n| (&n.sha, n.msg_id)), b.get(p).map(|n| (&n.sha, n.msg_id))))
                     .collect();
                 return Err(format!("c{i}'s tree differs from c0's (c{i} cursor {}, removed {}):\n  {}",
-                    cl.replica.cursor, cl.replica.removed, diff.join("\n  ")));
+                    cl.vault.replica.cursor, cl.vault.replica.removed, diff.join("\n  ")));
             }
-            let tree = contents(&cl.replica);
+            let tree = contents(&cl.vault.replica);
             let docs = |r: &Replica| r.texts.doc_ids().map(|d| (d.clone(), r.texts.text(d))).collect::<Vec<_>>();
-            if docs(&cl.replica) != docs(&self.clients[0].replica) {
+            if docs(&cl.vault.replica) != docs(&self.clients[0].vault.replica) {
                 return Err(format!("c{i}'s text notes differ from c0's"));
             }
             if cl.disk != tree {
@@ -447,9 +432,9 @@ impl Sim {
 
     fn check_nothing_lost(&self) -> Result<Stats, String> {
         let mut stats = Stats { messages: self.group.len(), ..Default::default() };
-        let in_tree: BTreeSet<&str> = self.clients[0].replica.tree.nodes.values().map(|n| n.sha.as_str()).collect();
+        let in_tree: BTreeSet<&str> = self.clients[0].vault.replica.tree.nodes.values().map(|n| n.sha.as_str()).collect();
         // Replay once more, collecting every delivered (non-duplicate) entry.
-        let mut r = Replica::new(self.clients[0].replica.me.clone(), None);
+        let mut r = Replica::new(self.clients[0].vault.replica.me.clone(), None);
         let mut rep = Report::default();
         let mut puts: Vec<(String, String)> = vec![];
         let mut bases: BTreeSet<(String, String)> = BTreeSet::new();
@@ -489,7 +474,7 @@ impl Sim {
             if is_text_path(path) {
                 continue; // checked below
             }
-            let me = self.clients[*c].replica.me.id();
+            let me = self.clients[*c].vault.replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
             // The same person changed or deleted this path on their own disk afterwards.
             let superseded = self.touched.iter().any(|(c2, m2, p2)| c2 == c && m2 >= msg_id && p2 == path);
@@ -498,17 +483,17 @@ impl Sim {
                 let puts_of_it: Vec<String> = self.promised.iter().filter(|p| p.0 == *c && p.2 == *path).map(|p| format!("msg {} {:?}", p.1, p.3)).collect();
                 return Err(format!("upload lost: c{c} marked {path} = {sha} (msg {msg_id}) as uploaded; it is gone. \
                     c{c} disk {:?}, synced {:?}, tree {:?}; c{c}'s uploads of {path}: {puts_of_it:?}",
-                    cl.disk.get(path), cl.synced.get(path), cl.replica.tree.get(path).map(|n| &n.sha)));
+                    cl.disk.get(path), cl.vault.synced.get(path), cl.vault.replica.tree.get(path).map(|n| &n.sha)));
             }
         }
         // Text: every note edit a member uploaded is merged into its doc (all its Loro operations
         // are in the final doc). Edits re-sent after an old-key rejection count from the re-send.
         for (c, msg_id, doc, update) in &self.text_promised {
-            let me = self.clients[*c].replica.me.id();
+            let me = self.clients[*c].vault.replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
-            if member && !self.clients[0].replica.texts.contains(doc, update) {
+            if member && !self.clients[0].vault.replica.texts.contains(doc, update) {
                 return Err(format!("note edit lost: c{c}'s upload to doc {doc} (msg {msg_id}) is not in the final doc {:?}",
-                    self.clients[0].replica.texts.text(doc)));
+                    self.clients[0].vault.replica.texts.text(doc)));
             }
         }
         Ok(stats)

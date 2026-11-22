@@ -12,6 +12,7 @@ pub mod replica;
 pub mod sync;
 pub mod text;
 pub mod tree;
+pub mod vault;
 
 /// Every failure the engine reports. The message is meant for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
