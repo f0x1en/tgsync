@@ -260,3 +260,24 @@ test("only admins change members; admin rights pass on", async () => {
   assert.equal(ch.sent, before, "nothing was posted");
   await cleanup();
 });
+
+test("a push cut off by the network is simply retried; nothing is lost or doubled", async () => {
+  const { a, b, ch, cleanup } = await pair();
+  await a.write("x.md", "one\n");
+  await a.write("y.bin", "two");
+  const send = a.vault.transport.send;
+  let fail = true;
+  a.vault.transport.send = async (kind, data) => {
+    if (kind === "r" && fail) { fail = false; throw new Error("network down"); }
+    return send(kind, data);
+  };
+  await assert.rejects(a.vault.pushChanges(), /network down/);
+  const again = await a.vault.pushChanges();
+  assert.deepEqual(again.pushed_paths.sort(), [".tgsyncignore", "x.md", "y.bin"]);
+  assert.deepEqual((await a.vault.pushChanges()).pushed_paths, []);
+  await sync(b);
+  assert.equal(await b.read("x.md"), "one\n");
+  assert.equal(await b.read("y.bin"), "two");
+  assert.deepEqual((await b.vault.status()).problems, []);
+  await cleanup();
+});
