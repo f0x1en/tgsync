@@ -132,7 +132,11 @@ pub fn plan_push(
                 }
                 other => {
                     // Content the group already has (a rename, move or copy): re-use its blob.
-                    let reuse = replica.tree.nodes.values().find(|n| n.sha == f.sha && n.doc.is_none() && n.sha != DIR);
+                    let reuse = replica
+                        .tree
+                        .nodes
+                        .values()
+                        .find(|n| n.sha == f.sha && n.doc.is_none() && n.sha != DIR);
                     let blob = match (reuse, other) {
                         (Some(n), _) => Value::Object(n.blob.clone()),
                         (None, Content::Small(bytes)) => {
@@ -161,18 +165,34 @@ fn file_id(sha: &str) -> String {
 pub enum DiskOp {
     /// Write the file. `text`: a merged note (write it as is). Otherwise fetch the bytes `blob` points
     /// to (inline in record `payload_msg`, or chunks) and check them against `sha` before writing.
-    Write { path: String, sha: String, mtime: f64, text: Option<String>, blob: Map<String, Value> },
+    Write {
+        path: String,
+        sha: String,
+        mtime: f64,
+        text: Option<String>,
+        blob: Map<String, Value>,
+    },
     /// Delete the file (it was unchanged since the last sync).
-    Delete { path: String },
-    Mkdir { path: String },
+    Delete {
+        path: String,
+    },
+    Mkdir {
+        path: String,
+    },
     /// Remove the folder if it is empty.
-    Rmdir { path: String },
+    Rmdir {
+        path: String,
+    },
 }
 
 /// Plan writing the tree to the folder: write what changed remotely, never touch local edits not
 /// pushed yet. `disk`: path -> sha of what is in the folder now. Returns the ops and the new
 /// `synced` map to store once the ops are done.
-pub fn plan_materialize(replica: &Replica, disk: &BTreeMap<String, String>, synced: &BTreeMap<String, String>) -> (Vec<DiskOp>, BTreeMap<String, String>) {
+pub fn plan_materialize(
+    replica: &Replica,
+    disk: &BTreeMap<String, String>,
+    synced: &BTreeMap<String, String>,
+) -> (Vec<DiskOp>, BTreeMap<String, String>) {
     let mut ops = vec![];
     let mut out = synced.clone();
     for n in replica.tree.nodes.values() {
@@ -200,7 +220,11 @@ pub fn plan_materialize(replica: &Replica, disk: &BTreeMap<String, String>, sync
             continue;
         }
         if disk.get(p) == Some(last) {
-            ops.push(if last == DIR { DiskOp::Rmdir { path: p.clone() } } else { DiskOp::Delete { path: p.clone() } });
+            ops.push(if last == DIR {
+                DiskOp::Rmdir { path: p.clone() }
+            } else {
+                DiskOp::Delete { path: p.clone() }
+            });
         }
         out.remove(p);
     }

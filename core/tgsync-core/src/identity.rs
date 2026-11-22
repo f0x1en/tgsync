@@ -14,8 +14,7 @@ fn err(m: impl Into<String>) -> Error {
 /// Encrypt `data` to one age recipient (binary format, not armored).
 pub fn wrap_for(recipient: &str, data: &[u8]) -> Result<Vec<u8>> {
     let r = age::x25519::Recipient::from_str(recipient).map_err(|e| err(format!("bad age recipient: {e}")))?;
-    let enc = age::Encryptor::with_recipients(std::iter::once(&r as &dyn age::Recipient))
-        .map_err(|e| err(format!("age: {e}")))?;
+    let enc = age::Encryptor::with_recipients(std::iter::once(&r as &dyn age::Recipient)).map_err(|e| err(format!("age: {e}")))?;
     let mut out = vec![];
     let mut w = enc.wrap_output(&mut out).map_err(|e| err(format!("age: {e}")))?;
     w.write_all(data).and_then(|_| w.finish()).map_err(|e| err(format!("age: {e}")))?;

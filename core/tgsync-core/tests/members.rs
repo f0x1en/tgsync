@@ -53,8 +53,14 @@ fn create_add_give_drop_remove() {
     let mut rb = Replica::new(b.clone(), None);
     g.pull(&mut rb);
     assert_eq!(rb.members.len(), 2);
-    assert!(members::add(&rb, &c.recipient, "carol", None, 3, &mut g.n()).unwrap_err().to_string().contains("only an admin"));
-    assert!(members::drop_admin(&ra, 3, &mut g.n()).unwrap_err().to_string().contains("last admin"));
+    assert!(members::add(&rb, &c.recipient, "carol", None, 3, &mut g.n())
+        .unwrap_err()
+        .to_string()
+        .contains("only an admin"));
+    assert!(members::drop_admin(&ra, 3, &mut g.n())
+        .unwrap_err()
+        .to_string()
+        .contains("last admin"));
 
     let d = members::give_admin(&ra, "bob", 3, &mut g.n()).unwrap();
     g.post(d);
@@ -67,7 +73,10 @@ fn create_add_give_drop_remove() {
     assert_eq!(rb.admins, Some(vec![b.signer().unwrap()]));
 
     // bob (now the only admin) removes alice: new key, alice is out.
-    assert!(members::remove(&rb, "bob", &[6; 32], 5, &mut g.n()).unwrap_err().to_string().contains("last admin"));
+    assert!(members::remove(&rb, "bob", &[6; 32], 5, &mut g.n())
+        .unwrap_err()
+        .to_string()
+        .contains("last admin"));
     let d = members::remove(&rb, "alice", &[6; 32], 5, &mut g.n()).unwrap();
     g.post(d);
     let rep = g.pull(&mut ra);

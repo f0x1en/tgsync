@@ -37,7 +37,9 @@ pub struct Texts {
 
 impl std::fmt::Debug for Texts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Texts").field("docs", &self.docs.keys().collect::<Vec<_>>()).finish()
+        f.debug_struct("Texts")
+            .field("docs", &self.docs.keys().collect::<Vec<_>>())
+            .finish()
     }
 }
 
@@ -88,7 +90,11 @@ impl Texts {
     pub fn save(&self) -> serde_json::Value {
         use base64::Engine;
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-        let docs: Vec<_> = self.docs.iter().map(|(id, d)| serde_json::json!([id, b64(&d.export(ExportMode::Snapshot).unwrap())])).collect();
+        let docs: Vec<_> = self
+            .docs
+            .iter()
+            .map(|(id, d)| serde_json::json!([id, b64(&d.export(ExportMode::Snapshot).unwrap())]))
+            .collect();
         let versions: Vec<_> = self.versions.iter().map(|((d, s), f)| serde_json::json!([d, s, b64(f)])).collect();
         serde_json::json!({"docs": docs, "versions": versions})
     }
@@ -96,7 +102,11 @@ impl Texts {
     pub fn load(v: &serde_json::Value) -> Result<Texts> {
         use base64::Engine;
         let bad = || err("bad saved text state");
-        let unb64 = |x: &serde_json::Value| x.as_str().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).ok_or_else(bad);
+        let unb64 = |x: &serde_json::Value| {
+            x.as_str()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+                .ok_or_else(bad)
+        };
         let mut t = Texts::default();
         for d in v.get("docs").and_then(|x| x.as_array()).ok_or_else(bad)? {
             let doc = LoroDoc::new();
@@ -120,7 +130,7 @@ impl Texts {
 
     /// Replay: import an update. Returns the doc's text afterwards. Importing twice is harmless.
     pub fn import(&mut self, doc: &str, update: &[u8]) -> Result<String> {
-        let d = self.docs.entry(doc.to_owned()).or_insert_with(LoroDoc::new);
+        let d = self.docs.entry(doc.to_owned()).or_default();
         d.import(update).map_err(|e| err(format!("bad text update: {e}")))?;
         let text = d.get_text(TEXT).to_string();
         self.versions.insert((doc.to_owned(), sha_hex(&text)), d.oplog_frontiers().encode());

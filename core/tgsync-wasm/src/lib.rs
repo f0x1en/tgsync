@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use tgsync_core::crypto::{fingerprint, short_code};
 use tgsync_core::descriptor::Identity;
 use tgsync_core::replica::Report;
-use tgsync_core::tree::Applied;
 use tgsync_core::sync::{Content, DiskOp, LocalFile, Push};
+use tgsync_core::tree::Applied;
 use tgsync_core::vault::Vault;
 use tgsync_core::{invites, members, oplog};
 use wasm_bindgen::prelude::*;
@@ -37,7 +37,11 @@ impl Stream {
     }
     fn block(&mut self) -> [u8; 32] {
         self.n += 1;
-        Sha256::new().chain_update(&self.seed).chain_update(self.n.to_be_bytes()).finalize().into()
+        Sha256::new()
+            .chain_update(&self.seed)
+            .chain_update(self.n.to_be_bytes())
+            .finalize()
+            .into()
     }
     fn nonce(&mut self) -> [u8; 12] {
         self.block()[..12].try_into().unwrap()
@@ -53,7 +57,10 @@ impl Stream {
 fn identity(secret: &str, recipient: &str, signing_hex: Option<String>) -> Result<Identity, JsError> {
     let mut me = Identity::new(secret, recipient);
     if let Some(h) = signing_hex {
-        let k: [u8; 32] = hex::decode(h).ok().and_then(|b| b.try_into().ok()).ok_or_else(|| js("signing key must be 64 hex chars"))?;
+        let k: [u8; 32] = hex::decode(h)
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(|| js("signing key must be 64 hex chars"))?;
         me.signing = Some(k);
     }
     Ok(me)
@@ -84,12 +91,20 @@ impl Engine {
     /// `signing_hex`: our Ed25519 signing key (64 hex), `vault_id`: known vault id, if any.
     #[wasm_bindgen(constructor)]
     pub fn new(secret: &str, recipient: &str, signing_hex: Option<String>, vault_id: Option<String>) -> Result<Engine, JsError> {
-        Ok(Engine { vault: Vault::new(identity(secret, recipient, signing_hex)?, vault_id), report: Report::default(), plan: None })
+        Ok(Engine {
+            vault: Vault::new(identity(secret, recipient, signing_hex)?, vault_id),
+            report: Report::default(),
+            plan: None,
+        })
     }
 
     pub fn load(secret: &str, recipient: &str, signing_hex: Option<String>, state: &[u8]) -> Result<Engine, JsError> {
         let vault = Vault::load(identity(secret, recipient, signing_hex)?, state).map_err(js)?;
-        Ok(Engine { vault, report: Report::default(), plan: None })
+        Ok(Engine {
+            vault,
+            report: Report::default(),
+            plan: None,
+        })
     }
 
     pub fn save(&self) -> Vec<u8> {
@@ -128,8 +143,10 @@ impl Engine {
         let list: Vec<Value> = r
             .members
             .iter()
-            .map(|m| json!({"id": m.id(), "name": m.name, "recipient": m.recipient, "signer": m.signer,
-                           "admin": m.signer.as_ref().is_some_and(|s| admins.contains(s))}))
+            .map(|m| {
+                json!({"id": m.id(), "name": m.name, "recipient": m.recipient, "signer": m.signer,
+                           "admin": m.signer.as_ref().is_some_and(|s| admins.contains(s))})
+            })
             .collect();
         json!({"members": list, "admins": r.admins}).to_string()
     }
@@ -207,8 +224,20 @@ impl Engine {
             } else {
                 return Err(js(format!("{p}: needs text, bytes, blob or dir")));
             };
-            let sha = f.get("sha").and_then(Value::as_str).ok_or_else(|| js(format!("{p}: sha missing")))?.to_owned();
-            disk.insert(p, LocalFile { sha, size: f["size"].as_u64().unwrap_or(0), mtime: f["mtime"].as_f64().unwrap_or(0.0), content });
+            let sha = f
+                .get("sha")
+                .and_then(Value::as_str)
+                .ok_or_else(|| js(format!("{p}: sha missing")))?
+                .to_owned();
+            disk.insert(
+                p,
+                LocalFile {
+                    sha,
+                    size: f["size"].as_u64().unwrap_or(0),
+                    mtime: f["mtime"].as_f64().unwrap_or(0.0),
+                    content,
+                },
+            );
         }
         let mut s = Stream::new(seed)?;
         let (seq, push) = self.vault.plan_push(&disk, &mut || s.hex8()).map_err(js)?;
@@ -286,7 +315,13 @@ impl Engine {
         let ops: Vec<Value> = ops
             .into_iter()
             .map(|o| match o {
-                DiskOp::Write { path, sha, mtime, text, blob } => json!({"op": "write", "path": path, "sha": sha, "mtime": mtime, "text": text, "blob": blob}),
+                DiskOp::Write {
+                    path,
+                    sha,
+                    mtime,
+                    text,
+                    blob,
+                } => json!({"op": "write", "path": path, "sha": sha, "mtime": mtime, "text": text, "blob": blob}),
                 DiskOp::Delete { path } => json!({"op": "delete", "path": path}),
                 DiskOp::Mkdir { path } => json!({"op": "mkdir", "path": path}),
                 DiskOp::Rmdir { path } => json!({"op": "rmdir", "path": path}),
@@ -306,7 +341,10 @@ impl Engine {
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(&self, recipient: &str, name: &str, signer: Option<String>, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
         let mut s = Stream::new(seed)?;
-        members::add(&self.vault.replica, recipient, name, signer.as_deref(), created as i64, &mut || s.nonce()).map_err(js)
+        members::add(&self.vault.replica, recipient, name, signer.as_deref(), created as i64, &mut || {
+            s.nonce()
+        })
+        .map_err(js)
     }
     #[wasm_bindgen(js_name = removeMember)]
     pub fn remove_member(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
@@ -340,7 +378,10 @@ pub fn create_vault(secret: &str, recipient: &str, signing_hex: &str, name: &str
 /// Ed25519 public key (b64) of a signing key (64 hex).
 #[wasm_bindgen(js_name = signerOf)]
 pub fn signer_of(signing_hex: &str) -> Result<String, JsError> {
-    let k: [u8; 32] = hex::decode(signing_hex).ok().and_then(|b| b.try_into().ok()).ok_or_else(|| js("signing key must be 64 hex chars"))?;
+    let k: [u8; 32] = hex::decode(signing_hex)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| js("signing key must be 64 hex chars"))?;
     Ok(tgsync_core::descriptor::signer_of(&k))
 }
 
@@ -359,7 +400,12 @@ pub fn decode_invite(code: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = encodeInvite)]
 pub fn encode_invite(link: &str, vault_id: &str, fingerprint: &str, api_id: Option<f64>, api_hash: Option<String>) -> String {
     let api = api_id.zip(api_hash).map(|(i, h)| (i as i64, h));
-    invites::encode_invite(&invites::Invite { link: link.into(), vault_id: vault_id.into(), fingerprint: fingerprint.into(), api })
+    invites::encode_invite(&invites::Invite {
+        link: link.into(),
+        vault_id: vault_id.into(),
+        fingerprint: fingerprint.into(),
+        api,
+    })
 }
 
 #[wasm_bindgen(js_name = encodeJoinRequest)]
@@ -374,10 +420,13 @@ pub fn encode_join_request(vault_id: &str, recipient: &str, name: &str, signer: 
 /// JSON `{"vault_id", "recipient", "name", "signer", "code"}` or `null` if malformed.
 #[wasm_bindgen(js_name = decodeJoinRequest)]
 pub fn decode_join_request(body: &[u8]) -> String {
-    let signer = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("signer").and_then(Value::as_str).map(str::to_owned));
+    let signer = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("signer").and_then(Value::as_str).map(str::to_owned));
     match invites::decode_request(body) {
         Some(r) => json!({"vault_id": r.vault_id, "recipient": r.recipient, "name": r.name, "signer": signer,
-                          "code": short_code(&r.recipient)}).to_string(),
+                          "code": short_code(&r.recipient)})
+        .to_string(),
         None => "null".into(),
     }
 }

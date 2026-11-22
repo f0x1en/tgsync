@@ -33,7 +33,14 @@ const SIG_LEN: usize = 64;
 
 /// What a v2 record signs: domain, the epoch it is sealed with, header and payload.
 fn signed_bytes(epoch: u32, header: &[u8], payload: &[u8]) -> Vec<u8> {
-    [SIG_DOMAIN, &epoch.to_be_bytes(), &(header.len() as u32).to_be_bytes(), header, payload].concat()
+    [
+        SIG_DOMAIN,
+        &epoch.to_be_bytes(),
+        &(header.len() as u32).to_be_bytes(),
+        header,
+        payload,
+    ]
+    .concat()
 }
 
 /// `signing: Some(key)` writes a v2 record signed by `key` (PROTOCOL.md section 12); `None` a v1 record.
@@ -83,7 +90,12 @@ pub fn decode_record(keys: &KeyRing, blob: &[u8]) -> Result<Record> {
             payload = body;
             signer = Some(s.to_owned());
         }
-        _ => return Err(Error::Crypto(format!("unsupported record version {}", h.get("v").unwrap_or(&Value::Null)))),
+        _ => {
+            return Err(Error::Crypto(format!(
+                "unsupported record version {}",
+                h.get("v").unwrap_or(&Value::Null)
+            )))
+        }
     }
     let seq = h.get("seq").and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)));
     Ok(Record {

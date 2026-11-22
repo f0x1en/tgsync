@@ -30,7 +30,10 @@ pub fn normalize(rel: &str) -> Result<String> {
     if rel.starts_with('/') || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':') {
         return Err(err(format!("absolute path not allowed: {rel:?}")));
     }
-    if rel.chars().any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\' | '\0'..='\x1f')) {
+    if rel
+        .chars()
+        .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\' | '\0'..='\x1f'))
+    {
         return Err(err(format!("path has characters that are illegal on some platforms: {rel:?}")));
     }
     let parts: Vec<&str> = rel.split('/').collect();
@@ -88,7 +91,11 @@ pub fn conflict_name_tagged(path: &str, tag: &str, ts: f64) -> String {
     };
     let (stem, ext) = split_ext(base);
     let name = format!("{stem} (conflict {tag} {}){ext}", utc_stamp(ts));
-    if dir.is_empty() { name } else { format!("{dir}/{name}") }
+    if dir.is_empty() {
+        name
+    } else {
+        format!("{dir}/{name}")
+    }
 }
 
 pub fn conflict_name(path: &str, author: &str, ts: f64) -> String {

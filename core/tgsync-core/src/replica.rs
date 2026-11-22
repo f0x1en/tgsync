@@ -133,7 +133,14 @@ impl Replica {
 
     /// Re-load a descriptor stored by an earlier pull (already validated then).
     pub fn load_descriptor(&mut self, data: &[u8]) {
-        if let Ok(Some(d)) = descriptor::accept(data, &self.me, &mut self.keys, self.vault_id.as_deref(), true, self.admins.as_deref()) {
+        if let Ok(Some(d)) = descriptor::accept(
+            data,
+            &self.me,
+            &mut self.keys,
+            self.vault_id.as_deref(),
+            true,
+            self.admins.as_deref(),
+        ) {
             self.members = d.members;
             if d.admins.is_some() {
                 self.admins = d.admins;
@@ -150,7 +157,10 @@ impl Replica {
         }
         let text = self.texts.import(doc, inline_bytes(e, payload)?).ok()?;
         let mtime = e.get("mtime").and_then(Value::as_f64).unwrap_or(ts);
-        Some(self.tree.apply_text(&path, doc, &sha_hex(&text), text.len() as i64, mtime, author, ts, id))
+        Some(
+            self.tree
+                .apply_text(&path, doc, &sha_hex(&text), text.len() as i64, mtime, author, ts, id),
+        )
     }
 
     /// Text of the note at `path`, if it is a merged text note.
@@ -162,7 +172,11 @@ impl Replica {
     /// `new_text`. `new_doc` (16 random hex) is used if this starts a new note; `peer` must be unique
     /// per update (e.g. derived from our id, the record seq and the entry index).
     pub fn prepare_text(&self, path: &str, base: Option<&str>, new_text: &str, new_doc: &str, peer: u64) -> crate::Result<TextEdit> {
-        let doc = self.tree.get(path).and_then(|n| n.doc.clone()).filter(|d| base.is_some_and(|b| self.texts.has_version(d, b)));
+        let doc = self
+            .tree
+            .get(path)
+            .and_then(|n| n.doc.clone())
+            .filter(|d| base.is_some_and(|b| self.texts.has_version(d, b)));
         // The note may have moved (conflict copy) or been deleted since: find the doc by its version.
         let doc = doc.or_else(|| base.and_then(|b| self.texts.doc_with_version(b)));
         self.texts.prepare(doc.as_deref(), base, new_text, new_doc, peer)
@@ -193,8 +207,14 @@ impl Replica {
         if snap.admins.is_none() {
             return Ok(()); // v1 vault: records are not signed
         }
-        let Some(signer) = &rec.signer else { return Err("unsigned record in a vault that has admins") };
-        if !snap.members.iter().any(|m| m.id() == rec.author && m.signer.as_ref() == Some(signer)) {
+        let Some(signer) = &rec.signer else {
+            return Err("unsigned record in a vault that has admins");
+        };
+        if !snap
+            .members
+            .iter()
+            .any(|m| m.id() == rec.author && m.signer.as_ref() == Some(signer))
+        {
             return Err("record not signed by a member");
         }
         if blob_epoch(body).is_ok_and(|e| e < snap.epoch) {
@@ -235,7 +255,10 @@ impl Replica {
                 .ok_or_else(bad)?
                 .iter()
                 .map(|x| {
-                    let b = x[1].as_str().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).ok_or_else(bad)?;
+                    let b = x[1]
+                        .as_str()
+                        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+                        .ok_or_else(bad)?;
                     Ok((x[0].as_i64().ok_or_else(bad)?, b))
                 })
                 .collect()
@@ -250,7 +273,12 @@ impl Replica {
         r.desc_seen = v["desc_seen"].as_i64().ok_or_else(bad)?;
         r.removed = v["removed"].as_bool().ok_or_else(bad)?;
         r.active = v["active"].as_bool().ok_or_else(bad)?;
-        r.authors = v["authors"].as_object().ok_or_else(bad)?.iter().map(|(k, s)| (k.clone(), s.as_u64().unwrap_or(0))).collect();
+        r.authors = v["authors"]
+            .as_object()
+            .ok_or_else(bad)?
+            .iter()
+            .map(|(k, s)| (k.clone(), s.as_u64().unwrap_or(0)))
+            .collect();
         r.all_descriptors = msgs("all_descriptors")?;
         r.pending = msgs("pending")?;
         for (_, d) in msgs("accepted")? {
@@ -258,9 +286,18 @@ impl Replica {
         }
         r.accepted = msgs("accepted")?;
         for h in v["history"].as_array().ok_or_else(bad)? {
-            let admins = h[3].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect());
+            let admins = h[3]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect());
             let members = h[2].as_array().ok_or_else(bad)?.iter().map(member).collect();
-            r.history.push((h[0].as_i64().ok_or_else(bad)?, Snapshot { epoch: h[1].as_u64().ok_or_else(bad)? as u32, members, admins }));
+            r.history.push((
+                h[0].as_i64().ok_or_else(bad)?,
+                Snapshot {
+                    epoch: h[1].as_u64().ok_or_else(bad)? as u32,
+                    members,
+                    admins,
+                },
+            ));
         }
         for n in v["tree"].as_array().ok_or_else(bad)? {
             r.tree.set(crate::tree::Node::from_json(n).ok_or_else(bad)?);
@@ -289,7 +326,14 @@ impl Replica {
                 self.desc_seen = id;
                 self.all_descriptors.push((id, body.to_vec()));
                 self.pending.push((id, body.to_vec()));
-                match descriptor::accept(body, &self.me, &mut self.keys, self.vault_id.as_deref(), false, self.admins.as_deref()) {
+                match descriptor::accept(
+                    body,
+                    &self.me,
+                    &mut self.keys,
+                    self.vault_id.as_deref(),
+                    false,
+                    self.admins.as_deref(),
+                ) {
                     Ok(None) if self.has_keys() && !self.active => {
                         // Dropped before we ever synced: a later re-add is a fresh join.
                         self.keys = KeyRing::new();
@@ -333,7 +377,8 @@ impl Replica {
                         if let Err(why) = self.check_record(id, body, &rec) {
                             if why == STALE {
                                 // Authentic but sealed with a replaced key: count its seq, apply nothing.
-                                self.authors.insert(rec.author.clone(), rec.seq.max(self.authors.get(&rec.author).copied().unwrap_or(0)));
+                                self.authors
+                                    .insert(rec.author.clone(), rec.seq.max(self.authors.get(&rec.author).copied().unwrap_or(0)));
                                 if rec.author == self.me.id() {
                                     rep.resend.extend(rec.entries.iter().map(|e| Resend {
                                         entry: e.clone(),
@@ -348,10 +393,12 @@ impl Replica {
                         let short: String = rec.author.chars().take(6).collect();
                         let prev = self.authors.get(&rec.author).copied().unwrap_or(0);
                         if rec.seq <= prev {
-                            rep.problems.push((id, format!("replayed/duplicate record from {short} seq {}", rec.seq)));
+                            rep.problems
+                                .push((id, format!("replayed/duplicate record from {short} seq {}", rec.seq)));
                         } else {
                             if prev > 0 && rec.seq != prev + 1 {
-                                rep.problems.push((id, format!("gap in {short}'s history: {prev} -> {} (message dropped?)", rec.seq)));
+                                rep.problems
+                                    .push((id, format!("gap in {short}'s history: {prev} -> {} (message dropped?)", rec.seq)));
                             }
                             self.authors.insert(rec.author.clone(), rec.seq);
                             for (i, e) in rec.entries.iter().enumerate() {

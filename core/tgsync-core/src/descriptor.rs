@@ -3,8 +3,8 @@
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use serde_json::{json, Map, Value};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::crypto::{mac, member_id, KeyRing, NONCE_LEN};
@@ -21,7 +21,11 @@ pub struct Member {
 
 impl Member {
     pub fn new(recipient: &str, name: &str) -> Self {
-        Member { recipient: recipient.into(), name: name.into(), signer: None }
+        Member {
+            recipient: recipient.into(),
+            name: name.into(),
+            signer: None,
+        }
     }
 
     pub fn id(&self) -> String {
@@ -49,7 +53,11 @@ pub struct Identity {
 
 impl Identity {
     pub fn new(secret: &str, recipient: &str) -> Self {
-        Identity { secret: secret.into(), recipient: recipient.into(), signing: None }
+        Identity {
+            secret: secret.into(),
+            recipient: recipient.into(),
+            signing: None,
+        }
     }
 
     pub fn id(&self) -> String {
@@ -151,7 +159,13 @@ pub fn build(
         wrapped.push(json!({"id": m.id(), "wrapped": B64.encode(wrap_for(&m.recipient, &keys_payload)?)}));
     }
     let proof_epoch = proof_epoch.unwrap_or(epoch);
-    let roster_blob = ring.seal(b"roster", vault_id.as_bytes(), &serde_json::to_vec(&roster).unwrap(), &nonce(), Some(epoch))?;
+    let roster_blob = ring.seal(
+        b"roster",
+        vault_id.as_bytes(),
+        &serde_json::to_vec(&roster).unwrap(),
+        &nonce(),
+        Some(epoch),
+    )?;
     let mut body = json!({
         "v": 1,
         "vault_id": vault_id,
@@ -184,7 +198,10 @@ pub fn parse(data: &[u8]) -> Result<Value> {
     let d: Value = serde_json::from_slice(data).map_err(|e| err(format!("malformed descriptor: {e}")))?;
     let v = d.get("v").and_then(Value::as_i64);
     if v != Some(1) && v != Some(2) {
-        return Err(err(format!("unsupported descriptor version {}", d.get("v").unwrap_or(&Value::Null))));
+        return Err(err(format!(
+            "unsupported descriptor version {}",
+            d.get("v").unwrap_or(&Value::Null)
+        )));
     }
     let mut need = vec!["vault_id", "epoch", "members", "roster", "proof", "proof_epoch", "keycheck"];
     if v == Some(2) {
@@ -213,7 +230,11 @@ fn check_v2(d: &Value, prev_admins: Option<&[String]>) -> Result<Vec<String>> {
         return Err(err("descriptor has no admins"));
     }
     let signer = d["signer"].as_str().ok_or_else(|| err("malformed descriptor: signer"))?;
-    let pk: [u8; 32] = B64.decode(signer).ok().and_then(|b| b.try_into().ok()).ok_or_else(|| err("bad signer key"))?;
+    let pk: [u8; 32] = B64
+        .decode(signer)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| err("bad signer key"))?;
     let sig: [u8; 64] = b64d(&d["sig"])?.try_into().map_err(|_| err("bad signature"))?;
     let mut body = d.clone();
     body.as_object_mut().unwrap().remove("sig");
@@ -242,11 +263,17 @@ pub fn accept(
 ) -> Result<Option<Descriptor>> {
     let d = parse(data)?;
     let v2 = d["v"].as_i64() == Some(2);
-    let vault_id = d["vault_id"].as_str().ok_or_else(|| err("malformed descriptor: vault_id"))?.to_owned();
+    let vault_id = d["vault_id"]
+        .as_str()
+        .ok_or_else(|| err("malformed descriptor: vault_id"))?
+        .to_owned();
     if expected_vault_id.is_some_and(|v| !v.is_empty() && v != vault_id) {
         return Err(err("descriptor belongs to a different vault"));
     }
-    let epoch = d["epoch"].as_u64().and_then(|e| u32::try_from(e).ok()).ok_or_else(|| err("malformed descriptor: epoch"))?;
+    let epoch = d["epoch"]
+        .as_u64()
+        .and_then(|e| u32::try_from(e).ok())
+        .ok_or_else(|| err("malformed descriptor: epoch"))?;
     if !ring.is_empty() && epoch < ring.current_epoch()? {
         return Err(err("descriptor epoch is older than ours (replay?)"));
     }
@@ -282,7 +309,11 @@ pub fn accept(
     let bad_keys = |m: String| err(format!("malformed wrapped keys: {m}"));
     let payload: Value = serde_json::from_slice(&unwrap(&me.secret, &b64d(&mine["wrapped"])?)?).map_err(|e| bad_keys(e.to_string()))?;
     let mut keys: Vec<(u32, Vec<u8>)> = vec![];
-    for (e, k) in payload.get("keys").and_then(Value::as_object).ok_or_else(|| bad_keys("keys".into()))? {
+    for (e, k) in payload
+        .get("keys")
+        .and_then(Value::as_object)
+        .ok_or_else(|| bad_keys("keys".into()))?
+    {
         keys.push((e.parse().map_err(|_| bad_keys(e.clone()))?, b64d(k)?));
     }
     let Some((_, own)) = keys.iter().find(|(e, _)| *e == epoch) else {
@@ -317,7 +348,11 @@ pub fn accept(
         .iter()
         .map(|r| {
             Ok(Member {
-                recipient: r.get("recipient").and_then(Value::as_str).ok_or_else(|| err("cannot read roster: recipient"))?.to_owned(),
+                recipient: r
+                    .get("recipient")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| err("cannot read roster: recipient"))?
+                    .to_owned(),
                 name: r.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
                 signer: r.get("signer").and_then(Value::as_str).map(str::to_owned),
             })
@@ -329,7 +364,13 @@ pub fn accept(
         }
     }
     *ring = candidate;
-    Ok(Some(Descriptor { vault_id, epoch, members, admins, raw: d }))
+    Ok(Some(Descriptor {
+        vault_id,
+        epoch,
+        members,
+        admins,
+        raw: d,
+    }))
 }
 
 /// What one descriptor says about the vault: the key epoch and members from its log position on.
@@ -350,7 +391,10 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
     if expected_vault_id.is_some_and(|v| !v.is_empty() && v != vault_id) {
         return Err(err("descriptor belongs to a different vault"));
     }
-    let epoch = d["epoch"].as_u64().and_then(|e| u32::try_from(e).ok()).ok_or_else(|| err("malformed descriptor: epoch"))?;
+    let epoch = d["epoch"]
+        .as_u64()
+        .and_then(|e| u32::try_from(e).ok())
+        .ok_or_else(|| err("malformed descriptor: epoch"))?;
     if prev.is_some_and(|p| epoch < p.epoch) {
         return Err(err("descriptor epoch is older than ours (replay?)"));
     }
@@ -359,7 +403,10 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
         return Err(err("v1 descriptor in a vault that has admins"));
     }
     let admins = if v2 { Some(check_v2(&d, prev_admins)?) } else { None };
-    let proof_epoch = d["proof_epoch"].as_u64().and_then(|e| u32::try_from(e).ok()).ok_or_else(|| err("bad proof epoch"))?;
+    let proof_epoch = d["proof_epoch"]
+        .as_u64()
+        .and_then(|e| u32::try_from(e).ok())
+        .ok_or_else(|| err("bad proof epoch"))?;
     if proof_epoch != epoch && proof_epoch + 1 != epoch {
         return Err(err("bad proof epoch"));
     }
@@ -381,7 +428,11 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
         .iter()
         .map(|r| {
             Ok(Member {
-                recipient: r.get("recipient").and_then(Value::as_str).ok_or_else(|| err("cannot read roster: recipient"))?.to_owned(),
+                recipient: r
+                    .get("recipient")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| err("cannot read roster: recipient"))?
+                    .to_owned(),
                 name: r.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
                 signer: r.get("signer").and_then(Value::as_str).map(str::to_owned),
             })

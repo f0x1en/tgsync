@@ -31,7 +31,12 @@ pub struct Vault {
 
 impl Vault {
     pub fn new(me: Identity, vault_id: Option<String>) -> Self {
-        Vault { replica: Replica::new(me, vault_id), synced: BTreeMap::new(), resend: vec![], sent_seq: 0 }
+        Vault {
+            replica: Replica::new(me, vault_id),
+            synced: BTreeMap::new(),
+            resend: vec![],
+            sent_seq: 0,
+        }
     }
 
     pub fn next_seq(&self) -> u64 {
@@ -51,7 +56,14 @@ impl Vault {
     /// record): save the vault before posting.
     pub fn seal_record(&mut self, seq: u64, push: &Push, ts: f64, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>> {
         let me = &self.replica.me;
-        let rec = Record { author: me.id(), seq, ts, entries: push.entries.clone(), payload: push.payload.clone(), signer: None };
+        let rec = Record {
+            author: me.id(),
+            seq,
+            ts,
+            entries: push.entries.clone(),
+            payload: push.payload.clone(),
+            signer: None,
+        };
         // v1 vaults (no admins): unsigned v1 records, readable by older clients.
         let signing = if self.replica.admins.is_some() { me.signing.as_ref() } else { None };
         let body = encode_record(&self.replica.keys, &rec, nonce, signing)?;
@@ -93,7 +105,8 @@ impl Vault {
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
         let replica: Value = serde_json::from_slice(&self.replica.save()).unwrap();
         let resend: Vec<Value> = self.resend.iter().map(|r| json!([r.entry, b64(&r.bytes)])).collect();
-        serde_json::to_vec(&json!({"v": 1, "replica": replica, "synced": self.synced, "resend": resend, "sent_seq": self.sent_seq})).unwrap()
+        serde_json::to_vec(&json!({"v": 1, "replica": replica, "synced": self.synced, "resend": resend, "sent_seq": self.sent_seq}))
+            .unwrap()
     }
 
     pub fn load(me: Identity, data: &[u8]) -> Result<Vault> {
@@ -101,12 +114,28 @@ impl Vault {
         let bad = || Error::Crypto("bad saved vault state".into());
         let v: Value = serde_json::from_slice(data).map_err(|_| bad())?;
         let replica = Replica::load(me, &serde_json::to_vec(&v["replica"]).unwrap())?;
-        let synced = v["synced"].as_object().ok_or_else(bad)?.iter().map(|(k, s)| (k.clone(), s.as_str().unwrap_or("").to_owned())).collect();
+        let synced = v["synced"]
+            .as_object()
+            .ok_or_else(bad)?
+            .iter()
+            .map(|(k, s)| (k.clone(), s.as_str().unwrap_or("").to_owned()))
+            .collect();
         let mut resend = vec![];
         for r in v["resend"].as_array().ok_or_else(bad)? {
-            let bytes = r[1].as_str().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).ok_or_else(bad)?;
-            resend.push(Resend { entry: r[0].clone(), bytes });
+            let bytes = r[1]
+                .as_str()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+                .ok_or_else(bad)?;
+            resend.push(Resend {
+                entry: r[0].clone(),
+                bytes,
+            });
         }
-        Ok(Vault { replica, synced, resend, sent_seq: v["sent_seq"].as_u64().ok_or_else(bad)? })
+        Ok(Vault {
+            replica,
+            synced,
+            resend,
+            sent_seq: v["sent_seq"].as_u64().ok_or_else(bad)?,
+        })
     }
 }

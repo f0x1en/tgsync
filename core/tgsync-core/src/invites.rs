@@ -27,9 +27,9 @@ pub fn encode_invite(inv: &Invite) -> String {
 
 pub fn decode_invite(code: &str) -> Result<Invite> {
     let code: String = code.split_whitespace().collect();
-    let body = code.strip_prefix(PREFIX).ok_or_else(|| {
-        Error::Invite("that does not look like a tgsync invite code (should start with 'tgsync1-')".into())
-    })?;
+    let body = code
+        .strip_prefix(PREFIX)
+        .ok_or_else(|| Error::Invite("that does not look like a tgsync invite code (should start with 'tgsync1-')".into()))?;
     let damaged = || Error::Invite("invite code is damaged (copy the whole thing)".into());
     let raw = URL_SAFE_NO_PAD.decode(body.trim_end_matches('=')).map_err(|_| damaged())?;
     let d: Value = serde_json::from_slice(&raw).map_err(|_| damaged())?;
@@ -41,7 +41,12 @@ pub fn decode_invite(code: &str) -> Result<Invite> {
             a.get(1).and_then(Value::as_str).ok_or_else(damaged)?.to_owned(),
         )),
     };
-    Ok(Invite { link: s("l")?, vault_id: s("v")?, fingerprint: s("f")?, api })
+    Ok(Invite {
+        link: s("l")?,
+        vault_id: s("v")?,
+        fingerprint: s("f")?,
+        api,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

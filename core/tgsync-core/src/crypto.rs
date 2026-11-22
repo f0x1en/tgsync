@@ -42,7 +42,11 @@ pub fn mac(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 /// Human-comparable fingerprint of a vault key, e.g. `5970 4df4 306a 51c1 a846`.
 pub fn fingerprint(key: &[u8]) -> String {
     let h = hex::encode(Sha256::digest([b"tgsync/fingerprint/v1".as_slice(), key].concat()));
-    h[..20].as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")
+    h.as_bytes()[..20]
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `hex(SHA256(recipient))[:16]`.

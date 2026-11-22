@@ -115,7 +115,16 @@ impl Tree {
                 };
                 let mut blob = entry.get("blob")?.as_object()?.clone();
                 blob.entry("payload_msg").or_insert(Value::from(msg_id));
-                let node = Node { path: path.clone(), sha, size, mtime, blob, author: author.to_owned(), msg_id, doc: None };
+                let node = Node {
+                    path: path.clone(),
+                    sha,
+                    size,
+                    mtime,
+                    blob,
+                    author: author.to_owned(),
+                    msg_id,
+                    doc: None,
+                };
                 if clash.as_ref().is_some_and(|c| *c != path) {
                     return Some(self.conflict(node, author, ts));
                 }
@@ -144,7 +153,16 @@ impl Tree {
                 if cur_sha.is_some() || clash.is_some() {
                     return None;
                 }
-                self.set(Node { path: path.clone(), sha: DIR.into(), size: 0, mtime: ts, blob: Map::new(), author: author.to_owned(), msg_id, doc: None });
+                self.set(Node {
+                    path: path.clone(),
+                    sha: DIR.into(),
+                    size: 0,
+                    mtime: ts,
+                    blob: Map::new(),
+                    author: author.to_owned(),
+                    msg_id,
+                    doc: None,
+                });
                 Some(Applied::Mkdir(path))
             }
             "rmdir" => {
@@ -174,7 +192,12 @@ impl Tree {
             doc: Some(doc.to_owned()),
         };
         // The doc may already sit at a conflict-copy path: keep editing it there.
-        if let Some(at) = self.nodes.values().find(|n| n.doc.as_deref() == Some(doc) && n.path != path).map(|n| n.path.clone()) {
+        if let Some(at) = self
+            .nodes
+            .values()
+            .find(|n| n.doc.as_deref() == Some(doc) && n.path != path)
+            .map(|n| n.path.clone())
+        {
             if self.nodes.get(path).and_then(|n| n.doc.as_deref()) != Some(doc) {
                 self.set(Node { path: at.clone(), ..node });
                 return Applied::Text(at);

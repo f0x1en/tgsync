@@ -39,7 +39,11 @@ impl Group {
 
     fn descriptor(&mut self, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>) {
         let mut n = self.n;
-        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, None, &mut || { n = n.wrapping_add(1); [n; 12] }).unwrap();
+        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, None, &mut || {
+            n = n.wrapping_add(1);
+            [n; 12]
+        })
+        .unwrap();
         self.n = n;
         self.post('d', data);
     }
@@ -47,7 +51,11 @@ impl Group {
     fn descriptor_v2(&mut self, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>, admins: &[String], key: &[u8; 32]) {
         let mut n = self.n;
         let signing = descriptor::Signing { admins, key };
-        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, Some(signing), &mut || { n = n.wrapping_add(1); [n; 12] }).unwrap();
+        let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, Some(signing), &mut || {
+            n = n.wrapping_add(1);
+            [n; 12]
+        })
+        .unwrap();
         self.n = n;
         self.post('d', data);
     }
@@ -57,7 +65,14 @@ impl Group {
     }
 
     fn record_with(&mut self, ring: &KeyRing, author: &Identity, seq: u64, ts: f64, entries: Vec<Value>, payload: Vec<u8>) -> i64 {
-        let rec = Record { author: author.id(), seq, ts, entries, payload, signer: None };
+        let rec = Record {
+            author: author.id(),
+            seq,
+            ts,
+            entries,
+            payload,
+            signer: None,
+        };
         let nonce = self.nonce();
         let body = encode_record(ring, &rec, &nonce, author.signing.as_ref()).unwrap();
         self.post('r', body)
@@ -159,7 +174,13 @@ fn replayed_record_ignored() {
 #[test]
 fn unsafe_paths_from_peer_are_ignored() {
     let (mut g, ring, a, _, mut ra, _) = pair();
-    g.record(&ring, &a, 1, 1.0, vec![put("../evil", "x", None), put(".tgsync/state", "x", None), put("ok.md", "x", None)]);
+    g.record(
+        &ring,
+        &a,
+        1,
+        1.0,
+        vec![put("../evil", "x", None), put(".tgsync/state", "x", None), put("ok.md", "x", None)],
+    );
     g.pull(&mut ra);
     assert_eq!(ra.tree.nodes.keys().collect::<Vec<_>>(), ["ok.md"]);
 }
@@ -218,7 +239,10 @@ fn admin_person(k: u8) -> Identity {
 }
 
 fn smember(p: &Identity, name: &str) -> Member {
-    Member { signer: p.signer(), ..member(p, name) }
+    Member {
+        signer: p.signer(),
+        ..member(p, name)
+    }
 }
 
 /// alice (admin) + bob in a v2 vault.
@@ -248,7 +272,13 @@ fn non_admin_member_cannot_change_members() {
     let (mut g, ring, a, b, mut ra, _) = admin_pair();
     let carol = admin_person(3);
     // bob holds the vault key (valid proof) but is not an admin.
-    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob"), smember(&carol, "carol")], None, &[b.signer().unwrap()], &[2; 32]);
+    g.descriptor_v2(
+        &ring,
+        &[smember(&a, "alice"), smember(&b, "bob"), smember(&carol, "carol")],
+        None,
+        &[b.signer().unwrap()],
+        &[2; 32],
+    );
     let rep = g.pull(&mut ra);
     assert_eq!(rep.problems[0].1, "rejected descriptor: descriptor not signed by an admin");
     assert_eq!(ra.members.len(), 2);
@@ -277,9 +307,17 @@ fn v1_descriptor_rejected_after_v2() {
 #[test]
 fn tampered_signature_rejected() {
     let (mut g, ring, a, b, mut ra, _) = admin_pair();
-    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob")], None, &[a.signer().unwrap()], &[1; 32]);
+    g.descriptor_v2(
+        &ring,
+        &[smember(&a, "alice"), smember(&b, "bob")],
+        None,
+        &[a.signer().unwrap()],
+        &[1; 32],
+    );
     let last = g.msgs.len() - 1;
-    let text = String::from_utf8(g.msgs[last].2.clone()).unwrap().replace("\"created\":1", "\"created\":2");
+    let text = String::from_utf8(g.msgs[last].2.clone())
+        .unwrap()
+        .replace("\"created\":1", "\"created\":2");
     g.msgs[last].2 = text.into_bytes();
     assert!(g.pull(&mut ra).problems[0].1.contains("signature is invalid"));
 }
@@ -288,7 +326,13 @@ fn tampered_signature_rejected() {
 fn admin_must_be_a_member() {
     let (mut g, ring, a, b, mut ra, _) = admin_pair();
     let outsider = admin_person(9);
-    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&b, "bob")], None, &[a.signer().unwrap(), outsider.signer().unwrap()], &[1; 32]);
+    g.descriptor_v2(
+        &ring,
+        &[smember(&a, "alice"), smember(&b, "bob")],
+        None,
+        &[a.signer().unwrap(), outsider.signer().unwrap()],
+        &[1; 32],
+    );
     assert!(g.pull(&mut ra).problems[0].1.contains("an admin is not a member"));
 }
 
@@ -346,7 +390,7 @@ fn stale_key_record_rejected_and_handed_back_to_its_writer() {
     let old = ring.clone();
     ring.add(2, &[2u8; 32]).unwrap();
     g.descriptor_v2(&ring, &three[..2], Some(1), &[a.signer().unwrap()], &[1; 32]); // carol removed
-    // bob has not pulled the rotation and writes with the old key carol still holds.
+                                                                                    // bob has not pulled the rotation and writes with the old key carol still holds.
     g.record(&old, &b, 1, 1.0, vec![put("n.md", "s1", None)]);
     let rep = g.pull(&mut rb);
     assert!(rb.tree.get("n.md").is_none());
@@ -385,7 +429,13 @@ fn late_joiner_agrees_with_old_member_on_rejected_records() {
     g.record(&old, &b, 1, 1.0, vec![put("late.md", "x", None)]);
     g.record(&ring, &a, 1, 2.0, vec![put("ok.md", "y", None)]);
     let dave = admin_person(4);
-    g.descriptor_v2(&ring, &[smember(&a, "alice"), smember(&dave, "dave")], None, &[a.signer().unwrap()], &[1; 32]);
+    g.descriptor_v2(
+        &ring,
+        &[smember(&a, "alice"), smember(&dave, "dave")],
+        None,
+        &[a.signer().unwrap()],
+        &[1; 32],
+    );
     let mut rd = Replica::new(dave, None);
     g.pull(&mut ra);
     g.pull(&mut rd);
@@ -462,7 +512,8 @@ fn two_new_notes_at_one_path_make_a_conflict_copy() {
 #[test]
 fn bad_text_update_is_skipped() {
     let (mut g, ring, a, _, mut ra, _) = pair();
-    let e = json!({"op": "text", "path": "n.md", "doc": "d1", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, 3]}});
+    let e =
+        json!({"op": "text", "path": "n.md", "doc": "d1", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, 3]}});
     g.record_with(&ring, &a, 1, 1.0, vec![e], b"bad".to_vec());
     g.pull(&mut ra);
     assert!(ra.tree.get("n.md").is_none());

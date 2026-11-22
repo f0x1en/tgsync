@@ -91,13 +91,19 @@ fn invite_and_join_request() {
     let v = v();
     let i = &v["invite"];
     let inv = invites::decode_invite(s(&i["code"])).unwrap();
-    assert_eq!((inv.link.as_str(), inv.vault_id.as_str(), inv.fingerprint.as_str()), (s(&i["link"]), s(&i["vault_id"]), s(&i["fingerprint"])));
+    assert_eq!(
+        (inv.link.as_str(), inv.vault_id.as_str(), inv.fingerprint.as_str()),
+        (s(&i["link"]), s(&i["vault_id"]), s(&i["fingerprint"]))
+    );
     let api = inv.api.clone().unwrap();
     assert_eq!((api.0, api.1.as_str()), (i["api"][0].as_i64().unwrap(), s(&i["api"][1])));
     assert_eq!(invites::encode_invite(&inv), s(&i["code"]));
     let j = &v["join_request"];
     let req = invites::decode_request(s(&j["body"]).as_bytes()).unwrap();
-    assert_eq!((req.vault_id.as_str(), req.recipient.as_str(), req.name.as_str()), (s(&j["vault"]), s(&j["recipient"]), s(&j["name"])));
+    assert_eq!(
+        (req.vault_id.as_str(), req.recipient.as_str(), req.name.as_str()),
+        (s(&j["vault"]), s(&j["recipient"]), s(&j["name"]))
+    );
 }
 
 #[test]
@@ -112,7 +118,10 @@ fn paths_and_conflict_names() {
         }
     }
     for c in v["conflict_name"].as_array().unwrap() {
-        assert_eq!(paths::conflict_name(s(&c["path"]), s(&c["author"]), c["ts"].as_f64().unwrap()), s(&c["out"]));
+        assert_eq!(
+            paths::conflict_name(s(&c["path"]), s(&c["author"]), c["ts"].as_f64().unwrap()),
+            s(&c["out"])
+        );
     }
 }
 
@@ -158,9 +167,25 @@ fn forged_descriptor_rejected() {
     let d = &v["descriptors"];
     let me = ident(&v, "alice");
     let mut ring = KeyRing::new();
-    descriptor::accept(s(&d["sequence"][0]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false, None).unwrap();
+    descriptor::accept(
+        s(&d["sequence"][0]).as_bytes(),
+        &me,
+        &mut ring,
+        Some(s(&d["vault_id"])),
+        false,
+        None,
+    )
+    .unwrap();
     let before = ring.clone();
-    assert!(descriptor::accept(s(&d["forged_after_d1"]).as_bytes(), &me, &mut ring, Some(s(&d["vault_id"])), false, None).is_err());
+    assert!(descriptor::accept(
+        s(&d["forged_after_d1"]).as_bytes(),
+        &me,
+        &mut ring,
+        Some(s(&d["vault_id"])),
+        false,
+        None
+    )
+    .is_err());
     assert_eq!(ring, before, "a rejected descriptor must not change the ring");
 }
 
@@ -175,7 +200,10 @@ fn descriptor_roundtrip() {
         descriptor::Member::new(&bob.recipient, "bob"),
     ];
     let mut n = 0u8;
-    let mut nonce = || { n += 1; [n; 12] };
+    let mut nonce = || {
+        n += 1;
+        [n; 12]
+    };
     let data = descriptor::build(&ring, "a1b2c3d4e5f60718", &members, None, 1_762_850_000, None, &mut nonce).unwrap();
     let mut bob_ring = KeyRing::new();
     let got = descriptor::accept(&data, &bob, &mut bob_ring, None, false, None).unwrap().unwrap();
@@ -208,7 +236,12 @@ fn replay() {
     let tree: serde_json::Map<String, Value> = t
         .nodes
         .iter()
-        .map(|(p, n)| (p.clone(), serde_json::json!({"sha": n.sha, "author": n.author, "msg_id": n.msg_id, "payload_msg": n.blob.get("payload_msg")})))
+        .map(|(p, n)| {
+            (
+                p.clone(),
+                serde_json::json!({"sha": n.sha, "author": n.author, "msg_id": n.msg_id, "payload_msg": n.blob.get("payload_msg")}),
+            )
+        })
         .collect();
     assert_eq!(Value::from(tree), rv["tree"]);
 }
