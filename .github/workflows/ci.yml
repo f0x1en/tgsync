@@ -16,3 +16,31 @@ jobs:
       - run: ruff check src tests
       - run: mypy src
       - run: pytest -q
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { working-directory: core } }
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test
+      - name: simulation (2000 seeds)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo run --release -q -p tgsync-sim -- --seeds 2000
+
+  wasm:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: core } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
+      - run: cargo build --release -p tgsync-wasm --target wasm32-unknown-unknown
+      - run: wasm-bindgen --target nodejs --out-dir pkg target/wasm32-unknown-unknown/release/tgsync_wasm.wasm
+      - run: ls -l pkg
+      - run: node tgsync-wasm/tests/smoke.mjs "$PWD/pkg/tgsync_wasm.js"
