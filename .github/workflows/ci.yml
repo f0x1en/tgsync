@@ -51,3 +51,23 @@ jobs:
           path: |
             core/pkg
             core/pkg-web
+
+  ts:
+    needs: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tgsync-wasm, path: core }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: npm ci
+        working-directory: ts
+      - run: npm run typecheck && npm test
+        working-directory: ts
+      - name: sandbox tests (two Node CLI processes)
+        run: |
+          python -m pip install -e ".[dev]"
+          TGSYNC_CLI="node $PWD/ts/dist/tgsync.mjs" pytest -q tests/test_sandbox.py
