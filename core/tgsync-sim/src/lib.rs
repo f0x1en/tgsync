@@ -147,6 +147,10 @@ pub struct Sim {
     promised: Vec<(usize, i64, String, Option<String>)>,
     /// (client, record msg id at that time, path) for every local edit or delete.
     touched: Vec<(usize, i64, String)>,
+    /// A protocol v1 vault (see `with_version`).
+    v1: bool,
+    /// v1: notes travel as plain puts, so their text is looked up by sha when written back.
+    texts_by_sha: BTreeMap<String, String>,
     /// (client, record msg id, doc, Loro update) for every note upload marked as done.
     text_promised: Vec<(usize, i64, String, Vec<u8>)>,
 }
@@ -175,20 +179,35 @@ fn person(rng: &mut Rng) -> Identity {
 
 impl Sim {
     pub fn new(seed: u64, n_clients: usize) -> Self {
+        Self::with_version(seed, n_clients, false)
+    }
+
+    /// `v1`: a protocol v1 vault (no admins, unsigned records, notes sent as plain puts), as made by
+    /// older clients; the core must keep it working the v1 way (PROTOCOL.md section 14).
+    pub fn with_version(seed: u64, n_clients: usize, v1: bool) -> Self {
         let mut rng = Rng::new(seed);
         let people: Vec<Identity> = (0..n_clients).map(|_| person(&mut rng)).collect();
         let key = rng.bytes::<32>();
         let mut group = vec![];
+        if v1 {
+            let mut ring = tgsync_core::crypto::KeyRing::new();
+            ring.add(1, &key).unwrap();
+            let all: Vec<_> = people.iter().enumerate().map(|(i, p)| tgsync_core::descriptor::Member::new(&p.recipient, &format!("c{i}"))).collect();
+            let d = tgsync_core::descriptor::build(&ring, "5eed5eed5eed5eed", &all, None, 0, None, &mut || rng.bytes()).unwrap();
+            group.push((1, KIND_DESCRIPTOR, d));
+        }
         let mut post = |d: Vec<u8>| {
             let id = group.len() as i64 + 1;
             group.push((id, KIND_DESCRIPTOR, d));
         };
-        post(members::create(&people[0], "c0", "5eed5eed5eed5eed", &key, 0, &mut || rng.bytes()).unwrap());
+        if !v1 {
+            post(members::create(&people[0], "c0", "5eed5eed5eed5eed", &key, 0, &mut || rng.bytes()).unwrap());
+        }
         // The admin adds everyone else (as it would after their join requests).
         let mut admin = Replica::new(people[0].clone(), None);
         let mut rep = Report::default();
         admin.feed(1, KIND_DESCRIPTOR, &group[0].2, &mut rep);
-        for (i, p) in people.iter().enumerate().skip(1) {
+        for (i, p) in people.iter().enumerate().skip(1).filter(|_| !v1) {
             let d = members::add(&admin, &p.recipient, &format!("c{i}"), p.signer().as_deref(), 0, &mut || {
                 rng.bytes()
             })
@@ -215,6 +234,8 @@ impl Sim {
             promised: vec![],
             touched: vec![],
             text_promised: vec![],
+            v1,
+            texts_by_sha: BTreeMap::new(),
         }
     }
 
@@ -258,8 +279,17 @@ impl Sim {
         let target = self.clients[k].vault.replica.me.recipient.clone();
         if self.clients[0].vault.replica.members.iter().any(|m| m.recipient == target) {
             let key = self.rng.bytes::<32>();
-            let Sim { clients, rng, .. } = self;
-            let desc = members::remove(&clients[0].vault.replica, &target, &key, 0, &mut || rng.bytes()).unwrap();
+            let Sim { clients, rng, v1, .. } = self;
+            let desc = if *v1 {
+                let a = &clients[0].vault.replica;
+                let mut ring = a.keys.clone();
+                let old = ring.current_epoch().unwrap();
+                ring.add(old + 1, &key).unwrap();
+                let keep: Vec<_> = a.members.iter().filter(|m| m.recipient != target).cloned().collect();
+                tgsync_core::descriptor::build(&ring, "5eed5eed5eed5eed", &keep, Some(old), 0, None, &mut || rng.bytes()).unwrap()
+            } else {
+                members::remove(&clients[0].vault.replica, &target, &key, 0, &mut || rng.bytes()).unwrap()
+            };
             self.trace.push(format!("c0 removes c{k}"));
             self.post(KIND_DESCRIPTOR, desc);
         } else {
@@ -270,8 +300,14 @@ impl Sim {
     /// The admin adds c{k} back; c{k} joins afresh (new replica, nothing synced, files kept).
     fn churn_add(&mut self, k: usize) {
         let me = self.clients[k].vault.replica.me.clone();
-        let Sim { clients, rng, .. } = self;
-        let desc = members::add(
+        let Sim { clients, rng, v1, .. } = self;
+        let desc = if *v1 {
+            let a = &clients[0].vault.replica;
+            let mut all = a.members.clone();
+            all.push(tgsync_core::descriptor::Member::new(&me.recipient, &format!("c{k}")));
+            tgsync_core::descriptor::build(&a.keys, "5eed5eed5eed5eed", &all, None, 0, None, &mut || rng.bytes()).unwrap()
+        } else {
+            members::add(
             &clients[0].vault.replica,
             &me.recipient,
             &format!("c{k}"),
@@ -279,7 +315,8 @@ impl Sim {
             0,
             &mut || rng.bytes(),
         )
-        .unwrap();
+        .unwrap()
+        };
         self.clients[k].vault.replica = Replica::new(me, None);
         self.clients[k].vault.synced.clear();
         self.trace.push(format!("c0 adds c{k} back"));
@@ -354,7 +391,9 @@ impl Sim {
             ws.insert(at, word.clone());
             self.trace.push(format!("c{c} edit {path}: insert {word} at {at}"));
             self.touched.push((c, self.group.len() as i64, path.clone()));
-            self.clients[c].disk.insert(path, ws.join(" "));
+            let text = ws.join(" ");
+            self.texts_by_sha.insert(sha_hex(&text), text.clone());
+            self.clients[c].disk.insert(path, text);
             return;
         }
         // Sometimes write content that another client also wrote (same bytes, no conflict expected).
@@ -480,6 +519,7 @@ impl Sim {
 
     /// Write the tree to disk as the vault plans it.
     fn materialize(&mut self, c: usize) {
+        let texts = &self.texts_by_sha;
         let cl = &mut self.clients[c];
         let disk: BTreeMap<String, String> = cl
             .disk
@@ -490,6 +530,8 @@ impl Sim {
         for op in ops {
             match op {
                 DiskOp::Write { path, text: Some(t), .. } => cl.disk.insert(path, t),
+                // v1: a note came as a plain put; its text is known by its sha.
+                DiskOp::Write { path, sha, .. } if is_text_path(&path) => cl.disk.insert(path, texts.get(&sha).cloned().unwrap_or(sha)),
                 DiskOp::Write { path, sha, .. } => cl.disk.insert(path, sha),
                 DiskOp::Delete { path } => cl.disk.remove(&path),
                 DiskOp::Mkdir { path } => cl.disk.insert(path, DIR.into()),
@@ -575,7 +617,14 @@ impl Sim {
                     diff.join("\n  ")
                 ));
             }
-            let tree = contents(&cl.vault.replica);
+            // v1 notes are plain puts: compare their text, known by sha.
+            let tree: BTreeMap<String, String> = contents(&cl.vault.replica)
+                .into_iter()
+                .map(|(p, c)| {
+                    let t = if is_text_path(&p) { self.texts_by_sha.get(&c).cloned().unwrap_or(c) } else { c };
+                    (p, t)
+                })
+                .collect();
             let docs = |r: &Replica| r.texts.doc_ids().map(|d| (d.clone(), r.texts.text(d))).collect::<Vec<_>>();
             if docs(&cl.vault.replica) != docs(&self.clients[0].vault.replica) {
                 return Err(format!("c{i}'s text notes differ from c0's"));
@@ -635,14 +684,16 @@ impl Sim {
         // (this catches records that readers rejected, e.g. sealed with a replaced key, and never re-sent).
         for (c, msg_id, path, sha) in &self.promised {
             let Some(sha) = sha.as_ref().filter(|s| *s != DIR) else { continue };
-            if is_text_path(path) {
-                continue; // checked below
+            if is_text_path(path) && !self.v1 {
+                continue; // checked below (notes merge in v2)
             }
             let me = self.clients[*c].vault.replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
             // The same person changed or deleted this path on their own disk afterwards.
             let superseded = self.touched.iter().any(|(c2, m2, p2)| c2 == c && m2 >= msg_id && p2 == path);
-            if member && !superseded && !in_tree.contains(sha.as_str()) && !bases.iter().any(|(_, b)| b == sha) {
+            // (v1 notes: the tree and bases hold the sha of the text.)
+            let id = if is_text_path(path) { sha_hex(sha) } else { sha.clone() };
+            if member && !superseded && !in_tree.contains(id.as_str()) && !bases.iter().any(|(_, b)| *b == id) {
                 let cl = &self.clients[*c];
                 let puts_of_it: Vec<String> = self
                     .promised
@@ -677,7 +728,8 @@ impl Sim {
 
 /// Run one seed. On failure the error holds the full action trace.
 pub fn run(seed: u64, steps: usize) -> Result<Stats, String> {
-    let mut sim = Sim::new(seed, 2 + (seed % 3) as usize);
+    // Every fifth seed is an old (v1) vault.
+    let mut sim = Sim::with_version(seed, 2 + (seed % 3) as usize, seed % 5 == 4);
     for _ in 0..steps {
         sim.step();
     }
@@ -716,6 +768,19 @@ mod tests {
             tree.nodes.values().any(|n| n.blob.get("chunks").is_some_and(|c| c.is_array())),
             "no big file in the tree"
         );
+    }
+
+    #[test]
+    fn v1_vaults_run_the_v1_way() {
+        let mut sim = super::Sim::with_version(4, 3, true);
+        for _ in 0..300 {
+            sim.step();
+        }
+        sim.settle_and_check().unwrap();
+        let r = &sim.clients[0].vault.replica;
+        assert!(r.admins.is_none(), "no admins in a v1 vault");
+        assert_eq!(r.texts.doc_ids().count(), 0, "no merged notes in a v1 vault");
+        assert!(r.tree.nodes.values().any(|n| n.path.ends_with(".md") && n.doc.is_none()), "notes are plain files");
     }
 
     #[test]

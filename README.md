@@ -46,7 +46,7 @@ note at the same time:
   action and fault: Telegram showing new messages late, refusing uploads (flood wait), delivering
   one twice; clients crashing between posting and saving, restarting from saved state; junk and
   bit-flipped messages; the admin removing and re-adding members (key rotation) while others keep
-  writing. After the clients settle it checks that every replica holds the same tree and notes,
+  writing; every fifth seed is an old (v1) vault run in compatibility mode. After the clients settle it checks that every replica holds the same tree and notes,
   every folder equals its tree, every upload a member marked as done survived (or was knowingly
   replaced), and every note edit is merged into its document. 10 000 seeds x 200 steps pass; a
   failing seed prints its trace and replays exactly. Each check was confirmed to catch the bug it
