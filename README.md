@@ -1,29 +1,60 @@
 # tgsync
 
 A shared, end-to-end encrypted folder (works great as an Obsidian vault) that uses a private
-Telegram group as the sync/backup server. Each teammate runs their own copy with their own
-Telegram account. Linux, Windows, macOS; a small CLI, no GUI: your editor and file manager are the UI.
+Telegram group as a dumb, untrusted server. Each teammate runs their own copy with their own
+Telegram account. Notes that two people edit at the same time merge (CRDT); everything else keeps
+both versions. A small CLI and a desktop Obsidian plugin; your editor and file manager are the UI.
 
-> Status: alpha. Crypto, sync and conflict logic are covered by automated tests against an
-> in-memory fake of Telegram, and `scripts/live_e2e.py` replays the full two-person story (invite,
-> approval, sync, conflict, removal, re-join) on real Telegram with two accounts. Use a throwaway
-> group first.
+> Status: alpha. The engine is being rewritten in Rust (branch `rust-core`); the Node CLI already
+> runs on it. Use a throwaway group first.
 
-## How it works
+## Design in one picture
 
-* Your vault is just a folder. Open it in Obsidian (or anything).
-* Everything sent to Telegram is AES-256-GCM ciphertext: file contents, file names, and the
-  member list. Telegram sees only opaque `x.bin` documents, plus their (ciphertext) sizes and timing.
-* One random vault key; each member gets it wrapped to their own **age** (X25519) public key.
-  No passphrase to share. Removing a member rotates to a new key epoch.
-* The group chat is an append-only, ordered operation log. Every client replays it
-  identically, so concurrent edits yield identical results everywhere: the later writer's
-  version becomes `note (conflict ab12cd 2026-11-04 1030).md`. Edits beat deletes. Nothing is
-  silently lost.
-* Many small notes are batched into one Telegram message (Telegram limits ~20 msgs/min);
-  big files are split into sealed 32 MiB chunks.
-* A local git repo (`.tgsync/history.git`, separate from any `.git` of yours) snapshots the
-  vault before and after each sync; `tgsync restore` brings old versions back.
+```
+ your folder ──► host (Node CLI / Obsidian plugin) ──► Rust core (WebAssembly, sans-IO) ──► sealed messages
+                 lists files, moves bytes,              all decisions: crypto, replay,         in one private
+                 talks to Telegram                      merging, membership, push/pull plans   Telegram group
+```
+
+* **The group is an append-only log.** Every message is ciphertext (AES-256-GCM): file contents,
+  file names, the member list. Telegram sees only `x.bin` documents, their sizes and their timing.
+* **Every client replays the same log the same way**, so all reach the same files without a server
+  deciding anything (PROTOCOL.md section 9). An edit beats a concurrent delete; nothing is lost
+  silently.
+* **Notes merge.** A `.md` edit travels as a [Loro](https://loro.dev) CRDT update (about 130 bytes for
+  a one-line change in a 31 KB note); two people editing one note get one merged note. Other files
+  that both changed keep both versions (`file (conflict ab12cd 2026-11-04 1030).ext`).
+* **Members and admins.** The vault key is wrapped to each member's age (X25519) key. Only admins
+  (Ed25519 signers) change who is in; removing someone rotates the key. Every record is signed by
+  its author, and a record only counts if its author was a member, using the newest key, at that
+  point in the log: a removed member can neither read nor write anything new.
+* **The core is sans-IO**: no network, files, clock or randomness inside. That makes it testable
+  as a pure function of the log, and lets one engine run in Node, in Obsidian, and in the simulator.
+
+## How it is tested
+
+* **Deterministic simulation** (`make sim`): 2-4 clients share one fake group; a seed picks every
+  action and fault: Telegram showing new messages late, refusing uploads (flood wait), delivering
+  one twice; clients crashing between posting and saving, restarting from saved state; junk and
+  bit-flipped messages; the admin removing and re-adding members (key rotation) while others keep
+  writing. After the clients settle it checks that every replica holds the same tree and notes,
+  every folder equals its tree, every upload a member marked as done survived (or was knowingly
+  replaced), and every note edit is merged into its document. 10 000 seeds x 200 steps pass; a
+  failing seed prints its trace and replays exactly. Each check was confirmed to catch the bug it
+  guards against by breaking the code on purpose.
+* Bugs the simulator found and that are fixed: a junk message naming an unknown key epoch froze
+  every client for good; anyone in the group could make a member believe they were removed; a
+  removed member could keep writing with the old key, and teammates who had not seen the key change
+  kept writing data the removed member could read; such rejected writes are now re-sent with the new key.
+* Fixed test vectors (`spec/vectors.json`) shared by the Python, TypeScript and Rust code; unit
+  tests for the core; the Node CLI's tests; two-process sandbox tests through `--json`; a live
+  two-account test on real Telegram (`scripts/live_e2e.py`); CI on Linux, Windows and macOS, plus
+  a WebAssembly build smoke test.
+
+Measured on one laptop core (`cargo run --release -p tgsync-sim --bin bench`): sealing/opening
+32 MiB chunks 924/1247 MB/s; replaying 2000 signed records (50 000 files) 0.33 s; saving/loading
+that state 224/192 ms; a note edit costs 2.2 ms to prepare and 0.2 ms to apply. Real transfer speed
+is bounded by Telegram.
 
 ## Daily use
 
@@ -41,9 +72,9 @@ tgsync restore    # bring back an older version of a file (it asks which)
 ```
 
 tgsync never runs in the background: it does something only when you run it. Run plain `tgsync`
-before you start editing to see if someone changed the same notes. If two people change the same
-note anyway, nothing is lost: after `tgsync push` and `tgsync pull` the later one is kept as
-`note (conflict ...).md` next to it. Big files print a heads-up ("downloading ... big files take a while") and appear in your
+before you start editing to see if someone changed the same files. If two people change the same
+note anyway, nothing is lost: after `tgsync push` and `tgsync pull` the edits are merged into one
+note. Other files keep both versions: the later one as `file (conflict ...).ext` next to it. Big files print a heads-up ("downloading ... big files take a while") and appear in your
 folder only once they have fully arrived.
 
 ## Setup
@@ -73,8 +104,8 @@ tgsync new ~/vaults/team
    line to the friend.
 2. Friend: run that line. It creates their key, logs them into Telegram, joins the group, sends a
    join request and prints a short code like `f17d-13fd`. They read the code to the owner.
-3. Owner: `tgsync accept f17d-13fd` (typing the code you were told is the confirmation;
-   `tgsync members` shows who is waiting).
+3. Owner (or any admin): `tgsync accept f17d-13fd` (typing the code you were told is the
+   confirmation; `tgsync members` shows who is waiting). The vault's creator is its first admin.
 4. Friend: whenever they like, however long it takes, run plain `tgsync join`; the vault
    downloads. Files already in their folder are not uploaded until they run `tgsync push`. (The invite line, account and folder from step 2 are remembered in
    `~/.config/tgsync/remembered.json`, so nothing needs retyping.)
@@ -92,18 +123,23 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 
 ## Security model & limits
 
-* Telegram (and anyone in the group without a key) cannot read or forge content. A malicious
-  or compromised **member** has the vault key and can read everything and write anything.
-* Telegram can delete or withhold messages. Dropped messages in an author's sequence are
-  reported as problems; replays are ignored; tampering fails authentication.
-* Joining trusts the fingerprint you verify out of band (like Signal safety numbers).
-* A removed member keeps what they already synced; they can't read data written after rotation.
-* Your age secret key lives in your user config dir (`0600` on Unix; per-user profile ACLs on
-  Windows). Protect your disk, and back it up: losing it means losing access.
+* Telegram (and anyone in the group without a key) cannot read or forge content. A malicious or
+  compromised **member** has the vault key and can read everything and write anything until removed;
+  records are signed, so `tgsync log` shows who wrote what.
+* Only admins can add or remove members (descriptors are signed; PROTOCOL.md section 11). Anyone who
+  can post in the group can still post junk; it is skipped and reported.
+* Telegram can delete or withhold messages. Dropped messages in an author's sequence are reported;
+  replays are ignored; tampering fails authentication.
+* Joining trusts the fingerprint in the invite, which you got from a member out of band (like Signal
+  safety numbers).
+* A removed member keeps what they already synced; they cannot read data written after the key
+  rotation, and their new records are rejected.
+* Your age secret key and Ed25519 signing key live in your user config dir (`0600` on Unix; per-user
+  profile ACLs on Windows). Protect your disk, and back them up: losing them means losing access.
 * Not synced: symlinks, files matching `.tgsyncignore`. Empty folders are synced. A renamed,
-  moved or copied file uploads no content again (the group already has it). Everyone should
-  update: older versions cannot read such renames and report "content hash mismatch".
-* `tgsync log` lists changes from the moment you update; earlier changes are not in it.
+  moved or copied file uploads no content again (the group already has it).
+* Vaults made by older versions (protocol v1) keep working with the new CLI in a compatible mode
+  (no merging, no admins) so old and new clients can share them (PROTOCOL.md section 14).
 * Automating a user account is a grey area under Telegram's ToS; keep traffic modest. The limiter
   caps sends at 18/min with >=1.2 s gaps, spaces downloads, honours FloodWait and slows itself
   down after one. Telegram does not publish exact limits.
@@ -117,6 +153,14 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 uv venv && uv pip install -e ".[dev]"      # test/lint environment
 make check                                 # ruff + mypy + pytest
 pipx install --editable .                  # optional: a global `tgsync` that follows your edits
+```
+The Rust core and the Node CLI on it (branch `rust-core`):
+```bash
+make rust                                  # core tests, test vectors, a short simulation
+make sim                                   # 10 000 simulated seeds (a few minutes)
+make wasm                                  # core -> WebAssembly (or fetches CI's build without the wasm32 target)
+cd ts && npm install && npm run build      # Node CLI: node ts/dist/tgsync.mjs
+cd obsidian && npm install && npm run build   # Obsidian plugin (desktop): copy main.js + manifest.json
 ```
 Try it offline with two people, no Telegram: `export TGSYNC_SANDBOX=~/tgs TGSYNC_PROFILE=alice`
 (and `bob` in a second terminal). Code map, sandbox walkthrough, `--json` output for scripts and
