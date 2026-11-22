@@ -281,3 +281,19 @@ test("a push cut off by the network is simply retried; nothing is lost or double
   assert.deepEqual((await b.vault.status()).problems, []);
   await cleanup();
 });
+
+test("restore brings back an old version of a binary file from the group", async () => {
+  const { a, b, cleanup } = await pair();
+  await a.write("pic.bin", "v1");
+  await sync(a);
+  await a.write("pic.bin", "v2");
+  await sync(a);
+  await sync(b);
+  const vers = await b.vault.versions("pic.bin");
+  assert.equal(vers.length, 2);
+  await b.vault.restoreVersion("pic.bin", vers[1].rev);   // the older one
+  assert.equal(await b.read("pic.bin"), "v1");
+  await sync(b); await sync(a);
+  assert.equal(await a.read("pic.bin"), "v1");
+  await cleanup();
+});
