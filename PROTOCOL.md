@@ -296,3 +296,9 @@ start a new doc.
 
 Loro merges concurrent operations the same way in every replica, so every client ends with the same
 text. `put` and `delete` still work on note paths with the section 9 rules (sha = SHA-256 of the text).
+
+## 14. Old (v1) vaults and new clients
+
+A vault whose descriptors are all `v: 1` has no admins. The Rust core still syncs it the v1 way so
+older clients can share it: it writes unsigned `v: 1` records, sends notes as plain `put` entries (no
+`text`), and cannot change members (an older client must). New vaults are `v: 2` from the start.
