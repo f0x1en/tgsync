@@ -448,7 +448,8 @@ pub fn run(seed: u64, steps: usize) -> Result<Stats, String> {
 mod tests {
     #[test]
     fn seeds_converge() {
-        for seed in 0..300 {
+        // Quick smoke run; `make sim` runs 10000 seeds in release mode.
+        for seed in 0..40 {
             if let Err(e) = super::run(seed, 150) {
                 panic!("{e}");
             }
