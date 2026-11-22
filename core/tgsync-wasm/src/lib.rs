@@ -35,7 +35,11 @@ impl Stream {
         if seed.len() < 32 {
             return Err(js("seed must be at least 32 random bytes"));
         }
-        Ok(Stream { seed: seed.to_vec(), label, n: 0 })
+        Ok(Stream {
+            seed: seed.to_vec(),
+            label,
+            n: 0,
+        })
     }
     fn block(&mut self) -> [u8; 32] {
         self.n += 1;
@@ -306,7 +310,15 @@ impl Engine {
 
     #[wasm_bindgen(js_name = sealChunk)]
     pub fn seal_chunk(&self, file_id: &str, index: u32, count: u32, data: &[u8], seed: &[u8]) -> Result<Vec<u8>, JsError> {
-        oplog::seal_chunk(&self.vault.replica.keys, file_id, index, count, data, &Stream::new(seed, "chunk")?.nonce()).map_err(js)
+        oplog::seal_chunk(
+            &self.vault.replica.keys,
+            file_id,
+            index,
+            count,
+            data,
+            &Stream::new(seed, "chunk")?.nonce(),
+        )
+        .map_err(js)
     }
 
     #[wasm_bindgen(js_name = openChunk)]
@@ -381,9 +393,14 @@ impl Engine {
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(&self, recipient: &str, name: &str, signer: Option<String>, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
         let mut s = Stream::new(seed, "add")?;
-        members::add(&self.vault.replica, recipient, name, signer.as_deref(), whole(created, "time")?, &mut || {
-            s.nonce()
-        })
+        members::add(
+            &self.vault.replica,
+            recipient,
+            name,
+            signer.as_deref(),
+            whole(created, "time")?,
+            &mut || s.nonce(),
+        )
         .map_err(js)
     }
     #[wasm_bindgen(js_name = removeMember)]
@@ -438,7 +455,13 @@ pub fn decode_invite(code: &str) -> Result<String, JsError> {
 }
 
 #[wasm_bindgen(js_name = encodeInvite)]
-pub fn encode_invite(link: &str, vault_id: &str, fingerprint: &str, api_id: Option<f64>, api_hash: Option<String>) -> Result<String, JsError> {
+pub fn encode_invite(
+    link: &str,
+    vault_id: &str,
+    fingerprint: &str,
+    api_id: Option<f64>,
+    api_hash: Option<String>,
+) -> Result<String, JsError> {
     let api = match (api_id, api_hash) {
         (Some(i), Some(h)) => Some((whole(i, "api id")?, h)),
         (None, None) => None,

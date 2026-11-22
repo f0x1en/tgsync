@@ -4,7 +4,7 @@
 # changed core/). Needs `gh` logged in.
 set -eu
 cd "$(dirname "$0")/.."
-sha=${1:-$(git log -1 --format=%H -- core)}
+sha=$(git rev-parse "${1:-$(git log -1 --format=%H -- core)}")   # gh needs the full commit id
 run=$(gh run list --commit "$sha" --workflow ci --json databaseId,status -q '.[0].databaseId')
 [ -n "$run" ] || { echo "no CI run for $sha yet; push first"; exit 1; }
 echo "CI run $run for ${sha%"${sha#???????}"}: waiting for its build if needed"

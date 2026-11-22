@@ -116,7 +116,9 @@ pub fn add(
         return Err(err("their join request has a broken signing key; they must ask to join again"));
     }
     if r.members.iter().any(|m| m.signer.as_deref() == Some(s)) {
-        return Err(err("their join request uses another member's signing key; refusing (it may be an impersonation attempt)"));
+        return Err(err(
+            "their join request uses another member's signing key; refusing (it may be an impersonation attempt)",
+        ));
     }
     let mut members = r.members.clone();
     members.push(Member {

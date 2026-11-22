@@ -143,10 +143,14 @@ fn a_join_request_cannot_borrow_someone_elses_signing_key() {
     let mut ra = Replica::new(a.clone(), None);
     g.pull(&mut ra);
     // bob's request claims alice's (the admin's) signer: refused.
-    let e = members::add(&ra, &b.recipient, "bob", a.signer().as_deref(), 2, &mut g.n()).unwrap_err().to_string();
+    let e = members::add(&ra, &b.recipient, "bob", a.signer().as_deref(), 2, &mut g.n())
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("another member's signing key"), "{e}");
     // A key that is not an Ed25519 public key: refused.
-    let e = members::add(&ra, &b.recipient, "bob", Some("AAAA"), 2, &mut g.n()).unwrap_err().to_string();
+    let e = members::add(&ra, &b.recipient, "bob", Some("AAAA"), 2, &mut g.n())
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("broken signing key"), "{e}");
     assert!(members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 2, &mut g.n()).is_ok());
 }
