@@ -3,6 +3,7 @@
 export const notices: string[] = [];
 export class Notice { constructor(msg: string) { notices.push(msg); } }
 export class FileSystemAdapter { constructor(private base: string) {} getBasePath() { return this.base; } }
+export class MarkdownView { saved = 0; async save() { this.saved++; } }
 export class TFile { constructor(public path: string) {} }
 class El {
   text = ""; classes: string[] = [];

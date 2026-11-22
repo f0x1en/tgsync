@@ -46,6 +46,8 @@ desktop.ini
 .obsidian/workspaces.json
 .obsidian/cache
 .trash/
+# the tgsync plugin's own settings are per device (program path)
+.obsidian/plugins/tgsync/data.json
 """
 
 

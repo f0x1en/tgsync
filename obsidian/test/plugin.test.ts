@@ -6,7 +6,7 @@ import { appendFileSync, chmodSync, mkdtempSync, readFileSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { FileSystemAdapter, TFile, notices } from "obsidian";
+import { FileSystemAdapter, MarkdownView, TFile, notices } from "obsidian";
 import TgsyncPlugin from "../src/main.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "tgsync-plugin-"));
@@ -25,10 +25,13 @@ process.stdout.write(JSON.stringify(a[process.argv[3]] ?? { ok: false, error: "u
   return f;
 }
 
+const editor = new MarkdownView();
+
 async function start(cli: string, active: string | null = null) {
   const app: any = {
     vault: { adapter: new FileSystemAdapter("/vaults/team") },
-    workspace: { on: () => ({}), onLayoutReady: () => {}, getActiveFile: () => (active ? new TFile(active) : null) },
+    workspace: { on: () => ({}), onLayoutReady: () => {}, getActiveFile: () => (active ? new TFile(active) : null),
+                 getLeavesOfType: () => [{ view: editor }] },
   };
   const p: any = new TgsyncPlugin(app);
   await p.saveData({ cli, checkMinutes: 0 });
@@ -64,7 +67,9 @@ test("pull and push report what happened; errors and offline are shown", async (
     push: { ok: false, error: "you were removed from this vault" },
   });
   const p = await start(cli);
+  const saved = editor.saved;
   await p.pull();
+  assert.equal(editor.saved, saved + 1, "open notes are saved before pulling");
   assert.ok(notices.includes("tgsync: 2 updated, 1 deleted"), notices.join("\n"));
   assert.ok(notices.some((n) => n.includes("both changed d.bin")));
   assert.equal(p.bars[0].text, "tgsync: up to date");
@@ -78,4 +83,17 @@ test("pull and push report what happened; errors and offline are shown", async (
   await broken.check(true);
   assert.equal(broken.bars[0].text, "tgsync: error");
   assert.ok(notices.some((n) => n.startsWith("tgsync: could not run")));
+});
+
+test("a shared edit that appears later is still announced; offline forgets old warnings", async () => {
+  notices.length = 0;
+  const cli = fakeCli({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) });
+  const p = await start(cli);
+  await p.check(false);
+  writeFileSync(`${cli}.json`, JSON.stringify({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: true }]) }));
+  await p.check(false);
+  assert.ok(notices.some((n) => n.includes("you and someone else changed plan.md")), notices.join("\n"));
+  writeFileSync(`${cli}.json`, JSON.stringify({ status: { ok: true, incoming: null, pending: [], online_error: "x" } }));
+  await p.check(false);
+  assert.deepEqual(p.incoming, []);
 });

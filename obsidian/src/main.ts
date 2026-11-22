@@ -2,7 +2,7 @@
 // tgsync for Obsidian (desktop): a thin layer over the `tgsync` command line program, driven
 // through its `--json` mode. It adds nothing the CLI lacks: it checks the group now and then,
 // shows what changed, warns when someone else changed a note you are editing, and runs pull/push.
-import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
+import { App, FileSystemAdapter, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
 interface Settings {
   cli: string;          // the tgsync program (on PATH, or a full path)
@@ -26,6 +26,8 @@ export default class TgsyncPlugin extends Plugin {
   private bar!: HTMLElement;
   private timer: number | null = null;
   private running = false;
+  /** Pull/push wait here for a running check instead of being refused. */
+  private queue: Promise<unknown> = Promise.resolve();
   private lastIncoming = "";
 
   async onload(): Promise<void> {
@@ -52,7 +54,8 @@ export default class TgsyncPlugin extends Plugin {
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = null;
     if (this.settings.checkMinutes > 0) {
-      this.timer = window.setInterval(() => this.check(false), this.settings.checkMinutes * 60_000);
+      const ms = Math.min(Math.max(this.settings.checkMinutes, 0.5) * 60_000, 2 ** 31 - 1); // setInterval limit
+      this.timer = window.setInterval(() => this.check(false), ms);
       this.registerInterval(this.timer);
     }
   }
@@ -72,11 +75,19 @@ export default class TgsyncPlugin extends Plugin {
     // Desktop only: Obsidian's desktop app gives plugins Node's child_process.
     const { execFile } = require("child_process") as typeof import("child_process");
     return new Promise((resolve) => {
-      execFile(this.settings.cli, ["--json", ...args, "-C", this.folder()], { timeout: 10 * 60_000, maxBuffer: 64 << 20 },
-        (err, stdout) => {
-          try { resolve(JSON.parse(stdout) as T); }
-          catch { resolve({ ok: false, error: err ? `could not run ${this.settings.cli}: ${err.message}` : "no answer from tgsync" } as T); }
-        });
+      try {
+        // Windows: an npm-installed `tgsync` is a .cmd shim, which only starts through the shell.
+        const win = process.platform === "win32";
+        const all = ["--json", ...args, "-C", this.folder()];
+        const argv = win ? all.map((a) => `"${a.replace(/"/g, '\\"')}"`) : all;
+        execFile(win ? `"${this.settings.cli}"` : this.settings.cli, argv, { timeout: 10 * 60_000, maxBuffer: 64 << 20, shell: win },
+          (err, stdout) => {
+            try { resolve(JSON.parse(stdout) as T); }
+            catch { resolve({ ok: false, error: err ? `could not run ${this.settings.cli}: ${err.message}` : "no answer from tgsync" } as T); }
+          });
+      } catch (e) {
+        resolve({ ok: false, error: `could not run ${this.settings.cli}: ${(e as Error).message}` } as T);
+      }
     });
   }
 
@@ -87,9 +98,10 @@ export default class TgsyncPlugin extends Plugin {
     this.running = true;
     try {
       const s = await this.run<Status>(["status"]);
-      if (!s.ok) { this.show("error"); if (loud) new Notice(`tgsync: ${s.error}`); return; }
+      if (!s.ok) { this.forget(); this.show("error"); if (loud) new Notice(`tgsync: ${s.error ?? "unexpected answer from tgsync"}`); return; }
       const mine = s.pending?.length ?? 0;
       if (s.incoming === null || s.incoming === undefined) {
+        this.forget(); // what we knew may be out of date now
         this.show(`offline${mine ? `, ${mine} to push` : ""}`);
         if (loud) new Notice(`tgsync: could not reach the group (${s.online_error ?? "offline"})`);
         return;
@@ -97,7 +109,7 @@ export default class TgsyncPlugin extends Plugin {
       this.incoming = s.incoming;
       const theirs = s.incoming.length;
       this.show(theirs || mine ? [theirs && `${theirs} to pull`, mine && `${mine} to push`].filter(Boolean).join(", ") : "up to date");
-      const key = JSON.stringify(s.incoming.map((x) => [x.op, x.path, x.who]));
+      const key = JSON.stringify(s.incoming.map((x) => [x.op, x.path, x.who, x.also_local]));
       if (key !== this.lastIncoming) this.warned.clear();
       if (theirs && (loud || key !== this.lastIncoming)) {
         const who = [...new Set(s.incoming.map((x) => x.who))].join(", ");
@@ -116,6 +128,18 @@ export default class TgsyncPlugin extends Plugin {
   private warned = new Set<string>();
 
   /** `opened`: the user just opened the note, so tell them even if we did before. */
+  private forget(): void {
+    this.incoming = [];
+    this.lastIncoming = "";
+  }
+
+  /** Write what is typed in open notes to disk first (Obsidian saves with a short delay). */
+  private async saveEditors(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (leaf.view instanceof MarkdownView) await leaf.view.save();
+    }
+  }
+
   private warnIfIncoming(f: TFile | null, opened = false): void {
     const x = f && this.incoming.find((i) => i.path === f.path);
     if (!x || (!opened && this.warned.has(x.path))) return;
@@ -123,13 +147,26 @@ export default class TgsyncPlugin extends Plugin {
     new Notice(`tgsync: ${x.who} changed this note; pull before you edit it`, 8000);
   }
 
-  private async act(what: "pull" | "push"): Promise<void> {
-    if (this.running) { new Notice("tgsync: busy, try again in a moment"); return; }
+  private act(what: "pull" | "push"): Promise<void> {
+    const run = this.queue.then(() => this.actNow(what));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async actNow(what: "pull" | "push"): Promise<void> {
+    while (this.running) await new Promise((r) => window.setTimeout(r, 200)); // a check is running: wait for it
     this.running = true;
     this.show(what === "pull" ? "pulling…" : "pushing…");
     let r: Report;
-    try { r = await this.run<Report>([what]); } finally { this.running = false; }
-    if (!r.ok || !r.report) { new Notice(`tgsync: ${r.error}`); await this.check(false); return; }
+    try {
+      await this.saveEditors();
+      r = await this.run<Report>([what]);
+    } catch (e) {
+      r = { ok: false, error: (e as Error).message };
+    } finally {
+      this.running = false;
+    }
+    if (!r.ok || !r.report) { new Notice(`tgsync: ${r.error ?? "unexpected answer from tgsync"}`); await this.check(false); return; }
     const rep = r.report;
     const parts = what === "pull"
       ? [rep.written.length && `${rep.written.length} updated`, rep.deleted.length && `${rep.deleted.length} deleted`]
@@ -159,17 +196,17 @@ class TgsyncSettingTab extends PluginSettingTab {
     containerEl.createEl("p", { text: "This vault folder must be a tgsync vault (set it up with `tgsync new` or `tgsync join` in a terminal)." });
     new Setting(containerEl)
       .setName("tgsync program")
-      .setDesc("The tgsync command line program: just `tgsync` if it is on your PATH, else its full path.")
+      .setDesc("The tgsync command line program: just `tgsync` if it is on your PATH, else its full path. Kept on this device only.")
       .addText((t) => t.setValue(this.plugin.settings.cli).onChange(async (v) => {
         this.plugin.settings.cli = v.trim() || "tgsync";
         await this.plugin.save();
       }));
     new Setting(containerEl)
       .setName("Check for changes every (minutes)")
-      .setDesc("Looks at the group for teammates' changes and tells you. Downloads nothing. 0 = only when you ask.")
+      .setDesc("Looks at the group for teammates' changes and tells you. Downloads nothing. 0 = only when you ask; otherwise 0.5 to 1440.")
       .addText((t) => t.setValue(String(this.plugin.settings.checkMinutes)).onChange(async (v) => {
         const n = Number(v);
-        if (Number.isFinite(n) && n >= 0) {
+        if (v.trim() !== "" && Number.isFinite(n) && (n === 0 || (n >= 0.5 && n <= 1440))) {
           this.plugin.settings.checkMinutes = n;
           await this.plugin.save();
           this.plugin.schedule();
