@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Sync engine (PROTOCOL.md section 9): replay the group's log, compare with the folder, upload,
-// write files. Same behaviour as src/tgsync/engine.py. No printing, no prompts.
+// One vault folder. The protocol, replay, merging, membership and every sync decision live in the
+// Rust core (core/, WebAssembly, `w.Engine`). This file only lists the folder, talks to the group
+// and moves bytes. No printing, no prompts.
 import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
-import { CryptoError, KeyRing, blobEpoch, fingerprint, fromUtf8, hex, memberId, sha256, utf8 } from "./crypto.ts";
-import type { Files } from "./files.ts";
+import type { Files, Stat } from "./files.ts";
 import { INTERNAL_DIR, PathError, TMP_SUFFIX, makeIgnore, normalize } from "./paths.ts";
-import {
-  DEFAULT_CHUNK, INLINE_MAX, KIND, MAX_ENTRIES_PER_RECORD, RECORD_PAYLOAD_MAX, acceptDescriptor, addMember,
-  buildDescriptor, decodeJoinRequest, decodeRecord, encodeJoinRequest, encodeRecord, openChunk, parseDescriptor,
-  removeMember, sealChunk, type Identity, type JoinRequest, type Member, type Record as Rec,
-} from "./protocol.ts";
-import { State, type LogRow } from "./state.ts";
+import { DEFAULT_CHUNK, INLINE_MAX, KIND, type Identity, type JoinRequest, type Member } from "./protocol.ts";
 import type { Transport } from "./transport.ts";
-import { DIR, type Node, type Tree } from "./tree.ts";
+import { w } from "./core.ts";
 
 export const BIG_FILE = 8 * 1024 * 1024; // files at least this big get a heads-up while moving
 const HASH_PIECE = 4 * 1024 * 1024;
+const RACY_MS = 2000; // a file modified this close to when we hashed it is hashed again
+const ENGINE_FILE = ".tgsync/engine.json";
+const LOCAL_FILE = ".tgsync/local.json";
+const OLD_STATE = ".tgsync/state.json"; // folders of the TypeScript engine: their vault id is reused
 
 export class VaultError extends Error {}
 
@@ -34,44 +33,110 @@ export const newReport = (): Report => ({
   pushed: 0, pushed_paths: [], applied_remote: 0, written: [], deleted: [], conflicts: [], skipped: [], problems: [],
 });
 
-/** A local change to upload. */
-export interface Change { op: "put" | "delete" | "mkdir" | "rmdir"; path: string; base?: string | null; size?: number; mtime?: number; sha?: string }
+/** A local change not uploaded yet. */
+export interface Change { op: "put" | "delete" | "mkdir" | "rmdir"; path: string }
 
 export interface Incoming { op: string; path: string; who: string; also_local: boolean }
 
+/** [msg_id, entry index, ts, author id, op, path, conflict copy or null] */
+type LogRow = [number, number, number, string, string, string, string | null];
+
+interface Local {
+  /** path -> [sha, size, mtime ms, when we hashed it (ms)]: skip re-hashing unchanged files. */
+  stat: { [path: string]: [string, number, number, number] };
+  log: LogRow[];
+  /** "msg.index" -> [doc, text sha] for note versions (restore). */
+  versions: { [rev: string]: [string, string] };
+  problems: [number | null, string][];
+}
+
 const REMOVED_MSG = "you were removed from this vault; local files are left untouched; to ask to come back, run `tgsync join` in this folder";
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const seed = () => globalThis.crypto.getRandomValues(new Uint8Array(32));
+const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+const now = () => Math.floor(Date.now() / 1000);
+const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+const isTextPath = (p: string) => p.toLowerCase().endsWith(".md");
 
-export class Vault {
-  keys = new KeyRing();
-  members: Member[] = [];
-  tree: Tree;
-  notify: (msg: string) => void = () => {};
-  private sentSeq = 0;
-  private descSeen = 0;
-  private cache = new Map<number, Uint8Array>();
-  private busy: Promise<unknown> = Promise.resolve();
+function b64(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
 
-  private constructor(public files: Files, public me: Identity, public transport: Transport, public state: State,
-                      private ignored: (rel: string) => boolean) {
-    this.tree = state.loadTree();
+function unb64(s: string): Uint8Array {
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+
+class LocalState {
+  private constructor(private files: Files, public d: Local) {}
+
+  static async load(files: Files): Promise<LocalState> {
+    const empty: Local = { stat: {}, log: [], versions: {}, problems: [] };
+    if (!(await files.stat(LOCAL_FILE))) return new LocalState(files, empty);
+    return new LocalState(files, { ...empty, ...JSON.parse(dec.decode(await files.read(LOCAL_FILE))) });
   }
 
-  get vaultId(): string | null { return this.state.d.vault_id; }
-  get removed(): boolean { return this.state.d.removed; }
+  async save(): Promise<void> {
+    await this.files.write(LOCAL_FILE, enc.encode(JSON.stringify(this.d)), Date.now());
+  }
+
+  addProblem(msgId: number | null, what: string): void {
+    this.d.problems.push([msgId, what]);
+    if (this.d.problems.length > 200) this.d.problems.splice(0, this.d.problems.length - 200);
+  }
+}
+
+export class Vault {
+  members: Member[] = [];
+  notify: (msg: string) => void = () => {};
+  private busy: Promise<unknown> = Promise.resolve();
+  private cache = new Map<number, Uint8Array>();
+
+  private constructor(public files: Files, public me: Identity, public transport: Transport, public engine: w.Engine,
+                      public state: LocalState, private ignored: (rel: string) => boolean) {
+    this.refreshMembers();
+  }
+
+  get vaultId(): string | null { return this.engine.vaultId() ?? null; }
+  get removed(): boolean { return this.engine.removed(); }
+  get hasKeys(): boolean { return this.engine.hasKeys(); }
+  /** Key epoch new data is sealed with (null without keys). */
+  get epoch(): number | null { return this.engine.epoch() ?? null; }
+  /** The vault key fingerprint, to compare out of band. */
+  fingerprint(): string | null { return this.engine.fingerprint() ?? null; }
+  get isAdmin(): boolean { return this.members.some((m) => m.recipient === this.me.recipient && m.admin); }
+
+  private refreshMembers(): void {
+    this.members = JSON.parse(this.engine.members()).members;
+  }
+
+  private static signing(me: Identity): string {
+    if (!me.signing) throw new VaultError("this profile has no signing key; run `tgsync login` once to create it");
+    return me.signing;
+  }
 
   /** Open the vault in a folder (works for a brand-new folder too). */
   static async open(files: Files, me: Identity, transport: Transport): Promise<Vault> {
-    const state = await State.load(files);
-    const ig = await files.stat(".tgsyncignore") ? fromUtf8(await files.read(".tgsyncignore")) : "";
-    const v = new Vault(files, me, transport, state, makeIgnore(ig));
-    for (const [, text] of state.d.descriptors) {
-      try {
-        const d = await acceptDescriptor(utf8(text), me, v.keys, v.vaultId, true);
-        if (d) v.members = d.members;
-      } catch { /* a stored descriptor that no longer validates is skipped */ }
+    const signing = Vault.signing(me);
+    const state = await LocalState.load(files);
+    const ig = await files.stat(".tgsyncignore") ? dec.decode(await files.read(".tgsyncignore")) : "";
+    let engine: w.Engine;
+    if (await files.stat(ENGINE_FILE)) {
+      engine = w.Engine.load(me.secret, me.recipient, signing, await files.read(ENGINE_FILE));
+    } else {
+      let vid: string | undefined;
+      if (await files.stat(OLD_STATE)) {
+        try { vid = JSON.parse(dec.decode(await files.read(OLD_STATE))).vault_id ?? undefined; } catch { /* unreadable: start empty */ }
+      }
+      engine = new w.Engine(me.secret, me.recipient, signing, vid);
     }
-    v.sentSeq = state.d.authors[me.id] ?? 0;
-    return v;
+    return new Vault(files, me, transport, engine, state, makeIgnore(ig));
+  }
+
+  private async saveEngine(): Promise<void> {
+    await this.files.write(ENGINE_FILE, this.engine.save(), Date.now());
   }
 
   /** One operation at a time per vault (the plugin may trigger several). */
@@ -85,44 +150,45 @@ export class Vault {
   static async create(files: Files, me: Identity, transport: Transport, name = ""): Promise<Vault> {
     const v = await Vault.open(files, me, transport);
     if (v.vaultId) throw new VaultError("this folder is already a tgsync vault");
-    const vaultId = hex(globalThis.crypto.getRandomValues(new Uint8Array(8)));
-    const ring = new KeyRing(new Map([[1, globalThis.crypto.getRandomValues(new Uint8Array(32))]]));
-    await transport.send(KIND.descriptor, await buildDescriptor(ring, vaultId, [{ recipient: me.recipient, name }]));
-    v.state.d.vault_id = vaultId;
+    const c = JSON.parse(w.createVault(me.secret, me.recipient, Vault.signing(me), name, now(), seed()));
+    await transport.send(KIND.descriptor, unb64(c.descriptor));
+    v.engine.free();
+    v.engine = new w.Engine(me.secret, me.recipient, Vault.signing(me), c.vault_id);
     await v.pull();
-    if (!v.keys.size) throw new VaultError("failed to read back our own descriptor");
+    if (!v.hasKeys) throw new VaultError("failed to read back our own descriptor");
     await v.initFiles();
     return v;
   }
 
   /** Vaults in the group that currently include us: vault id -> fingerprint. */
   static async discover(transport: Transport, me: Identity): Promise<Map<string, string>> {
-    const rings = new Map<string, KeyRing>();
-    const member = new Map<string, boolean>();
+    const engines = new Map<string, w.Engine>();
     for await (const m of transport.iterAfter(0)) {
       if (m.kind !== KIND.descriptor) continue;
-      try {
-        const data = await transport.fetch(m.id);
-        const vid: string = parseDescriptor(data).vault_id;
-        if (!rings.has(vid)) rings.set(vid, new KeyRing());
-        const d = await acceptDescriptor(data, me, rings.get(vid)!, vid);
-        member.set(vid, d !== null);
-        if (d === null) rings.set(vid, new KeyRing()); // dropped: a later re-add is a fresh join
-      } catch { continue; }
+      let data: Uint8Array;
+      let vid: unknown;
+      try { data = await transport.fetch(m.id); vid = JSON.parse(dec.decode(data)).vault_id; } catch { continue; }
+      if (typeof vid !== "string") continue;
+      if (!engines.has(vid)) engines.set(vid, new w.Engine(me.secret, me.recipient, Vault.signing(me), vid));
+      const e = engines.get(vid)!;
+      e.beginPass();
+      e.feed(m.id, m.kind, data);
     }
     const out = new Map<string, string>();
-    for (const [vid, r] of rings) {
-      if (r.size && member.get(vid)) out.set(vid, await fingerprint(r.has(1) ? r.key(1) : r.key(r.epochs[0])));
+    for (const [vid, e] of engines) {
+      if (e.hasKeys() && !e.removed()) out.set(vid, e.fingerprint()!);
+      e.free();
     }
     return out;
   }
 
   static async join(files: Files, me: Identity, transport: Transport, vaultId: string): Promise<Vault> {
     const v = await Vault.open(files, me, transport);
-    if (v.vaultId) throw new VaultError("this folder is already a tgsync vault");
-    v.state.d.vault_id = vaultId;
+    if (v.vaultId && v.hasKeys) throw new VaultError("this folder is already a tgsync vault");
+    v.engine.free();
+    v.engine = new w.Engine(me.secret, me.recipient, Vault.signing(me), vaultId);
     await v.pull();
-    if (!v.keys.size || v.removed) {
+    if (!v.hasKeys || v.removed) {
       throw new VaultError(v.removed ? "you were removed from that vault"
         : "you are not a member of that vault (ask a member to approve you)");
     }
@@ -132,100 +198,39 @@ export class Vault {
 
   private async initFiles(): Promise<void> {
     if (!await this.files.stat(".tgsyncignore")) {
-      await this.files.write(".tgsyncignore", utf8("# extra ignore patterns for this vault (gitignore syntax)\n"), Date.now());
+      await this.files.write(".tgsyncignore", enc.encode("# extra ignore patterns for this vault (gitignore syntax)\n"), Date.now());
     }
+    await this.saveEngine();
     await this.state.save();
-  }
-
-  private vid(): string {
-    if (!this.vaultId) throw new VaultError("vault id unknown");
-    return this.vaultId;
   }
 
   // ------------------------------------------------------------------- pull
   /** Replay new log messages in order (reads the group; writes no files). */
   async pull(): Promise<Report> {
     const rep = newReport();
-    for (let i = 0; i < 2; i++) {
-      const blocked = await this.pullPass(rep);
-      if (!(blocked && this.keys.size)) break;
-    }
-    return rep;
-  }
-
-  private async pullPass(rep: Report): Promise<boolean> {
-    const st = this.state.d;
-    const authors = { ...st.authors };
-    const newDesc: [number, string][] = [];
-    const log: LogRow[] = [];
-    let last = st.cursor;
-    let blocked = false; // saw records we cannot read yet: the cursor stays before them
-    const fresh = !st.active; // never synced to disk yet
-    try {
-      for await (const msg of this.transport.iterAfter(st.cursor)) {
-        if (msg.kind === KIND.descriptor) {
-          if (msg.id <= this.descSeen) continue;
-          this.descSeen = msg.id;
-          const data = await this.transport.fetch(msg.id);
-          try {
-            const d = await acceptDescriptor(data, this.me, this.keys, this.vaultId);
-            if (d === null) {
-              if (this.keys.size && fresh) { this.keys = new KeyRing(); this.members = []; }
-              else if (this.keys.size) st.removed = true;
-            } else {
-              this.members = d.members;
-              newDesc.push([msg.id, fromUtf8(data)]);
-            }
-          } catch (e) {
-            this.problem(rep, msg.id, `rejected descriptor: ${(e as Error).message}`);
-          }
-        } else if (msg.kind === KIND.record) {
-          if (st.removed) { /* skip */ }
-          else if (!this.keys.size || blocked) { blocked = true; continue; }
-          else {
-            const data = await this.transport.fetch(msg.id);
-            let rec: Rec | undefined;
-            try {
-              rec = await decodeRecord(this.keys, data);
-            } catch (e) {
-              let missing = false;
-              try { missing = !this.keys.has(blobEpoch(data)); } catch { /* not ours */ }
-              if (missing) { blocked = true; continue; }
-              this.problem(rep, msg.id, `unreadable record: ${(e as Error).message}`);
-            }
-            if (rec) {
-              const prev = authors[rec.author] ?? 0;
-              if (rec.seq <= prev) {
-                this.problem(rep, msg.id, `replayed/duplicate record from ${rec.author.slice(0, 6)} seq ${rec.seq}`);
-              } else {
-                if (prev && rec.seq !== prev + 1) {
-                  this.problem(rep, msg.id, `gap in ${rec.author.slice(0, 6)}'s history: ${prev} -> ${rec.seq} (message dropped?)`);
-                }
-                authors[rec.author] = rec.seq;
-                rec.entries.forEach((ent, i) => {
-                  const r = this.tree.applyEntry(ent, rec.author, rec.ts, msg.id);
-                  if (r && r[0] !== "noop") {
-                    rep.applied_remote++;
-                    log.push([msg.id, i, rec.ts, rec.author, r[0], r[1], r[2]]);
-                  }
-                  if (r && r[0] === "conflict") rep.conflicts.push([r[1], r[2]!]);
-                });
-              }
-            }
-          }
-        }
-        if (!blocked) last = msg.id;
+    for (let pass = 0; pass < 2; pass++) {
+      this.engine.beginPass();
+      for await (const m of this.transport.iterAfter(this.engine.cursor())) {
+        const body = this.engine.wantsBody(m.kind, m.id) ? await this.transport.fetch(m.id) : new Uint8Array(0);
+        this.engine.feed(m.id, m.kind, body);
       }
-    } finally {
-      await this.state.saveReplay(this.tree, last, authors, newDesc, log);
+      if (!(this.engine.blocked() && this.engine.hasKeys())) break;
     }
-    this.sentSeq = Math.max(this.sentSeq, authors[this.me.id] ?? 0);
-    return blocked;
-  }
-
-  private problem(rep: Report, msgId: number, what: string): void {
-    rep.problems.push(`msg ${msgId}: ${what}`);
-    this.state.addProblem(msgId, what);
+    const r = JSON.parse(this.engine.finishPull());
+    for (const [id, i, ts, who, [op, path, copy]] of r.applied) {
+      rep.applied_remote++;
+      this.state.d.log.push([id, i, ts, who, op === "text" ? "put" : op, path, copy]);
+      if (op === "conflict") rep.conflicts.push([path, copy]);
+    }
+    for (const [id, i, doc, sha] of r.text_versions) this.state.d.versions[`${id}.${i}`] = [doc, sha];
+    for (const [id, what] of r.problems) {
+      rep.problems.push(`msg ${id}: ${what}`);
+      this.state.addProblem(id, what);
+    }
+    this.refreshMembers();
+    await this.saveEngine();
+    await this.state.save();
+    return rep;
   }
 
   // ------------------------------------------------------------- local scan
@@ -240,222 +245,217 @@ export class Vault {
     for (const d of keptDirs) yield* this.walk(join(d));
   }
 
-  /** Compare the folder with what was last synced; returns the changes to upload. */
-  async scanLocal(rep: Report): Promise<Change[]> {
-    const synced = this.state.synced();
-    const seen = new Set<string>();
-    const changes: Change[] = [];
-    for await (const [raw, kind] of this.walk()) {
-      let rel: string;
-      try { rel = normalize(raw); } catch (e) { rep.skipped.push(`${raw}: ${(e as PathError).message}`); continue; }
-      seen.add(rel);
-      if (kind === "emptydir") {
-        const node = this.tree.get(rel);
-        if (node?.sha === DIR) { if (!synced.has(rel)) this.state.setSynced(rel, DIR, 0, 0); }
-        else if (!synced.has(rel)) changes.push({ op: "mkdir", path: rel });
-        continue;
-      }
-      const st = await this.files.stat(raw);
-      if (!st || st.type !== "file") { rep.skipped.push(`${rel}: not a regular file`); continue; }
-      const prev = synced.get(rel);
-      if (prev && prev[1] === st.size && prev[2] === st.mtime) continue;
-      let sha: string;
-      try { sha = await this.hashFile(raw); } catch (e) { rep.skipped.push(`${rel}: ${e}`); continue; }
-      const node = this.tree.get(rel);
-      if ((prev && prev[0] === sha) || (node && node.sha === sha)) { this.state.setSynced(rel, sha, st.size, st.mtime); continue; }
-      changes.push({ op: "put", path: rel, base: prev ? prev[0] : null, size: st.size, mtime: st.mtime / 1000, sha });
-    }
-    for (const [rel, [sha]] of synced) {
-      if (!seen.has(rel) && !(await this.files.stat(rel))) {
-        changes.push(sha === DIR ? { op: "rmdir", path: rel } : { op: "delete", path: rel, base: sha });
-      }
-    }
-    await this.state.save();
-    return changes;
-  }
-
-  // ------------------------------------------------------------------- push
-  async push(changes: Change[], rep: Report, chunkSize = DEFAULT_CHUNK): Promise<void> {
-    if (!changes.length) return;
-    const known = new Map<string, Node>();
-    for (const n of this.tree.nodes.values()) if (n.sha !== DIR) known.set(n.sha, n); // content the group has
-    let batch: any[] = [];
-    let payload: Uint8Array[] = [];
-    let payloadLen = 0;
-    const flush = async () => {
-      if (!batch.length) return;
-      this.sentSeq++;
-      const rec = { author: this.me.id, seq: this.sentSeq, ts: Date.now() / 1000, entries: batch, payload: concatAll(payload, payloadLen) };
-      await this.transport.send(KIND.record, await encodeRecord(this.keys, rec));
-      rep.pushed += batch.length;
-      rep.pushed_paths.push(...batch.map((e) => e.path));
-      batch = []; payload = []; payloadLen = 0;
-    };
-    for (const ch of changes) {
-      const old = ch.sha ? known.get(ch.sha) : undefined;
-      if (ch.op !== "put") {
-        batch.push(ch);
-      } else if (old) { // renamed or copied: point at the existing upload, send no data
-        batch.push({ op: "put", path: ch.path, base: ch.base, mtime: ch.mtime, sha: old.sha, size: old.size, blob: { ...old.blob } });
-      } else {
-        let entry: any;
-        try { entry = await this.preparePut(ch, chunkSize, payload, payloadLen); } catch (e) { rep.skipped.push(`${ch.path}: ${(e as Error).message}`); continue; }
-        if (entry.blob.inline) payloadLen += entry.size;
-        batch.push(entry);
-      }
-      if (batch.length >= MAX_ENTRIES_PER_RECORD || payloadLen >= RECORD_PAYLOAD_MAX) await flush();
-    }
-    await flush();
-  }
-
-  /** Build a put entry. Small files join the record payload; big ones stream out as chunks. */
-  private async preparePut(ch: Change, chunkSize: number, payload: Uint8Array[], payloadLen: number): Promise<any> {
-    const st = await this.files.stat(ch.path);
-    if (!st || st.type !== "file") throw new Error("disappeared before upload");
-    const entry: any = { op: "put", path: ch.path, base: ch.base, mtime: ch.mtime };
-    if (st.size <= INLINE_MAX) {
-      const data = await this.files.read(ch.path);
-      payload.push(data);
-      return Object.assign(entry, { sha: hex(await sha256(data)), size: data.length,
-        blob: { file_id: randomId(), chunks: null, inline: [payloadLen, data.length] } });
-    }
-    if (st.size >= BIG_FILE) this.notify(`uploading ${ch.path} (${humanSize(st.size)}); big files take a while`);
-    const fileId = randomId();
-    const count = Math.max(1, Math.ceil(st.size / chunkSize));
-    const h = nobleSha256.create();
-    const ids: number[] = [];
-    let total = 0;
-    for await (const part of this.files.readChunks(ch.path, chunkSize)) {
-      if (ids.length >= count) break;
-      h.update(part);
-      total += part.length;
-      ids.push(await this.transport.send(KIND.chunk, await sealChunk(this.keys, fileId, ids.length, count, part)));
-    }
-    if (ids.length !== count || total !== st.size) throw new Error("changed while uploading; run `tgsync push` again");
-    return Object.assign(entry, { sha: hex(h.digest()), size: total,
-      blob: { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null } });
-  }
-
   /** SHA-256 of a file on disk, read in pieces. */
   async hashFile(path: string): Promise<string> {
     const h = nobleSha256.create();
     for await (const part of this.files.readChunks(path, HASH_PIECE)) h.update(part);
-    return hex(h.digest());
+    return hexOf(h.digest());
+  }
+
+  /** sha of a file, from the stat cache when size and mtime did not change. */
+  private async shaOf(rel: string, st: Stat): Promise<string> {
+    const c = this.state.d.stat[rel];
+    if (c && c[1] === st.size && c[2] === st.mtime && c[3] - c[2] > RACY_MS) return c[0];
+    const sha = await this.hashFile(rel);
+    this.state.d.stat[rel] = [sha, st.size, st.mtime, Date.now()];
+    return sha;
+  }
+
+  /** path -> sha of everything in the folder ("dir" for empty folders). */
+  private async scan(rep: Report): Promise<Map<string, [string, Stat | null]>> {
+    const out = new Map<string, [string, Stat | null]>();
+    for await (const [raw, kind] of this.walk()) {
+      let rel: string;
+      try { rel = normalize(raw); } catch (e) { rep.skipped.push(`${raw}: ${(e as PathError).message}`); continue; }
+      if (kind === "emptydir") { out.set(rel, ["dir", null]); continue; }
+      const st = await this.files.stat(raw);
+      if (!st || st.type !== "file") { rep.skipped.push(`${rel}: not a regular file`); continue; }
+      try { out.set(rel, [await this.shaOf(rel, st), st]); } catch (e) { rep.skipped.push(`${rel}: ${e}`); }
+    }
+    return out;
+  }
+
+  /** Local changes not uploaded yet (no content read beyond hashing). */
+  async pendingChanges(rep = newReport()): Promise<Change[]> {
+    const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
+    const disk = await this.scan(rep);
+    const out: Change[] = [];
+    for (const [p, [sha]] of disk) {
+      if (synced[p] !== sha) out.push({ op: sha === "dir" ? "mkdir" : "put", path: p });
+    }
+    for (const [p, sha] of Object.entries(synced)) {
+      if (!disk.has(p)) out.push({ op: sha === "dir" ? "rmdir" : "delete", path: p });
+    }
+    return out.sort((a, b) => (a.path < b.path ? -1 : 1));
+  }
+
+  // ------------------------------------------------------------------- push
+  /** Upload a big file as sealed chunks; returns its blob for the record. */
+  private async uploadChunks(rel: string, size: number, chunkSize: number): Promise<{ sha: string; blob: object }> {
+    if (size >= BIG_FILE) this.notify(`uploading ${rel} (${humanSize(size)}); big files take a while`);
+    const fileId = hexOf(globalThis.crypto.getRandomValues(new Uint8Array(8)));
+    const count = Math.max(1, Math.ceil(size / chunkSize));
+    const h = nobleSha256.create();
+    const ids: number[] = [];
+    let total = 0;
+    for await (const part of this.files.readChunks(rel, chunkSize)) {
+      if (ids.length >= count) break;
+      h.update(part);
+      total += part.length;
+      ids.push(await this.transport.send(KIND.chunk, this.engine.seal_chunk(fileId, ids.length, count, part, seed())));
+    }
+    if (ids.length !== count || total !== size) throw new Error("changed while uploading; run `tgsync push` again");
+    return { sha: hexOf(h.digest()), blob: { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null } };
+  }
+
+  /** Upload every local change: as many records as needed (500 entries / 4 MiB each). */
+  async push(rep: Report, chunkSize = DEFAULT_CHUNK): Promise<void> {
+    const uploaded = new Map<string, object>(); // sha -> blob of big files sent during this push
+    for (;;) {
+      const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
+      const known = new Set(Object.values(JSON.parse(this.engine.tree()) as { [p: string]: { sha: string } }).map((n) => n.sha));
+      const disk: { [p: string]: object } = {};
+      for (const [rel, [sha, st]] of await this.scan(rep)) {
+        if (sha === "dir") { disk[rel] = { sha, size: 0, mtime: 0, dir: true }; continue; }
+        const base = { sha, size: st!.size, mtime: st!.mtime / 1000 };
+        if (synced[rel] === sha) { disk[rel] = { ...base, keep: true }; continue; }
+        try {
+          if (st!.size <= INLINE_MAX) {
+            const data = await this.files.read(rel);
+            if (hexOf(nobleSha256(data)) !== sha) { rep.skipped.push(`${rel}: changed while reading; run \`tgsync push\` again`); continue; }
+            let text: string | null = null;
+            if (isTextPath(rel)) { try { text = new TextDecoder("utf-8", { fatal: true }).decode(data); } catch { /* not UTF-8: plain file */ } }
+            disk[rel] = text !== null ? { ...base, text } : { ...base, bytes: b64(data) };
+          } else if (known.has(sha)) {
+            disk[rel] = { ...base, bytes: "" }; // the group has this content: the core re-uses its blob
+          } else {
+            let blob = uploaded.get(sha);
+            if (!blob) {
+              const up = await this.uploadChunks(rel, st!.size, chunkSize);
+              if (up.sha !== sha) { rep.skipped.push(`${rel}: changed while uploading; run \`tgsync push\` again`); continue; }
+              uploaded.set(sha, blob = up.blob);
+            }
+            disk[rel] = { ...base, blob };
+          }
+        } catch (e) {
+          rep.skipped.push(`${rel}: ${(e as Error).message}`);
+        }
+      }
+      const plan = this.engine.planPush(JSON.stringify(disk), seed());
+      if (plan === null) break;
+      const p = JSON.parse(plan as string);
+      const body = this.engine.sealRecord(Date.now() / 1000, seed());
+      await this.saveEngine(); // the seq is used now (write-ahead)
+      await this.transport.send(KIND.record, body);
+      this.engine.pushed();
+      await this.saveEngine();
+      rep.pushed += p.done.length;
+      rep.pushed_paths.push(...p.done.map((d: [string, string | null]) => d[0]));
+    }
+    await this.state.save();
   }
 
   // ------------------------------------------------------------ materialize
-  private async payloadOf(node: Node): Promise<Uint8Array> {
-    const mid = node.blob.payload_msg!;
-    if (!this.cache.has(mid)) {
+  private async payloadOf(msgId: number): Promise<Uint8Array> {
+    if (!this.cache.has(msgId)) {
       if (this.cache.size > 64) this.cache.clear();
-      this.cache.set(mid, (await decodeRecord(this.keys, await this.transport.fetch(mid))).payload);
+      this.cache.set(msgId, this.engine.recordPayload(await this.transport.fetch(msgId)));
     }
-    return this.cache.get(mid)!;
+    return this.cache.get(msgId)!;
   }
 
-  /** Download a node into `path`: verified before it replaces anything; big files stream chunk by chunk. */
-  private async writeNode(node: Node, path: string, mtime: number): Promise<void> {
-    const inline = node.blob.inline;
-    if (inline) {
-      const data = (await this.payloadOf(node)).slice(inline[0], inline[0] + inline[1]);
-      if (hex(await sha256(data)) !== node.sha) throw new CryptoError("content hash mismatch after decryption");
+  /** Write one file the core asked for: verified before it replaces anything; big files stream. */
+  private async writeFile(path: string, sha: string, mtimeS: number, text: string | null, blob: any): Promise<void> {
+    let mtime = Math.round(mtimeS * 1000);
+    const st = await this.files.stat(path);
+    if (st && st.mtime === mtime) mtime += 1; // never keep the same (size, mtime) as the old version
+    if (text !== null && text !== undefined) {
+      const data = enc.encode(text);
+      if (hexOf(nobleSha256(data)) !== sha) throw new Error("merged note does not match its hash");
+      await this.files.write(path, data, Date.now());
+      return;
+    }
+    if (blob.inline) {
+      const [off, len] = blob.inline;
+      const data = (await this.payloadOf(blob.payload_msg)).slice(off, off + len);
+      if (hexOf(nobleSha256(data)) !== sha) throw new Error("content hash mismatch after decryption");
       await this.files.write(path, data, mtime);
       return;
     }
-    if (node.size >= BIG_FILE) this.notify(`downloading ${node.path} (${humanSize(node.size)}); big files take a while and only appear when finished`);
-    const ids = node.blob.chunks ?? [];
+    const ids: number[] = blob.chunks ?? [];
+    const size = ids.length * (blob.chunk_size ?? 0);
+    if (size >= BIG_FILE) this.notify(`downloading ${path} (${humanSize(size)}); big files take a while and only appear when finished`);
     const h = nobleSha256.create();
-    const w = await this.files.writer(path);
+    const wr = await this.files.writer(path);
     try {
       for (const [i, mid] of ids.entries()) {
-        const part = await openChunk(this.keys, node.blob.file_id!, i, ids.length, await this.transport.fetch(mid));
+        const part = this.engine.open_chunk(blob.file_id, i, ids.length, await this.transport.fetch(mid));
         h.update(part);
-        await w.write(part);
+        await wr.write(part);
       }
-      if (hex(h.digest()) !== node.sha) throw new CryptoError("content hash mismatch after decryption");
-      await w.finish(mtime);
+      if (hexOf(h.digest()) !== sha) throw new Error("content hash mismatch after decryption");
+      await wr.finish(mtime);
     } catch (e) {
-      await w.abort();
+      await wr.abort();
       throw e;
     }
   }
 
-  /** Write the tree into the folder, never overwriting local edits that are not uploaded yet. */
-  async materialize(rep: Report): Promise<void> {
-    const synced = this.state.synced();
-    const preserved = new Set([...this.tree.nodes.values()].filter((n) => n.sha !== DIR).map((n) => n.sha));
-    const diskSha = async (path: string): Promise<string | null> => {
-      const st = await this.files.stat(path);
-      if (!st || st.type !== "file") return null;
-      const prev = synced.get(path);
-      if (prev && prev[1] === st.size && prev[2] === st.mtime) return prev[0];
-      return this.hashFile(path);
-    };
-    for (const [path, node] of [...this.tree.nodes].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-      if (node.sha === DIR) {
-        const st = await this.files.stat(path);
-        if (!st) { await this.files.mkdir(path); rep.written.push(path + "/"); }
-        if (!st || st.type === "dir") this.state.setSynced(path, DIR, 0, 0);
-        continue;
-      }
-      const have = await diskSha(path);
-      const prev = synced.get(path);
-      if (have === node.sha) {
-        const st = (await this.files.stat(path))!;
-        this.state.setSynced(path, node.sha, st.size, st.mtime);
-        continue;
-      }
-      if (have !== null && have !== (prev ? prev[0] : null) && !preserved.has(have)) {
-        rep.skipped.push(`${path}: you changed it and so did someone else; run \`tgsync push\`, then \`tgsync pull\` to get both versions`);
-        continue;
-      }
-      try {
-        let mtime = Math.round(node.mtime * 1000);
-        const st = await this.files.stat(path);
-        if (st && st.mtime === mtime) mtime += 1; // never keep the same (size, mtime) as the old version
-        await this.writeNode(node, path, mtime);
-      } catch (e) {
-        rep.problems.push(`${path}: could not restore: ${(e as Error).message}`);
-        continue;
-      }
-      const st = (await this.files.stat(path))!;
-      this.state.setSynced(path, node.sha, st.size, st.mtime);
-      rep.written.push(path);
-    }
-    for (const [path, [sha]] of synced) {
-      if (this.tree.nodes.has(path)) continue;
-      const st = await this.files.stat(path);
-      if (sha === DIR) {
-        if (st?.type === "dir" && await this.files.rmdirIfEmpty(path)) {
-          rep.deleted.push(path + "/");
-          await this.pruneEmpty(parentOf(path));
-        }
-      } else if (st?.type === "file") {
-        const have = await this.hashFile(path);
-        if (have !== sha && !preserved.has(have)) {
-          rep.skipped.push(`${path}: deleted by someone else, but you changed it; kept`);
-          this.state.delSynced(path);
-          continue;
-        }
-        await this.files.remove(path);
-        rep.deleted.push(path);
-        await this.pruneEmpty(parentOf(path));
-      }
-      this.state.delSynced(path);
-    }
-    this.state.d.active = true;
-    await this.state.save();
+  /** Remove now-empty parent folders, but never a synced empty folder. */
+  private async pruneEmpty(dir: string, tree: { [p: string]: { sha: string } }): Promise<void> {
+    while (dir && !tree[dir] && await this.files.rmdirIfEmpty(dir)) dir = parentOf(dir);
   }
 
-  /** Remove now-empty parent folders, but never a synced empty folder. */
-  private async pruneEmpty(dir: string): Promise<void> {
-    while (dir && !this.tree.get(dir) && await this.files.rmdirIfEmpty(dir)) dir = parentOf(dir);
+  /** Write the tree into the folder, never overwriting local edits that are not uploaded yet. */
+  async materialize(rep: Report): Promise<void> {
+    const disk = await this.scan(rep);
+    const shas: { [p: string]: string } = {};
+    for (const [p, [sha]] of disk) shas[p] = sha;
+    const before: { [p: string]: string } = JSON.parse(this.engine.synced());
+    const tree: { [p: string]: { sha: string } } = JSON.parse(this.engine.tree());
+    const plan = JSON.parse(this.engine.planMaterialize(JSON.stringify(shas)));
+    const synced: { [p: string]: string } = plan.synced;
+    for (const op of plan.ops) {
+      try {
+        if (op.op === "write") {
+          await this.writeFile(op.path, op.sha, op.mtime, op.text, op.blob);
+          const st = await this.files.stat(op.path);
+          if (st) this.state.d.stat[op.path] = [op.sha, st.size, st.mtime, Date.now()];
+          rep.written.push(op.path);
+        } else if (op.op === "delete") {
+          await this.files.remove(op.path);
+          delete this.state.d.stat[op.path];
+          rep.deleted.push(op.path);
+          await this.pruneEmpty(parentOf(op.path), tree);
+        } else if (op.op === "mkdir") {
+          await this.files.mkdir(op.path);
+          rep.written.push(op.path + "/");
+        } else if (op.op === "rmdir") {
+          if (await this.files.rmdirIfEmpty(op.path)) {
+            rep.deleted.push(op.path + "/");
+            await this.pruneEmpty(parentOf(op.path), tree);
+          }
+        }
+      } catch (e) {
+        rep.problems.push(`${op.path}: could not ${op.op === "write" ? "write" : op.op}: ${(e as Error).message}`);
+        if (before[op.path] === undefined) delete synced[op.path]; else synced[op.path] = before[op.path];
+      }
+    }
+    for (const [p, n] of Object.entries(tree)) {
+      const mine = shas[p];
+      if (n.sha !== "dir" && mine !== undefined && mine !== n.sha && mine !== before[p] && before[p] !== n.sha) {
+        rep.skipped.push(`${p}: you changed it and so did someone else; run \`tgsync push\`, then \`tgsync pull\` to get both versions`);
+      }
+    }
+    this.engine.materialized(JSON.stringify(synced));
+    await this.saveEngine();
+    await this.state.save();
   }
 
   // ---------------------------------------------------- the user's commands
   private checkMember(): void {
     if (this.removed) throw new VaultError(REMOVED_MSG);
-    if (!this.keys.size) throw new VaultError("no vault keys; are you a member?");
+    if (!this.hasKeys) throw new VaultError("no vault keys; are you a member?");
   }
 
   /** `tgsync pull`: download and apply others' changes; uploads nothing. */
@@ -473,14 +473,12 @@ export class Vault {
     return this.exclusive(async () => {
       const rep = await this.pull(); // log only: needed to know the vault state
       this.checkMember();
-      const changes = await this.scanLocal(rep);
-      if (changes.length) {
-        await this.push(changes, rep, chunkSize);
+      await this.push(rep, chunkSize);
+      if (rep.pushed) {
         const r2 = await this.pull();
         rep.applied_remote += r2.applied_remote;
         rep.conflicts.push(...r2.conflicts);
         rep.problems.push(...r2.problems);
-        await this.markPushedSynced(changes);
       }
       return rep;
     });
@@ -495,72 +493,65 @@ export class Vault {
     });
   }
 
-  private async markPushedSynced(changes: Change[]): Promise<void> {
-    for (const ch of changes) {
-      const node = this.tree.get(ch.path);
-      if (ch.op === "put" && node) {
-        const st = await this.files.stat(ch.path);
-        if (st?.type === "file" && await this.hashFile(ch.path) === node.sha) {
-          this.state.setSynced(ch.path, node.sha, st.size, st.mtime);
-        }
-      } else if (ch.op === "mkdir" && node?.sha === DIR) this.state.setSynced(ch.path, DIR, 0, 0);
-      else if ((ch.op === "delete" || ch.op === "rmdir") && !node) this.state.delSynced(ch.path);
-    }
-    await this.state.save();
-  }
-
   /** Others' changes that are not in your folder yet; `also_local`: you changed that file too. */
   async incoming(): Promise<Incoming[]> {
-    const synced = this.state.synced();
-    const local = new Set((await this.scanLocal(newReport())).map((c) => c.path));
-    const names = await this.memberNames();
+    const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
+    const tree: { [p: string]: { sha: string } } = JSON.parse(this.engine.tree());
+    const local = new Set((await this.pendingChanges()).map((c) => c.path));
+    const names = this.memberNames();
     const who = (path: string) => {
-      const rows = this.state.log(path, 1);
-      return rows.length ? names.get(rows[0][1]) ?? rows[0][1].slice(0, 8) : "?";
+      const row = [...this.state.d.log].reverse().find((r) => r[5] === path || r[6] === path);
+      return row ? names.get(row[3]) ?? row[3].slice(0, 8) : "?";
     };
     const out: Incoming[] = [];
-    for (const [path, node] of [...this.tree.nodes].sort(([a], [b]) => (a < b ? -1 : 1))) {
-      if ((synced.get(path)?.[0] ?? null) !== node.sha) {
-        out.push({ op: node.sha === DIR ? "mkdir" : "put", path, who: who(path), also_local: local.has(path) });
-      }
+    for (const path of Object.keys(tree).sort()) {
+      const sha = tree[path].sha;
+      if ((synced[path] ?? null) !== sha) out.push({ op: sha === "dir" ? "mkdir" : "put", path, who: who(path), also_local: local.has(path) });
     }
-    for (const [path, [sha]] of [...synced].sort(([a], [b]) => (a < b ? -1 : 1))) {
-      if (!this.tree.nodes.has(path)) out.push({ op: sha === DIR ? "rmdir" : "delete", path, who: who(path), also_local: local.has(path) });
+    for (const path of Object.keys(synced).sort()) {
+      if (!tree[path]) out.push({ op: synced[path] === "dir" ? "rmdir" : "delete", path, who: who(path), also_local: local.has(path) });
     }
     return out;
   }
 
   async status() {
     const rep = newReport();
-    const changes = await this.scanLocal(rep);
+    const changes = await this.pendingChanges(rep);
+    await this.state.save();
     return {
       vault_id: this.vaultId,
-      epoch: this.keys.size ? this.keys.current : null,
-      fingerprint: this.keys.size ? await fingerprint(this.keys.key(this.keys.current)) : null,
+      epoch: this.epoch,
+      fingerprint: this.fingerprint(),
       members: this.members.map((m) => [m.name, m.recipient] as [string, string]),
-      tracked: this.tree.nodes.size,
+      tracked: Object.keys(JSON.parse(this.engine.tree())).length,
       pending: changes.map((c) => [c.op, c.path] as [string, string]),
       skipped: rep.skipped,
       problems: this.state.d.problems.slice(-10),
-      cursor: this.state.d.cursor,
+      cursor: this.engine.cursor(),
     };
   }
 
   /** Who changed what, newest first (local copy of the log; works offline). */
   async log(path?: string, limit = 50) {
-    const names = await this.memberNames();
-    return this.state.log(path, limit).map(([ts, a, op, p, other]) => ({ ts, who: names.get(a) ?? a.slice(0, 8), op, path: p, copy: other }));
+    const names = this.memberNames();
+    let rows = this.state.d.log;
+    if (path) {
+      const dir = path.replace(/\/+$/, "") + "/";
+      rows = rows.filter((r) => r[5] === path || r[6] === path || r[5].startsWith(dir));
+    }
+    return [...rows].sort((a, b) => b[0] - a[0] || b[1] - a[1]).slice(0, limit)
+      .map(([, , ts, a, op, p, other]) => ({ ts, who: names.get(a) ?? a.slice(0, 8), op, path: p, copy: other }));
   }
 
   /** Uploaded versions of a file, newest first. Each one can come back with restoreVersion(). */
   async versions(path: string, limit = 20) {
-    const names = await this.memberNames();
+    const names = this.memberNames();
     return this.state.d.log.filter((r) => r[5] === path && r[4] === "put")
       .sort((a, b) => b[0] - a[0] || b[1] - a[1]).slice(0, limit)
       .map(([msg, i, ts, a]) => ({ rev: `${msg}.${i}`, ts, who: names.get(a) ?? a.slice(0, 8) }));
   }
 
-  /** Download an older version of `path` from the group into the folder (`tgsync push` shares it). */
+  /** Put an older version of `path` into the folder (`tgsync push` shares it). */
   restoreVersion(path: string, rev: string): Promise<void> {
     return this.exclusive(async () => {
       this.checkMember();
@@ -568,30 +559,41 @@ export class Vault {
       const row = m && this.state.d.log.find((r) => r[0] === +m[1] && r[1] === +m[2] && r[5] === path && r[4] === "put");
       if (!row) throw new VaultError(`${rev} is not a version of ${path} (see \`tgsync restore ${path}\`)`);
       const st = await this.files.stat(path);
-      if (st?.type === "file" && await this.hashFile(path) !== this.state.synced().get(path)?.[0]) {
+      const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
+      if (st?.type === "file" && await this.hashFile(path) !== synced[path]) {
         throw new VaultError(`${path} has changes you did not upload; run \`tgsync push\` first so they stay in the history`);
       }
-      const entry = (await decodeRecord(this.keys, await this.transport.fetch(row[0]))).entries[row[1]];
-      const node: Node = { ...entry, blob: { payload_msg: row[0], ...entry.blob }, author: row[3], msg_id: row[0] };
-      await this.writeNode(node, path, Date.now());
+      const ver = this.state.d.versions[rev];
+      if (ver) {
+        const text = this.engine.textAt(ver[0], ver[1]);
+        if (text === undefined || text === null) throw new VaultError(`${rev}: that version of the note is not available`);
+        await this.files.write(path, enc.encode(text), Date.now());
+        return;
+      }
+      const entry = JSON.parse(this.engine.openRecord(await this.transport.fetch(row[0]))).entries[row[1]];
+      await this.writeFile(path, entry.sha, Date.now() / 1000, null, { payload_msg: row[0], ...entry.blob });
     });
   }
 
-  private async memberNames(): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    for (const m of this.members) out.set(await memberId(m.recipient), m.name || m.recipient.slice(0, 12));
-    return out;
+  private memberNames(): Map<string, string> {
+    return new Map(this.members.map((m) => [m.id!, m.name || m.recipient.slice(0, 12)]));
   }
 
-  // ------------------------------------------------------------------ members
-  async addMember(recipient: string, name = ""): Promise<void> {
+  // ------------------------------------------------------------------ members (admins only)
+  private async postDescriptor(make: () => Uint8Array): Promise<void> {
     await this.pull();
-    await this.transport.send(KIND.descriptor, await addMember(this.keys, this.vid(), this.members, { recipient, name }));
-    await this.pull();
+    this.checkMember();
+    await this.transport.send(KIND.descriptor, make());
+    const rep = await this.pull();
+    if (rep.problems.length) throw new VaultError(`the change was not accepted: ${rep.problems.join("; ")}`);
+  }
+
+  addMember(recipient: string, name = "", signer: string | null = null): Promise<void> {
+    return this.postDescriptor(() => this.engine.addMember(recipient, name, signer ?? undefined, now(), seed()));
   }
 
   static async postJoinRequest(transport: Transport, me: Identity, vaultId: string, name: string): Promise<void> {
-    await transport.send(KIND.join, encodeJoinRequest(vaultId, me.recipient, name));
+    await transport.send(KIND.join, w.encodeJoinRequest(vaultId, me.recipient, name, w.signerOf(Vault.signing(me))));
   }
 
   /** Join requests for this vault from people who are not members yet (latest per key). */
@@ -601,36 +603,33 @@ export class Vault {
     const found = new Map<string, JoinRequest>();
     for await (const m of this.transport.iterAfter(0)) {
       if (m.kind !== KIND.join) continue;
-      let req: JoinRequest | null = null;
-      try { req = decodeJoinRequest(await this.transport.fetch(m.id), m.id); } catch { continue; }
-      if (req && req.vaultId === this.vaultId && !have.has(req.recipient)) found.set(req.recipient, req);
+      let r: any = null;
+      try { r = JSON.parse(w.decodeJoinRequest(await this.transport.fetch(m.id))); } catch { continue; }
+      if (r && r.vault_id === this.vaultId && !have.has(r.recipient)) {
+        found.set(r.recipient, { vaultId: r.vault_id, recipient: r.recipient, name: r.name, msgId: m.id, signer: r.signer });
+      }
     }
     return [...found.values()].sort((a, b) => a.msgId - b.msgId);
   }
 
   /** Let in someone who asked to join (typing their code is the confirmation). */
   acceptRequest(req: JoinRequest, name?: string): Promise<void> {
-    return this.addMember(req.recipient, name || req.name);
+    return this.addMember(req.recipient, name || req.name, req.signer ?? null);
   }
 
-  async removeMember(target: string): Promise<void> {
-    await this.pull();
-    const ring = new KeyRing(this.keys.keys); // rotate on a copy; adopt it once the descriptor is accepted
-    await this.transport.send(KIND.descriptor, await removeMember(ring, this.vid(), this.members, target));
-    await this.pull();
+  /** Remove by name, member id or key; rotates the vault key. */
+  removeMember(target: string): Promise<void> {
+    return this.postDescriptor(() => this.engine.removeMember(target, now(), seed()));
+  }
+
+  giveAdmin(target: string): Promise<void> {
+    return this.postDescriptor(() => this.engine.giveAdmin(target, now(), seed()));
+  }
+
+  dropAdmin(): Promise<void> {
+    return this.postDescriptor(() => this.engine.dropAdmin(now(), seed()));
   }
 }
-
-// ---------------------------------------------------------------------- helpers
-function concatAll(parts: Uint8Array[], total: number): Uint8Array {
-  const out = new Uint8Array(total);
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
-  return out;
-}
-
-const randomId = () => hex(globalThis.crypto.getRandomValues(new Uint8Array(8)));
-const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 
 export function humanSize(n: number): string {
   let x = n;

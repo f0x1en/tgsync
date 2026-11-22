@@ -52,7 +52,9 @@ impl Vault {
     pub fn seal_record(&mut self, seq: u64, push: &Push, ts: f64, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>> {
         let me = &self.replica.me;
         let rec = Record { author: me.id(), seq, ts, entries: push.entries.clone(), payload: push.payload.clone(), signer: None };
-        let body = encode_record(&self.replica.keys, &rec, nonce, me.signing.as_ref())?;
+        // v1 vaults (no admins): unsigned v1 records, readable by older clients.
+        let signing = if self.replica.admins.is_some() { me.signing.as_ref() } else { None };
+        let body = encode_record(&self.replica.keys, &rec, nonce, signing)?;
         self.sent_seq = seq;
         self.resend.clear();
         Ok(body)

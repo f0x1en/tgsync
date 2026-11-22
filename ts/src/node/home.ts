@@ -69,7 +69,14 @@ export async function loadIdentity(profile: string): Promise<Identity> {
   if (!existsSync(p)) throw new HomeError(`no identity for profile '${profile}'; run \`tgsync new\` or \`tgsync join\``);
   const secret = readFileSync(p, "utf8").trim().split("\n").at(-1)!.trim();
   const recipient = await identityToRecipient(secret);
-  return { secret, recipient, id: await memberId(recipient) };
+  return { secret, recipient, id: await memberId(recipient), signing: signingKey(profile) };
+}
+
+/** The profile's Ed25519 signing key (64 hex), made on first use. Never leaves this computer. */
+function signingKey(profile: string): string {
+  const p = join(appDir(profile), "signing.key");
+  if (!existsSync(p)) writeFileSync(p, randomBytes(32).toString("hex") + "\n", { mode: 0o600, flag: "wx" });
+  return readFileSync(p, "utf8").trim();
 }
 
 export async function initIdentity(profile: string): Promise<Identity> {
@@ -77,7 +84,7 @@ export async function initIdentity(profile: string): Promise<Identity> {
   if (existsSync(p)) throw new HomeError(`identity already exists at ${p}`);
   const ident = await newIdentity();
   writeFileSync(p, `# public key: ${ident.recipient}\n${ident.secret}\n`, { mode: 0o600, flag: "wx" });
-  return ident;
+  return { ...ident, signing: signingKey(profile) };
 }
 
 // Things this computer remembers so you don't retype them: your vault folders, and join

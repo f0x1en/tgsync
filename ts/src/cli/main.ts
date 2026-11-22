@@ -344,7 +344,7 @@ const COMMANDS: { [name: string]: Command } = {
       if (tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(tr.chat);
       saveCfg(folder, cfg);
       rememberVault(folder);
-      const code = link ? encodeInvite({ link, vaultId: v.vaultId!, fingerprint: await fingerprint(v.keys.key(1)), api: null }) : null;
+      const code = link ? encodeInvite({ link, vaultId: v.vaultId!, fingerprint: v.fingerprint()!, api: null }) : null;
       emit({ folder: resolve(folder), profile, vault_id: v.vaultId, invite: code }, () => {
         echo(`Vault ready in ${short(folder)} (account '${profile}').\n`);
         echo(`  cd ${short(folder)}`);
@@ -460,7 +460,7 @@ const COMMANDS: { [name: string]: Command } = {
         api = [creds.api_id, creds.api_hash];
         info(yellow("This code contains your api_id/api_hash: only share it with people you trust."));
       }
-      const code = encodeInvite({ link: use, vaultId: v.vaultId!, fingerprint: await fingerprint(v.keys.key(1)), api });
+      const code = encodeInvite({ link: use, vaultId: v.vaultId!, fingerprint: v.fingerprint()!, api });
       emit({ invite: code }, () => {
         echo(`\n  tgsync join ${code}\n`);
         echo("They read you a short code; then:  tgsync accept <code>");
@@ -521,7 +521,7 @@ const COMMANDS: { [name: string]: Command } = {
       }
       const [v] = await openVault(o.vault as string, "remove");
       await v.removeMember(who);
-      const epoch = v.keys.current;
+      const epoch = v.epoch;
       emit({ removed: who, epoch }, () => echo(`Removed. New key epoch ${epoch}; they can't read anything new.`));
     },
   },
@@ -702,7 +702,7 @@ async function check(v: Vault, tr: Transport | null, chat: string, profile: stri
   }
   let rep: Report;
   try { rep = await v.pull(); } catch (e) { line(false, "connect + group access", (e as Error).message); return out; }
-  line(!v.removed && v.keys.size > 0, "vault membership", v.removed ? "removed" : v.keys.size ? `key epoch ${v.keys.current}` : "no keys");
+  line(!v.removed && v.hasKeys, "vault membership", v.removed ? "removed" : v.hasKeys ? `key epoch ${v.epoch}` : "no keys");
   line(!rep.problems.length, "log health", rep.problems.length ? `${rep.problems.length} problem(s)` : "");
   const old = v.state.d.problems;
   line(!old.length, "problems on record", old.length ? String(old.length) : "");

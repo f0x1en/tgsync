@@ -9,8 +9,11 @@ use tgsync_core::replica::Replica;
 use tgsync_core::sync::{plan_materialize, plan_push, Content, DiskOp, LocalFile};
 use tgsync_core::tree::Node;
 
+/// A replica of a vault with admins (v2: notes merge).
 fn me() -> Replica {
-    Replica::new(Identity::new("AGE-SECRET-KEY-1X", "age1test"), None)
+    let mut r = Replica::new(Identity::new("AGE-SECRET-KEY-1X", "age1test"), None);
+    r.admins = Some(vec![]);
+    r
 }
 
 fn files(list: &[(&str, &[u8])]) -> BTreeMap<String, LocalFile> {
@@ -44,6 +47,15 @@ fn push_plans_new_changed_deleted_and_folders() {
     // Nothing changed: nothing to send.
     let synced: BTreeMap<String, String> = disk.iter().map(|(k, v)| (k.clone(), v.sha.clone())).collect();
     assert!(plan_push(&r, &disk, &synced, &[], 2, &mut no_doc).unwrap().is_empty());
+}
+
+#[test]
+fn v1_vaults_send_notes_as_plain_puts() {
+    let mut r = me();
+    r.admins = None;
+    let p = plan_push(&r, &files(&[("a.md", b"note")]), &BTreeMap::new(), &[], 1, &mut no_doc).unwrap();
+    assert_eq!(p.entries[0]["op"], "put");
+    assert_eq!(p.payload, b"note");
 }
 
 #[test]

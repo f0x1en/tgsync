@@ -100,6 +100,9 @@ pub fn plan_push(
         push.entries.push(e);
     }
     let me = replica.me.id();
+    // A vault without admins is a protocol v1 vault (older clients may share it): notes go as plain
+    // `put`s there, since v1 readers know no `text` entries.
+    let v2 = replica.admins.is_some();
     let paths: BTreeSet<&String> = disk.keys().chain(synced.keys()).collect();
     for p in paths {
         let (now, then) = (disk.get(p), synced.get(p));
@@ -115,6 +118,11 @@ pub fn plan_push(
             None => json!({"op": "delete", "path": p, "base": base}),
             Some(f) => match &f.content {
                 Content::Dir => json!({"op": "mkdir", "path": p}),
+                Content::Text(text) if !v2 => {
+                    let inline = push.inline(text.as_bytes());
+                    json!({"op": "put", "path": p, "sha": f.sha, "size": f.size, "mtime": f.mtime, "base": base,
+                           "blob": {"file_id": file_id(&f.sha), "chunks": null, "inline": inline}})
+                }
                 Content::Text(text) => {
                     let peer = text_peer(&me, seq, push.entries.len());
                     let edit = replica.prepare_text(p, base.as_deref(), text, &new_doc(), peer)?;

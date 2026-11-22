@@ -45,8 +45,9 @@ export const openChunk = (keys: KeyRing, fileId: string, i: number, n: number, b
   keys.open("chunk", chunkCtx(fileId, i, n), blob);
 
 // ------------------------------------------------------------------ descriptors
-export interface Member { recipient: string; name: string }
-export interface Identity { secret: string; recipient: string; id: string }
+export interface Member { recipient: string; name: string; id?: string; signer?: string | null; admin?: boolean }
+/** `signing`: Ed25519 signing key (64 hex) for vaults with admins and signed records (Rust engine). */
+export interface Identity { secret: string; recipient: string; id: string; signing?: string }
 export interface Descriptor { vaultId: string; epoch: number; members: Member[]; raw: any }
 
 /** Canonical JSON: sorted keys, no spaces, ASCII escapes (= Python json.dumps(sort_keys=True, separators=(",", ":"))). */
@@ -171,7 +172,7 @@ export function decodeInvite(code: string): Invite {
   }
 }
 
-export interface JoinRequest { vaultId: string; recipient: string; name: string; msgId: number }
+export interface JoinRequest { vaultId: string; recipient: string; name: string; msgId: number; signer?: string | null }
 
 export const encodeJoinRequest = (vaultId: string, recipient: string, name: string): Uint8Array =>
   utf8(JSON.stringify({ v: 1, vault: vaultId, recipient, name: [...name].slice(0, 40).join("") }));

@@ -139,8 +139,9 @@ export async function unwrap(secret: string, ciphertext: Uint8Array): Promise<Ui
 }
 
 /** A new person key (age X25519, same kind as the Python CLI makes). */
-export async function newIdentity(): Promise<{ secret: string; recipient: string; id: string }> {
+/** A new age identity plus an Ed25519 signing key (64 hex). */
+export async function newIdentity(): Promise<{ secret: string; recipient: string; id: string; signing: string }> {
   const secret = await generateX25519Identity();
   const recipient = await identityToRecipient(secret);
-  return { secret, recipient, id: await memberId(recipient) };
+  return { secret, recipient, id: await memberId(recipient), signing: hex(globalThis.crypto.getRandomValues(new Uint8Array(32))) };
 }

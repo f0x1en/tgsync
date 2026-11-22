@@ -49,6 +49,10 @@ pub fn add(r: &Replica, recipient: &str, name: &str, signer: Option<&str>, creat
     if r.members.iter().any(|m| m.recipient == recipient) {
         return Err(err("already a member"));
     }
+    if signer.is_none() {
+        // Records must be signed (PROTOCOL.md section 12): without a key they could never write.
+        return Err(err("their join request has no signing key; they need a current tgsync and must ask to join again"));
+    }
     let mut members = r.members.clone();
     members.push(Member { recipient: recipient.into(), name: name.into(), signer: signer.map(str::to_owned) });
     signed(&r.keys, vault_id, &members, &admins, &r.me, None, created, nonce)

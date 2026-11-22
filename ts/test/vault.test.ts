@@ -11,6 +11,7 @@ import { makeIgnore, DEFAULT_IGNORE } from "../src/paths.ts";
 import { NodeFiles } from "../src/node/files.ts";
 import { FakeChannel } from "../src/transport.ts";
 import { Vault } from "../src/vault.ts";
+import { w } from "../src/core.ts";
 
 const V = JSON.parse(readFileSync(new URL("../../spec/vectors.json", import.meta.url), "utf8"));
 
@@ -41,7 +42,7 @@ async function pair(): Promise<{ a: Peer; b: Peer; ch: FakeChannel; cleanup: () 
   const ia = await newIdentity(), ib = await newIdentity();
   await mkdir(a.root); await mkdir(b.root);
   a.vault = await Vault.create(new NodeFiles(a.root), ia, ch.transport(), "alice");
-  await a.vault.addMember(ib.recipient, "bob");
+  await a.vault.addMember(ib.recipient, "bob", w.signerOf(ib.signing));
   b.vault = await Vault.join(new NodeFiles(b.root), ib, ch.transport(), a.vault.vaultId!);
   return { a, b, ch, cleanup: () => rm(tmp, { recursive: true, force: true }) };
 }
@@ -101,12 +102,28 @@ test("edits and deletes propagate", async () => {
   await cleanup();
 });
 
-test("both edit the same note: conflict copy, nothing lost", async () => {
+test("both edit the same note: the edits merge, no conflict copy", async () => {
   const { a, b, cleanup } = await pair();
-  await a.write("n.md", "base");
+  await a.write("n.md", "first line\nsecond line\n");
   await sync(a); await sync(b);
-  await a.write("n.md", "alice edit");
-  await b.write("n.md", "bob edit");
+  await a.write("n.md", "first line, by alice\nsecond line\n");
+  await b.write("n.md", "first line\nsecond line\nthird line, by bob\n");
+  await sync(a);
+  const rb = await sync(b);
+  await sync(a);
+  assert.equal(rb.conflicts.length, 0);
+  assert.deepEqual(await a.files(), ["n.md"]);
+  assert.equal(await a.read("n.md"), "first line, by alice\nsecond line\nthird line, by bob\n");
+  assert.equal(await b.read("n.md"), await a.read("n.md"));
+  await cleanup();
+});
+
+test("both edit the same binary file: conflict copy, nothing lost", async () => {
+  const { a, b, cleanup } = await pair();
+  await a.write("n.bin", "base");
+  await sync(a); await sync(b);
+  await a.write("n.bin", "alice edit");
+  await b.write("n.bin", "bob edit");
   await sync(a);
   const rb = await sync(b);
   await sync(a);
@@ -180,7 +197,7 @@ test("removed member cannot read new files; late joiner gets full history", asyn
   const c = new Peer(join(dirname(a.root), "carol"));
   await mkdir(c.root);
   const ic = await newIdentity();
-  await a.vault.addMember(ic.recipient, "carol");
+  await a.vault.addMember(ic.recipient, "carol", w.signerOf(ic.signing));
   c.vault = await Vault.join(new NodeFiles(c.root), ic, ch.transport(), a.vault.vaultId!);
   await c.vault.pullChanges();
   assert.deepEqual(await c.files(), ["old.md", "secret.md"]);
@@ -212,7 +229,7 @@ test("huge files stream: never read or written whole, verified byte for byte", a
   };
   const ia = await newIdentity(), ib = await newIdentity();
   const a = await Vault.create(spy(A), ia, ch.transport(), "a");
-  await a.addMember(ib.recipient, "b");
+  await a.addMember(ib.recipient, "b", w.signerOf(ib.signing));
   const b = await Vault.join(spy(B), ib, ch.transport(), a.vaultId!);
   const big = new Uint8Array(5 * 1024 * 1024 + 123).map((_, i) => (i * 7919) % 256);
   await writeFile(join(A, "video.bin"), big);
