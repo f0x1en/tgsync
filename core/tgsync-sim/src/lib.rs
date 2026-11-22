@@ -14,9 +14,9 @@ use tgsync_core::descriptor::Identity;
 use tgsync_core::members;
 use tgsync_core::replica::{Replica, Report, KIND_DESCRIPTOR, KIND_RECORD};
 use tgsync_core::sync::{Content, DiskOp, LocalFile};
-use tgsync_core::vault::Vault;
 use tgsync_core::text::{is_text_path, sha_hex};
 use tgsync_core::tree::DIR;
+use tgsync_core::vault::Vault;
 
 /// What `base` is for a file with this content: text notes use the sha of the text, other files
 /// use their content id directly (content ids stand in for sha-256 of file bytes).
@@ -29,7 +29,15 @@ fn contents(r: &Replica) -> BTreeMap<String, String> {
     r.tree
         .nodes
         .values()
-        .map(|n| (n.path.clone(), match &n.doc { Some(d) => r.texts.text(d).unwrap(), None => n.sha.clone() }))
+        .map(|n| {
+            (
+                n.path.clone(),
+                match &n.doc {
+                    Some(d) => r.texts.text(d).unwrap(),
+                    None => n.sha.clone(),
+                },
+            )
+        })
         .collect()
 }
 
@@ -41,15 +49,35 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 /// as empty small files whose sha is their content id.
 fn local_file(path: &str, content: &str) -> LocalFile {
     if content == DIR {
-        LocalFile { sha: DIR.into(), size: 0, mtime: 0.0, content: Content::Dir }
+        LocalFile {
+            sha: DIR.into(),
+            size: 0,
+            mtime: 0.0,
+            content: Content::Dir,
+        }
     } else if path == BIG {
         // A big file: its chunks went up before the record (here only the blob is simulated).
         let blob = serde_json::json!({"file_id": &content[..content.len().min(16)], "chunks": [], "chunk_size": 1, "inline": null});
-        LocalFile { sha: content.to_owned(), size: 1 << 30, mtime: 0.0, content: Content::Big(blob) }
+        LocalFile {
+            sha: content.to_owned(),
+            size: 1 << 30,
+            mtime: 0.0,
+            content: Content::Big(blob),
+        }
     } else if is_text_path(path) {
-        LocalFile { sha: sha_hex(content), size: content.len() as u64, mtime: 0.0, content: Content::Text(content.to_owned()) }
+        LocalFile {
+            sha: sha_hex(content),
+            size: content.len() as u64,
+            mtime: 0.0,
+            content: Content::Text(content.to_owned()),
+        }
     } else {
-        LocalFile { sha: content.to_owned(), size: 1, mtime: 0.0, content: Content::Small(vec![]) }
+        LocalFile {
+            sha: content.to_owned(),
+            size: 1,
+            mtime: 0.0,
+            content: Content::Small(vec![]),
+        }
     }
 }
 
@@ -60,7 +88,7 @@ impl Rng {
     pub fn new(seed: u64) -> Self {
         Rng(seed)
     }
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -68,22 +96,31 @@ impl Rng {
         z ^ (z >> 31)
     }
     pub fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
+        (self.next_u64() % n as u64) as usize
     }
     pub fn chance(&mut self, percent: u64) -> bool {
-        self.next() % 100 < percent
+        self.next_u64() % 100 < percent
     }
     pub fn bytes<const N: usize>(&mut self) -> [u8; N] {
         let mut out = [0u8; N];
         for b in out.iter_mut() {
-            *b = self.next() as u8;
+            *b = self.next_u64() as u8;
         }
         out
     }
 }
 
 /// Paths the clients fight over: case clashes, folders, names that need conflict copies.
-const PATHS: &[&str] = &["a.md", "A.md", "b.md", "notes/x.md", "notes/X.md", "notes/y.md", "img.png", "video.bin"];
+const PATHS: &[&str] = &[
+    "a.md",
+    "A.md",
+    "b.md",
+    "notes/x.md",
+    "notes/X.md",
+    "notes/y.md",
+    "img.png",
+    "video.bin",
+];
 /// A big file (chunked upload): re-uses the blob when the same content appears again.
 const BIG: &str = "video.bin";
 /// Empty folders the clients create and remove.
@@ -152,16 +189,33 @@ impl Sim {
         let mut rep = Report::default();
         admin.feed(1, KIND_DESCRIPTOR, &group[0].2, &mut rep);
         for (i, p) in people.iter().enumerate().skip(1) {
-            let d = members::add(&admin, &p.recipient, &format!("c{i}"), p.signer().as_deref(), 0, &mut || rng.bytes()).unwrap();
+            let d = members::add(&admin, &p.recipient, &format!("c{i}"), p.signer().as_deref(), 0, &mut || {
+                rng.bytes()
+            })
+            .unwrap();
             let id = group.len() as i64 + 1;
             admin.feed(id, KIND_DESCRIPTOR, &d, &mut rep);
             group.push((id, KIND_DESCRIPTOR, d));
         }
         let clients = people
             .into_iter()
-            .map(|p| Client { vault: Vault::new(p, None), disk: BTreeMap::new() })
+            .map(|p| Client {
+                vault: Vault::new(p, None),
+                disk: BTreeMap::new(),
+            })
             .collect();
-        Sim { rng, trace: vec![], group, clients, next_content: 0, clock: 1_762_850_000.0, faults: true, promised: vec![], touched: vec![], text_promised: vec![] }
+        Sim {
+            rng,
+            trace: vec![],
+            group,
+            clients,
+            next_content: 0,
+            clock: 1_762_850_000.0,
+            faults: true,
+            promised: vec![],
+            touched: vec![],
+            text_promised: vec![],
+        }
     }
 
     fn post(&mut self, kind: char, body: Vec<u8>) {
@@ -217,7 +271,15 @@ impl Sim {
     fn churn_add(&mut self, k: usize) {
         let me = self.clients[k].vault.replica.me.clone();
         let Sim { clients, rng, .. } = self;
-        let desc = members::add(&clients[0].vault.replica, &me.recipient, &format!("c{k}"), me.signer().as_deref(), 0, &mut || rng.bytes()).unwrap();
+        let desc = members::add(
+            &clients[0].vault.replica,
+            &me.recipient,
+            &format!("c{k}"),
+            me.signer().as_deref(),
+            0,
+            &mut || rng.bytes(),
+        )
+        .unwrap();
         self.clients[k].vault.replica = Replica::new(me, None);
         self.clients[k].vault.synced.clear();
         self.trace.push(format!("c0 adds c{k} back"));
@@ -233,7 +295,10 @@ impl Sim {
         // the run differ.)
         let (body, what) = if self.rng.chance(50) || self.group.is_empty() {
             let n = self.rng.below(300);
-            ((0..n).map(|_| self.rng.next() as u8).collect::<Vec<u8>>(), format!("{n} random bytes"))
+            (
+                (0..n).map(|_| self.rng.next_u64() as u8).collect::<Vec<u8>>(),
+                format!("{n} random bytes"),
+            )
         } else {
             let src = self.rng.below(self.group.len());
             let mut b = self.group[src].2.clone();
@@ -262,8 +327,15 @@ impl Sim {
     fn toggle_dir(&mut self, c: usize) {
         let d = DIRS[self.rng.below(DIRS.len())].to_string();
         let disk = &mut self.clients[c].disk;
-        let made = if disk.get(&d).map(String::as_str) == Some(DIR) { disk.remove(&d); false } else { disk.insert(d.clone(), DIR.into()); true };
-        self.trace.push(format!("c{c} {} folder {d}", if made { "makes" } else { "removes" }));
+        let made = if disk.get(&d).map(String::as_str) == Some(DIR) {
+            disk.remove(&d);
+            false
+        } else {
+            disk.insert(d.clone(), DIR.into());
+            true
+        };
+        self.trace
+            .push(format!("c{c} {} folder {d}", if made { "makes" } else { "removes" }));
         self.touched.push((c, self.group.len() as i64, d));
     }
 
@@ -273,7 +345,11 @@ impl Sim {
             // Insert one new word at a random place.
             self.next_content += 1;
             let word = format!("k{}", self.next_content - 1);
-            let mut ws: Vec<String> = self.clients[c].disk.get(&path).map(|t| words(t).map(str::to_owned).collect()).unwrap_or_default();
+            let mut ws: Vec<String> = self.clients[c]
+                .disk
+                .get(&path)
+                .map(|t| words(t).map(str::to_owned).collect())
+                .unwrap_or_default();
             let at = self.rng.below(ws.len() + 1);
             ws.insert(at, word.clone());
             self.trace.push(format!("c{c} edit {path}: insert {word} at {at}"));
@@ -313,7 +389,11 @@ impl Sim {
         if v.replica.removed || !v.replica.has_keys() {
             return;
         }
-        let disk: BTreeMap<String, LocalFile> = clients[c].disk.iter().map(|(p, content)| (p.clone(), local_file(p, content))).collect();
+        let disk: BTreeMap<String, LocalFile> = clients[c]
+            .disk
+            .iter()
+            .map(|(p, content)| (p.clone(), local_file(p, content)))
+            .collect();
         let (seq, plan) = v.plan_push(&disk, &mut || hex8(rng.bytes::<8>())).unwrap();
         if plan.is_empty() {
             return;
@@ -328,7 +408,10 @@ impl Sim {
             .iter()
             .filter(|e| e["op"] == "text")
             .map(|e| {
-                let (off, len) = (e["blob"]["inline"][0].as_u64().unwrap() as usize, e["blob"]["inline"][1].as_u64().unwrap() as usize);
+                let (off, len) = (
+                    e["blob"]["inline"][0].as_u64().unwrap() as usize,
+                    e["blob"]["inline"][1].as_u64().unwrap() as usize,
+                );
                 (e["doc"].as_str().unwrap().to_owned(), plan.payload[off..off + len].to_vec())
             })
             .collect();
@@ -336,8 +419,12 @@ impl Sim {
         let body = self.clients[c].vault.seal_record(seq, &plan, self.clock, &nonce).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
-        self.trace.push(format!("c{c} push seq {seq} {} entries, {resent} sent again{}{}", plan.done.len(),
-            if twice { " (delivered twice)" } else { "" }, if crash { " (crash before marking synced)" } else { "" }));
+        self.trace.push(format!(
+            "c{c} push seq {seq} {} entries, {resent} sent again{}{}",
+            plan.done.len(),
+            if twice { " (delivered twice)" } else { "" },
+            if crash { " (crash before marking synced)" } else { "" }
+        ));
         self.post(KIND_RECORD, body.clone());
         if twice {
             self.post(KIND_RECORD, body);
@@ -361,7 +448,11 @@ impl Sim {
         let cursor = self.clients[c].vault.replica.cursor as usize;
         // Telegram may not show the newest few messages yet; it never hides old ones.
         let len = self.group.len();
-        let visible = if lag && self.rng.chance(30) { len - self.rng.below((len - cursor).min(3) + 1) } else { len };
+        let visible = if lag && self.rng.chance(30) {
+            len - self.rng.below((len - cursor).min(3) + 1)
+        } else {
+            len
+        };
         let mut rep = Report::default();
         let r = &mut self.clients[c].vault.replica;
         for _ in 0..2 {
@@ -375,7 +466,12 @@ impl Sim {
                 break;
             }
         }
-        self.trace.push(format!("c{c} pull to msg {} ({} applied, {} to send again)", r.cursor, rep.applied.len(), rep.resend.len()));
+        self.trace.push(format!(
+            "c{c} pull to msg {} ({} applied, {} to send again)",
+            r.cursor,
+            rep.applied.len(),
+            rep.resend.len()
+        ));
         // Our records that readers skip (sealed with a replaced key): queue them to upload again.
         self.clients[c].vault.pulled(&rep);
         self.materialize(c);
@@ -385,7 +481,11 @@ impl Sim {
     /// Write the tree to disk as the vault plans it.
     fn materialize(&mut self, c: usize) {
         let cl = &mut self.clients[c];
-        let disk: BTreeMap<String, String> = cl.disk.iter().map(|(p, content)| (p.clone(), base_of(p, Some(content)).unwrap())).collect();
+        let disk: BTreeMap<String, String> = cl
+            .disk
+            .iter()
+            .map(|(p, content)| (p.clone(), base_of(p, Some(content)).unwrap()))
+            .collect();
         let (ops, synced) = cl.vault.plan_materialize(&disk);
         for op in ops {
             match op {
@@ -434,12 +534,19 @@ impl Sim {
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {
-            let back = Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save()).map_err(|e| format!("c{i}: load failed: {e}"))?;
-            let (a, b): (serde_json::Value, serde_json::Value) =
-                (serde_json::from_slice(&cl.vault.replica.save()).unwrap(), serde_json::from_slice(&back.save()).unwrap());
+            let back =
+                Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save()).map_err(|e| format!("c{i}: load failed: {e}"))?;
+            let (a, b): (serde_json::Value, serde_json::Value) = (
+                serde_json::from_slice(&cl.vault.replica.save()).unwrap(),
+                serde_json::from_slice(&back.save()).unwrap(),
+            );
             // Loro snapshot bytes are not stable when re-exported: compare notes by content instead.
             let differs: Vec<&String> = a.as_object().unwrap().keys().filter(|k| *k != "texts" && a[*k] != b[*k]).collect();
-            if !differs.is_empty() || back.texts != cl.vault.replica.texts || back.keys != cl.vault.replica.keys || back.members != cl.vault.replica.members {
+            if !differs.is_empty()
+                || back.texts != cl.vault.replica.texts
+                || back.keys != cl.vault.replica.keys
+                || back.members != cl.vault.replica.members
+            {
                 return Err(format!("c{i}: saving and loading the replica changes {differs:?}"));
             }
         }
@@ -447,12 +554,26 @@ impl Sim {
         for (i, cl) in self.clients.iter().enumerate() {
             if cl.vault.replica.tree != *first {
                 let (a, b) = (&first.nodes, &cl.vault.replica.tree.nodes);
-                let diff: Vec<String> = a.keys().chain(b.keys()).collect::<BTreeSet<_>>().into_iter()
+                let diff: Vec<String> = a
+                    .keys()
+                    .chain(b.keys())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
                     .filter(|p| a.get(*p).map(|n| (&n.sha, n.msg_id)) != b.get(*p).map(|n| (&n.sha, n.msg_id)))
-                    .map(|p| format!("{p}: c0 {:?} / c{i} {:?}", a.get(p).map(|n| (&n.sha, n.msg_id)), b.get(p).map(|n| (&n.sha, n.msg_id))))
+                    .map(|p| {
+                        format!(
+                            "{p}: c0 {:?} / c{i} {:?}",
+                            a.get(p).map(|n| (&n.sha, n.msg_id)),
+                            b.get(p).map(|n| (&n.sha, n.msg_id))
+                        )
+                    })
                     .collect();
-                return Err(format!("c{i}'s tree differs from c0's (c{i} cursor {}, removed {}):\n  {}",
-                    cl.vault.replica.cursor, cl.vault.replica.removed, diff.join("\n  ")));
+                return Err(format!(
+                    "c{i}'s tree differs from c0's (c{i} cursor {}, removed {}):\n  {}",
+                    cl.vault.replica.cursor,
+                    cl.vault.replica.removed,
+                    diff.join("\n  ")
+                ));
             }
             let tree = contents(&cl.vault.replica);
             let docs = |r: &Replica| r.texts.doc_ids().map(|d| (d.clone(), r.texts.text(d))).collect::<Vec<_>>();
@@ -467,7 +588,10 @@ impl Sim {
     }
 
     fn check_nothing_lost(&self) -> Result<Stats, String> {
-        let mut stats = Stats { messages: self.group.len(), ..Default::default() };
+        let mut stats = Stats {
+            messages: self.group.len(),
+            ..Default::default()
+        };
         let in_tree: BTreeSet<&str> = self.clients[0].vault.replica.tree.nodes.values().map(|n| n.sha.as_str()).collect();
         // Replay once more, collecting every delivered (non-duplicate) entry.
         let mut r = Replica::new(self.clients[0].vault.replica.me.clone(), None);
@@ -494,7 +618,11 @@ impl Sim {
         }
         stats.problems = rep.problems.len();
         stats.stale_epoch = rep.problems.iter().filter(|(_, why)| why.contains("already replaced")).count();
-        stats.conflicts = rep.applied.iter().filter(|a| matches!(a.4, tgsync_core::tree::Applied::Conflict(..))).count();
+        stats.conflicts = rep
+            .applied
+            .iter()
+            .filter(|a| matches!(a.4, tgsync_core::tree::Applied::Conflict(..)))
+            .count();
         for (path, sha) in puts {
             // Knowingly replaced: someone later wrote this path with base = this content.
             // (A conflict copy's later edits use the copy's path, so also accept any path.)
@@ -516,10 +644,19 @@ impl Sim {
             let superseded = self.touched.iter().any(|(c2, m2, p2)| c2 == c && m2 >= msg_id && p2 == path);
             if member && !superseded && !in_tree.contains(sha.as_str()) && !bases.iter().any(|(_, b)| b == sha) {
                 let cl = &self.clients[*c];
-                let puts_of_it: Vec<String> = self.promised.iter().filter(|p| p.0 == *c && p.2 == *path).map(|p| format!("msg {} {:?}", p.1, p.3)).collect();
-                return Err(format!("upload lost: c{c} marked {path} = {sha} (msg {msg_id}) as uploaded; it is gone. \
+                let puts_of_it: Vec<String> = self
+                    .promised
+                    .iter()
+                    .filter(|p| p.0 == *c && p.2 == *path)
+                    .map(|p| format!("msg {} {:?}", p.1, p.3))
+                    .collect();
+                return Err(format!(
+                    "upload lost: c{c} marked {path} = {sha} (msg {msg_id}) as uploaded; it is gone. \
                     c{c} disk {:?}, synced {:?}, tree {:?}; c{c}'s uploads of {path}: {puts_of_it:?}",
-                    cl.disk.get(path), cl.vault.synced.get(path), cl.vault.replica.tree.get(path).map(|n| &n.sha)));
+                    cl.disk.get(path),
+                    cl.vault.synced.get(path),
+                    cl.vault.replica.tree.get(path).map(|n| &n.sha)
+                ));
             }
         }
         // Text: every note edit a member uploaded is merged into its doc (all its Loro operations
@@ -528,8 +665,10 @@ impl Sim {
             let me = self.clients[*c].vault.replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
             if member && !self.clients[0].vault.replica.texts.contains(doc, update) {
-                return Err(format!("note edit lost: c{c}'s upload to doc {doc} (msg {msg_id}) is not in the final doc {:?}",
-                    self.clients[0].vault.replica.texts.text(doc)));
+                return Err(format!(
+                    "note edit lost: c{c}'s upload to doc {doc} (msg {msg_id}) is not in the final doc {:?}",
+                    self.clients[0].vault.replica.texts.text(doc)
+                ));
             }
         }
         Ok(stats)
@@ -542,7 +681,8 @@ pub fn run(seed: u64, steps: usize) -> Result<Stats, String> {
     for _ in 0..steps {
         sim.step();
     }
-    sim.settle_and_check().map_err(|e| format!("seed {seed}: {e}\ntrace:\n  {}", sim.trace.join("\n  ")))
+    sim.settle_and_check()
+        .map_err(|e| format!("seed {seed}: {e}\ntrace:\n  {}", sim.trace.join("\n  ")))
 }
 
 #[cfg(test)]
@@ -568,7 +708,10 @@ mod tests {
         assert!(t.contains("makes folder") && t.contains("removes folder"), "no folder actions");
         assert!(t.contains("video.bin"), "no big-file actions");
         let tree = &sim.clients[0].vault.replica.tree;
-        assert!(tree.nodes.values().any(|n| n.blob.get("chunks").is_some_and(|c| c.is_array())), "no big file in the tree");
+        assert!(
+            tree.nodes.values().any(|n| n.blob.get("chunks").is_some_and(|c| c.is_array())),
+            "no big file in the tree"
+        );
     }
 
     #[test]
