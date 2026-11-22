@@ -14,12 +14,11 @@ import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs, type ParseArgsConfig } from "node:util";
-import { fingerprint, memberId, shortCode } from "../crypto.ts";
+import { memberId, shortCode } from "../crypto.ts";
 import { INTERNAL_DIR, normalize } from "../paths.ts";
 import { decodeInvite, encodeInvite, type Identity } from "../protocol.ts";
-import { ENGINE_FILE, LOCAL_FILE, OLD_STATE } from "../vault.ts";
 import type { Transport } from "../transport.ts";
-import { Vault, type Incoming, type Report } from "../vault.ts";
+import { ENGINE_FILE, LOCAL_FILE, OLD_STATE, Vault, type Incoming, type Report } from "../vault.ts";
 import { NodeFiles } from "../node/files.ts";
 import {
   checkProfileName, currentProfile, initIdentity, isSandboxLink, listProfiles, loadIdentity, mem, memSave,
@@ -132,9 +131,16 @@ async function vaultAt(folder: string): Promise<[string | null, boolean]> {
     try {
       const d = pick(JSON.parse(readFileSync(join(folder, file), "utf8")));
       return [d.vault_id ?? null, !!d.removed];
-    } catch { return [null, false]; }
+    } catch { continue; } // unreadable: try the older state file
   }
   return [null, false];
+}
+
+/** The invite line for a vault we are a member of (never one without a key fingerprint). */
+function inviteFor(v: Vault, link: string, api: [number, string] | null): string {
+  const fp = v.fingerprint();
+  if (v.removed || !v.hasKeys || !v.vaultId || !fp) throw new CliError("This folder has no vault keys (were you removed?), so it cannot invite anyone.");
+  return encodeInvite({ link, vaultId: v.vaultId, fingerprint: fp, api });
 }
 
 function notAVault(vault: string, cmd = "status"): CliError {
@@ -349,7 +355,7 @@ const COMMANDS: { [name: string]: Command } = {
       if (tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(tr.chat);
       saveCfg(folder, cfg);
       rememberVault(folder);
-      const code = link ? encodeInvite({ link, vaultId: v.vaultId!, fingerprint: v.fingerprint()!, api: null }) : null;
+      const code = link ? inviteFor(v, link, null) : null;
       emit({ folder: resolve(folder), profile, vault_id: v.vaultId, invite: code }, () => {
         echo(`Vault ready in ${short(folder)} (account '${profile}').\n`);
         echo(`  cd ${short(folder)}`);
@@ -404,6 +410,7 @@ const COMMANDS: { [name: string]: Command } = {
         const old = await Vault.open(new NodeFiles(resolve(folder)), ident, tr);
         await old.pull();
         rejoin = old.removed;
+        old.engine.free(); // its state files are moved aside below; this object must not save them again
         if (!rejoin) throw new CliError(`You already joined this vault in ${short(folder)}. To use it:  cd ${short(folder)} && tgsync`);
       }
       const found = await Vault.discover(tr, ident);
@@ -468,7 +475,7 @@ const COMMANDS: { [name: string]: Command } = {
         api = [creds.api_id, creds.api_hash];
         info(yellow("This code contains your api_id/api_hash: only share it with people you trust."));
       }
-      const code = encodeInvite({ link: use, vaultId: v.vaultId!, fingerprint: v.fingerprint()!, api });
+      const code = inviteFor(v, use, api);
       emit({ invite: code }, () => {
         echo(`\n  tgsync join ${code}\n`);
         echo("They read you a short code; then:  tgsync accept <code>");
@@ -524,8 +531,9 @@ const COMMANDS: { [name: string]: Command } = {
       if (what !== "give" && what !== "drop") throw new CliError("Use `tgsync admin give NAME` or `tgsync admin drop`.");
       if (what === "give" && !who) throw new CliError("Missing argument 'NAME' (see `tgsync members`).");
       const [v] = await openVault(o.vault as string, "admin");
+      if (what === "drop" && who) throw new CliError("`tgsync admin drop` only stops YOU being an admin; it takes no NAME. To take someone's rights away, remove them.");
       if (what === "give") await v.giveAdmin(who); else await v.dropAdmin();
-      const admins = v.members.filter((m) => m.admin).map((m) => m.name || m.recipient.slice(0, 12));
+      const admins = v.members.filter((m) => m.admin).map((m) => m.name || m.id!);
       emit({ admins }, () => echo(`Done. Admins now: ${admins.join(", ")}`));
     },
   },
@@ -620,7 +628,7 @@ const COMMANDS: { [name: string]: Command } = {
           for (const x of incoming) {
             const mark = x.op === "delete" || x.op === "rmdir" ? "D" : "M";
             echo(`  ${mark} ${x.path}${x.op === "mkdir" || x.op === "rmdir" ? "/" : ""}   (${x.who})`);
-            if (x.also_local) echo(yellow(`      you changed this too: \`tgsync push\` then \`tgsync pull\` ${x.path.toLowerCase().endsWith(".md") && v.members.some((m) => m.admin) ? "merges both edits" : "keeps both versions (a conflict copy)"}`));
+            if (x.also_local) echo(yellow(`      you changed this too: \`tgsync push\` then \`tgsync pull\` ${x.op === "put" && x.path.toLowerCase().endsWith(".md") && v.members.some((m) => m.admin) ? "merges both edits (notes up to 256 KB)" : "keeps both versions (a conflict copy)"}`));
           }
           echo("get them:  tgsync pull");
         } else echo("  nothing new from others");
