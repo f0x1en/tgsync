@@ -93,6 +93,13 @@ saved and loaded); the admin removes and re-adds members (key rotation) while ot
 every upload a member marked as done is in the tree or was knowingly replaced; every note edit is merged
 into its document. A failing seed prints its whole trace and replays exactly.
 
+**Does it catch bugs?** Each of these deliberate bugs in the core made the simulator fail within the
+first two seeds (2026-11-23): a put that ignores its `base` ("edit lost"), conflict copies that all get
+the same name (replicas differ), "edit beats delete" turned off ("edit lost"), re-sending of records
+rejected for an old key turned off ("upload lost"), migrating no synced map or no seq after a re-join
+(found real bugs before they were fixed). It does not check secrecy (who can read what): that is
+covered by the unit tests in `tests/replica.rs` and `tests/members.rs`.
+
 
 
 | File | What it does |
