@@ -379,3 +379,16 @@ test("a re-joined folder continues the profile's record numbers (never reuses on
   await rm(dir, { recursive: true, force: true });
   await cleanup();
 });
+
+test("a join request posted again with someone else's signing key is refused", async () => {
+  const { a, ch, cleanup } = await pair();
+  const carol = await newIdentity(), mallory = await newIdentity();
+  await Vault.postJoinRequest(ch.transport(), carol, a.vault.vaultId!, "carol");
+  // mallory replays carol's key with her own signing key
+  await Vault.postJoinRequest(ch.transport(), { ...carol, signing: mallory.signing }, a.vault.vaultId!, "carol");
+  const reqs = await a.vault.pendingRequests();
+  assert.equal(reqs.length, 1);
+  assert.ok(reqs[0].conflict);
+  await assert.rejects(a.vault.acceptRequest(reqs[0]), /different signing keys/);
+  await cleanup();
+});

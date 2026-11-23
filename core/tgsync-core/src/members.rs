@@ -68,12 +68,24 @@ fn one_match<'a>(r: &'a Replica, target: &str) -> Result<&'a Member> {
     }
 }
 
+/// A v1 vault (no admins, made by older clients): any member may change who is in, with unsigned
+/// v1 descriptors, as v1 clients do (PROTOCOL.md sections 4 and 14). `None` for a v2 vault.
+fn v1_state(r: &Replica) -> Result<Option<&str>> {
+    if r.admins.is_some() {
+        return Ok(None);
+    }
+    if r.removed || r.keys.is_empty() {
+        return Err(err("you are not a member of this vault"));
+    }
+    Ok(Some(r.vault_id.as_deref().ok_or_else(|| err("vault id unknown"))?))
+}
+
 fn admin_state(r: &Replica) -> Result<(&str, Vec<String>)> {
     let vault_id = r.vault_id.as_deref().ok_or_else(|| err("vault id unknown"))?;
     let admins = r
         .admins
         .clone()
-        .ok_or_else(|| err("this vault has no admins (v1); it cannot be changed by the Rust core"))?;
+        .ok_or_else(|| err("this vault was made by an older tgsync and has no admins (any member can add or remove people)"))?;
     let me = r.me.signer().ok_or_else(|| err("no signing key"))?;
     if !admins.contains(&me) {
         return Err(err("only an admin can do that (run `tgsync members` to see who is)"));
@@ -93,6 +105,14 @@ pub fn add(
     created: i64,
     nonce: &mut dyn FnMut() -> [u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
+    if let Some(vault_id) = v1_state(r)? {
+        if r.members.iter().any(|m| m.recipient == recipient) {
+            return Err(err("already a member"));
+        }
+        let mut members = r.members.clone();
+        members.push(Member::new(recipient, name));
+        return build(&r.keys, vault_id, &members, None, created, None, nonce);
+    }
     let (vault_id, admins) = admin_state(r)?;
     if r.members.iter().any(|m| m.recipient == recipient) {
         return Err(err("already a member"));
@@ -132,6 +152,17 @@ pub fn add(
 /// Remove a member by recipient, member id or name, and rotate to a new key (`new_key`: 32 random bytes).
 /// They lose admin rights too. Refused for the last member or the last admin.
 pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
+    if let Some(vault_id) = v1_state(r)? {
+        one_match(r, target)?;
+        let keep: Vec<Member> = r.members.iter().filter(|m| !(target == m.recipient || target == m.id() || target == m.name)).cloned().collect();
+        if keep.is_empty() {
+            return Err(err("refusing to remove the last member"));
+        }
+        let mut ring = r.keys.clone();
+        let old = ring.current_epoch()?;
+        ring.add(old + 1, new_key)?;
+        return build(&ring, vault_id, &keep, Some(old), created, None, nonce);
+    }
     let (vault_id, admins) = admin_state(r)?;
     one_match(r, target)?;
     let (gone, keep): (Vec<Member>, Vec<Member>) = r

@@ -177,7 +177,7 @@ export function decodeInvite(code: string): Invite {
   }
 }
 
-export interface JoinRequest { vaultId: string; recipient: string; name: string; msgId: number; signer?: string | null }
+export interface JoinRequest { vaultId: string; recipient: string; name: string; msgId: number; signer?: string | null; conflict?: boolean }
 
 export const encodeJoinRequest = (vaultId: string, recipient: string, name: string): Uint8Array =>
   utf8(JSON.stringify({ v: 1, vault: vaultId, recipient, name: [...name].slice(0, 40).join("") }));

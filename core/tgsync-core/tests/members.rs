@@ -154,3 +154,31 @@ fn a_join_request_cannot_borrow_someone_elses_signing_key() {
     assert!(e.contains("broken signing key"), "{e}");
     assert!(members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 2, &mut g.n()).is_ok());
 }
+
+#[test]
+fn in_an_old_v1_vault_any_member_adds_and_removes() {
+    use tgsync_core::crypto::KeyRing;
+    use tgsync_core::descriptor::{build, Member};
+    let (a, b, c) = (person(1), person(2), person(3));
+    let mut g = Group(vec![], 0);
+    let mut ring = KeyRing::new();
+    ring.add(1, &[4; 32]).unwrap();
+    let d = build(&ring, "00112233aabbccdd", &[Member::new(&a.recipient, "alice"), Member::new(&b.recipient, "bob")], None, 1, None, &mut g.n()).unwrap();
+    g.post(d);
+    let mut rb = Replica::new(b.clone(), None);
+    g.pull(&mut rb);
+    assert!(rb.admins.is_none());
+    // bob is not the creator, and there are no admins: v1 rules let him add carol and remove alice.
+    let d = members::add(&rb, &c.recipient, "carol", None, 2, &mut g.n()).unwrap();
+    g.post(d);
+    g.pull(&mut rb);
+    assert_eq!(rb.members.len(), 3);
+    let d = members::remove(&rb, "alice", &[5; 32], 3, &mut g.n()).unwrap();
+    g.post(d);
+    let mut ra = Replica::new(a.clone(), None);
+    g.pull(&mut ra);
+    g.pull(&mut rb);
+    assert_eq!(rb.members.len(), 2);
+    assert!(rb.keys.has(2) && !ra.keys.has(2), "the key rotated without alice");
+    assert!(members::give_admin(&rb, "carol", 4, &mut g.n()).unwrap_err().to_string().contains("no admins"));
+}

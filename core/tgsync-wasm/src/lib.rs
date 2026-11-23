@@ -81,14 +81,6 @@ fn kind_of(kind: &str) -> Result<char, JsError> {
     }
 }
 
-/// A signer key from an untrusted join request: base64 of a valid Ed25519 public key.
-fn valid_signer(s: &str) -> bool {
-    B64.decode(s)
-        .ok()
-        .and_then(|b| <[u8; 32]>::try_from(b).ok())
-        .is_some_and(|k| ed25519_dalek::VerifyingKey::from_bytes(&k).is_ok())
-}
-
 fn identity(secret: &str, recipient: &str, signing_hex: Option<String>) -> Result<Identity, JsError> {
     let mut me = Identity::new(secret, recipient);
     if let Some(h) = signing_hex {
@@ -120,8 +112,9 @@ pub struct Engine {
     report: Report,
     /// The planned record: (seq, plan, sealed yet).
     plan: Option<(u64, Push, bool)>,
-    /// The last folder listing given to `planPush`, re-used when it is called with `null`.
-    listing: BTreeMap<String, LocalFile>,
+    /// The folder listing of the push in progress, re-used when `planPush` is called with `null`.
+    /// Dropped by anything that changes what is synced from the other side (a pull, materialize).
+    listing: Option<BTreeMap<String, LocalFile>>,
 }
 
 #[wasm_bindgen]
@@ -133,7 +126,7 @@ impl Engine {
             vault: Vault::new(identity(secret, recipient, signing_hex)?, vault_id),
             report: Report::default(),
             plan: None,
-            listing: BTreeMap::new(),
+            listing: None,
         })
     }
 
@@ -143,7 +136,7 @@ impl Engine {
             vault,
             report: Report::default(),
             plan: None,
-            listing: BTreeMap::new(),
+            listing: None,
         })
     }
 
@@ -228,6 +221,7 @@ impl Engine {
     /// End of a pull: returns the report as JSON and queues our rejected edits for re-sending.
     #[wasm_bindgen(js_name = finishPull)]
     pub fn finish_pull(&mut self) -> String {
+        self.listing = None;
         let rep = std::mem::take(&mut self.report);
         self.vault.pulled(&rep);
         json!({
@@ -252,10 +246,14 @@ impl Engine {
     pub fn plan_push(&mut self, disk_json: Option<String>, seed: &[u8]) -> Result<JsValue, JsError> {
         self.plan = None; // a failed plan must not leave an older one behind
         if let Some(j) = disk_json {
-            self.listing = self.parse_listing(&j)?;
+            self.listing = Some(self.parse_listing(&j)?);
         }
+        let listing = self
+            .listing
+            .as_ref()
+            .ok_or_else(|| js("planPush(null) needs a listing given earlier in this push"))?;
         let mut s = Stream::new(seed, "plan")?;
-        let (seq, push) = self.vault.plan_push(&self.listing, &mut || s.hex8()).map_err(js)?;
+        let (seq, push) = self.vault.plan_push(listing, &mut || s.hex8()).map_err(js)?;
         if push.is_empty() {
             return Ok(JsValue::NULL);
         }
@@ -420,6 +418,7 @@ impl Engine {
 
     /// The ops are done: `synced_json` is the `synced` map `planMaterialize` returned.
     pub fn materialized(&mut self, synced_json: &str) -> Result<(), JsError> {
+        self.listing = None;
         self.vault.materialized(serde_json::from_str(synced_json).map_err(js)?);
         Ok(())
     }
@@ -525,8 +524,7 @@ pub fn encode_join_request(vault_id: &str, recipient: &str, name: &str, signer: 
 pub fn decode_join_request(body: &[u8]) -> String {
     let signer = serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|v| v.get("signer").and_then(Value::as_str).map(str::to_owned))
-        .filter(|s| valid_signer(s)); // a broken key is dropped: such a request cannot be accepted
+        .and_then(|v| v.get("signer").and_then(Value::as_str).map(str::to_owned)); // checked when accepted
     match invites::decode_request(body) {
         Some(r) => json!({"vault_id": r.vault_id, "recipient": r.recipient, "name": r.name, "signer": signer,
                           "code": short_code(&r.recipient)})
