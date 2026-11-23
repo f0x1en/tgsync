@@ -649,8 +649,8 @@ impl Sim {
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {
-            let back =
-                Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save().unwrap()).map_err(|e| format!("c{i}: load failed: {e}"))?;
+            let back = Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save().unwrap())
+                .map_err(|e| format!("c{i}: load failed: {e}"))?;
             let (a, b): (serde_json::Value, serde_json::Value) = (
                 serde_json::from_slice(&cl.vault.replica.save().unwrap()).unwrap(),
                 serde_json::from_slice(&back.save().unwrap()).unwrap(),
