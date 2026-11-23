@@ -98,7 +98,9 @@ impl Texts {
             .docs
             .iter()
             .map(|(id, d)| {
-                let snap = saved.entry(id.clone()).or_insert_with(|| b64(&d.export(ExportMode::Snapshot).unwrap()));
+                let snap = saved
+                    .entry(id.clone())
+                    .or_insert_with(|| b64(&d.export(ExportMode::Snapshot).unwrap()));
                 serde_json::json!([id, snap])
             })
             .collect();

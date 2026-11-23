@@ -139,7 +139,12 @@ impl Engine {
 
     pub fn load(secret: &str, recipient: &str, signing_hex: Option<String>, state: &[u8]) -> Result<Engine, JsError> {
         let vault = Vault::load(identity(secret, recipient, signing_hex)?, state).map_err(js)?;
-        Ok(Engine { vault, report: Report::default(), plan: None, listing: BTreeMap::new() })
+        Ok(Engine {
+            vault,
+            report: Report::default(),
+            plan: None,
+            listing: BTreeMap::new(),
+        })
     }
 
     pub fn save(&self) -> Vec<u8> {

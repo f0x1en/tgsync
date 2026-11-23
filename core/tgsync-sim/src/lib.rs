@@ -192,7 +192,11 @@ impl Sim {
         if v1 {
             let mut ring = tgsync_core::crypto::KeyRing::new();
             ring.add(1, &key).unwrap();
-            let all: Vec<_> = people.iter().enumerate().map(|(i, p)| tgsync_core::descriptor::Member::new(&p.recipient, &format!("c{i}"))).collect();
+            let all: Vec<_> = people
+                .iter()
+                .enumerate()
+                .map(|(i, p)| tgsync_core::descriptor::Member::new(&p.recipient, &format!("c{i}")))
+                .collect();
             let d = tgsync_core::descriptor::build(&ring, "5eed5eed5eed5eed", &all, None, 0, None, &mut || rng.bytes()).unwrap();
             group.push((1, KIND_DESCRIPTOR, d));
         }
@@ -308,14 +312,14 @@ impl Sim {
             tgsync_core::descriptor::build(&a.keys, "5eed5eed5eed5eed", &all, None, 0, None, &mut || rng.bytes()).unwrap()
         } else {
             members::add(
-            &clients[0].vault.replica,
-            &me.recipient,
-            &format!("c{k}"),
-            me.signer().as_deref(),
-            0,
-            &mut || rng.bytes(),
-        )
-        .unwrap()
+                &clients[0].vault.replica,
+                &me.recipient,
+                &format!("c{k}"),
+                me.signer().as_deref(),
+                0,
+                &mut || rng.bytes(),
+            )
+            .unwrap()
         };
         self.clients[k].vault.replica = Replica::new(me, None);
         self.clients[k].vault.synced.clear();
@@ -621,7 +625,11 @@ impl Sim {
             let tree: BTreeMap<String, String> = contents(&cl.vault.replica)
                 .into_iter()
                 .map(|(p, c)| {
-                    let t = if is_text_path(&p) { self.texts_by_sha.get(&c).cloned().unwrap_or(c) } else { c };
+                    let t = if is_text_path(&p) {
+                        self.texts_by_sha.get(&c).cloned().unwrap_or(c)
+                    } else {
+                        c
+                    };
                     (p, t)
                 })
                 .collect();
@@ -780,7 +788,10 @@ mod tests {
         let r = &sim.clients[0].vault.replica;
         assert!(r.admins.is_none(), "no admins in a v1 vault");
         assert_eq!(r.texts.doc_ids().count(), 0, "no merged notes in a v1 vault");
-        assert!(r.tree.nodes.values().any(|n| n.path.ends_with(".md") && n.doc.is_none()), "notes are plain files");
+        assert!(
+            r.tree.nodes.values().any(|n| n.path.ends_with(".md") && n.doc.is_none()),
+            "notes are plain files"
+        );
     }
 
     #[test]
