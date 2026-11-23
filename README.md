@@ -139,8 +139,8 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
   compromised **member** has the vault key and can read everything and write anything until removed;
   records are signed, so `tgsync log` shows who wrote what.
 * Only admins can add or remove members (descriptors are signed; PROTOCOL.md section 11). In vaults
-  made by older versions (v1) any member can, as before. Anyone who
-  can post in the group can still post junk; it is skipped and reported.
+  made by older versions (v1) any member can, as before. Anyone who can post in the group can still
+  post junk; it is skipped and reported.
 * Telegram can delete or withhold messages. Dropped messages in an author's sequence are reported;
   replays are ignored; tampering fails authentication.
 * Joining trusts the fingerprint in the invite, which you got from a member out of band (like Signal
