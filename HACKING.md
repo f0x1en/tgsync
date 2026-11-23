@@ -43,9 +43,10 @@ not converted; join again); `.tgsync/config.json` `chat` is the group's invite l
 Obsidian plugin, a thin layer over `ts/` that adds nothing the CLI lacks: `obsidian/` (`make plugin`).
 Run `npm install` once in each.
 
-Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-11 on this
-machine: 1 GB push 55 MB/s, pull 126 MB/s, peak memory 329 MB; 3 GB: 52 / 129 MB/s, peak 296 MB (memory stays
-flat: files stream in chunks). Real Telegram speed is limited by Telegram, not by this. Change the protocol only together with both.
+Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this
+machine with the Rust core (chunks sealed with the platform's AES-GCM): 1 GB push 83 MB/s, pull 151 MB/s, peak
+memory 316 MB (memory stays flat: files stream in chunks). With AES inside WebAssembly it was 24 / 28 MB/s; the old
+TypeScript engine (2026-11-11) did 55 / 126 MB/s. Real Telegram speed is limited by Telegram, not by this. Change the protocol only together with both.
 
 ## Rust core (`core/`, branch `rust-core`)
 

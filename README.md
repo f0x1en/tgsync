@@ -62,8 +62,9 @@ note at the same time:
 
 Measured on one laptop core (`cargo run --release -p tgsync-sim --bin bench`): sealing/opening
 32 MiB chunks 924/1247 MB/s; replaying 2000 signed records (50 000 files) 0.33 s; saving/loading
-that state 224/192 ms; a note edit costs 2.2 ms to prepare and 0.2 ms to apply. Real transfer speed
-is bounded by Telegram.
+that state 224/192 ms; a note edit costs 2.2 ms to prepare and 0.2 ms to apply. End to end through
+the Node CLI on a sandbox group (`cd ts && npm run bench`), a 1 GB file uploads at 83 MB/s and downloads
+at 151 MB/s with flat memory (316 MB peak). Real transfer speed is bounded by Telegram.
 
 ## Daily use
 
