@@ -120,6 +120,8 @@ pub struct Engine {
     report: Report,
     /// The planned record: (seq, plan, sealed yet).
     plan: Option<(u64, Push, bool)>,
+    /// The last folder listing given to `planPush`, re-used when it is called with `null`.
+    listing: BTreeMap<String, LocalFile>,
 }
 
 #[wasm_bindgen]
@@ -131,16 +133,13 @@ impl Engine {
             vault: Vault::new(identity(secret, recipient, signing_hex)?, vault_id),
             report: Report::default(),
             plan: None,
+            listing: BTreeMap::new(),
         })
     }
 
     pub fn load(secret: &str, recipient: &str, signing_hex: Option<String>, state: &[u8]) -> Result<Engine, JsError> {
         let vault = Vault::load(identity(secret, recipient, signing_hex)?, state).map_err(js)?;
-        Ok(Engine {
-            vault,
-            report: Report::default(),
-            plan: None,
-        })
+        Ok(Engine { vault, report: Report::default(), plan: None, listing: BTreeMap::new() })
     }
 
     pub fn save(&self) -> Vec<u8> {
@@ -242,9 +241,25 @@ impl Engine {
     /// `{path: {"sha", "size", "mtime", "text"?: string, "bytes"?: b64, "blob"?: object, "dir"?: true, "keep"?: true}}`.
     /// `keep`: unchanged since the last sync (same sha as `synced()`), so no content is needed.
     /// Returns JSON `{"seq", "entries", "done"}` or `null` if there is nothing to send.
+    /// `disk_json` null: plan the next record from the same listing (after `pushed`), so a push of
+    /// many records parses the listing once.
     #[wasm_bindgen(js_name = planPush)]
-    pub fn plan_push(&mut self, disk_json: &str, seed: &[u8]) -> Result<JsValue, JsError> {
+    pub fn plan_push(&mut self, disk_json: Option<String>, seed: &[u8]) -> Result<JsValue, JsError> {
         self.plan = None; // a failed plan must not leave an older one behind
+        if let Some(j) = disk_json {
+            self.listing = self.parse_listing(&j)?;
+        }
+        let mut s = Stream::new(seed, "plan")?;
+        let (seq, push) = self.vault.plan_push(&self.listing, &mut || s.hex8()).map_err(js)?;
+        if push.is_empty() {
+            return Ok(JsValue::NULL);
+        }
+        let out = json!({"seq": seq, "entries": push.entries, "done": push.done}).to_string();
+        self.plan = Some((seq, push, false));
+        Ok(JsValue::from_str(&out))
+    }
+
+    fn parse_listing(&self, disk_json: &str) -> Result<BTreeMap<String, LocalFile>, JsError> {
         let d: BTreeMap<String, Value> = serde_json::from_str(disk_json).map_err(js)?;
         let mut disk = BTreeMap::new();
         for (p, f) in d {
@@ -274,15 +289,7 @@ impl Engine {
             let mtime = f["mtime"].as_f64().ok_or_else(|| js(format!("{p}: mtime missing")))?;
             disk.insert(p, LocalFile { sha, size, mtime, content });
         }
-        let mut s = Stream::new(seed, "plan")?;
-        let (seq, push) = self.vault.plan_push(&disk, &mut || s.hex8()).map_err(js)?;
-        if push.is_empty() {
-            self.plan = None;
-            return Ok(JsValue::NULL);
-        }
-        let out = json!({"seq": seq, "entries": push.entries, "done": push.done}).to_string();
-        self.plan = Some((seq, push, false));
-        Ok(JsValue::from_str(&out))
+        Ok(disk)
     }
 
     /// Seal the planned record (sets the seq: save the engine before posting).

@@ -365,9 +365,10 @@ export class Vault {
       }
     }
     // One scan, as many records as needed: the core marks each record's files synced once posted.
-    const listing = JSON.stringify(disk);
+    let listing: string | undefined = JSON.stringify(disk);
     for (;;) {
       const plan = this.engine.planPush(listing, seed());
+      listing = undefined; // the engine keeps it for the next records
       if (plan === null) break;
       const p = JSON.parse(plan as string);
       const body = this.engine.sealRecord(Date.now() / 1000, seed());

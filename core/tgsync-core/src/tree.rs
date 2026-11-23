@@ -43,6 +43,8 @@ pub struct Tree {
     pub nodes: BTreeMap<String, Node>,
     /// lowercase path -> exact path, for case-insensitive clash checks.
     fold: BTreeMap<String, String>,
+    /// note doc id -> its path (a doc is at one path at a time).
+    docs: BTreeMap<String, String>,
 }
 
 impl Node {
@@ -76,11 +78,28 @@ impl Tree {
 
     pub fn set(&mut self, node: Node) {
         self.fold.insert(node.path.to_lowercase(), node.path.clone());
-        self.nodes.insert(node.path.clone(), node);
+        if let Some(d) = &node.doc {
+            self.docs.insert(d.clone(), node.path.clone());
+        }
+        if let Some(old) = self.nodes.insert(node.path.clone(), node) {
+            self.unindex(&old);
+        }
+    }
+
+    /// Forget `old`'s doc index entry if it still points at `old`'s path and no longer applies.
+    fn unindex(&mut self, old: &Node) {
+        if let Some(d) = &old.doc {
+            let still = self.nodes.get(&old.path).is_some_and(|n| n.doc.as_ref() == Some(d));
+            if !still && self.docs.get(d) == Some(&old.path) {
+                self.docs.remove(d);
+            }
+        }
     }
 
     fn remove(&mut self, path: &str) {
-        self.nodes.remove(path);
+        if let Some(old) = self.nodes.remove(path) {
+            self.unindex(&old);
+        }
         let low = path.to_lowercase();
         if self.fold.get(&low).map(String::as_str) == Some(path) {
             self.fold.remove(&low);
@@ -203,12 +222,7 @@ impl Tree {
             doc: Some(doc.to_owned()),
         };
         // The doc may already sit at a conflict-copy path: keep editing it there.
-        if let Some(at) = self
-            .nodes
-            .values()
-            .find(|n| n.doc.as_deref() == Some(doc) && n.path != path)
-            .map(|n| n.path.clone())
-        {
+        if let Some(at) = self.docs.get(doc).filter(|at| *at != path).cloned() {
             if self.nodes.get(path).and_then(|n| n.doc.as_deref()) != Some(doc) {
                 self.set(Node { path: at.clone(), ..node });
                 return Applied::Text(at);
