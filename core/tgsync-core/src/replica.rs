@@ -149,15 +149,21 @@ impl Replica {
     }
 
     /// A `text` entry: import its Loro update, then place the note in the tree.
-    fn apply_text(&mut self, e: &Value, payload: &[u8], author: &str, ts: f64, id: i64) -> Option<Applied> {
+    fn apply_text(&mut self, e: &Value, payload: &[u8], author: &str, ts: f64, id: i64, rep: &mut Report) -> Option<Applied> {
         let path = crate::paths::normalize(e.get("path")?.as_str()?).ok()?;
         let doc = e.get("doc")?.as_str()?;
         if doc.is_empty() || doc.len() > 64 || e.get("blob")?.get("payload_msg").is_some() {
             return None;
         }
-        let text = self.texts.import(doc, inline_bytes(e, payload)?).ok()?;
+        let text = match self.texts.import(doc, inline_bytes(e, payload)?) {
+            Ok(t) => t,
+            Err(err) => {
+                rep.problems.push((id, format!("{path}: {err}")));
+                return None;
+            }
+        };
         let mtime = e.get("mtime").and_then(Value::as_f64).unwrap_or(ts);
-        Some(self.tree.apply_text(
+        let applied = self.tree.apply_text(
             &path,
             doc,
             &sha_hex(&text),
@@ -167,7 +173,11 @@ impl Replica {
             author,
             ts,
             id,
-        ))
+        );
+        if let Applied::Text(at) | Applied::Conflict(_, at) = &applied {
+            self.texts.placed(doc, &path, at);
+        }
+        Some(applied)
     }
 
     /// Text of the note at `path`, if it is a merged text note.
@@ -184,8 +194,8 @@ impl Replica {
             .get(path)
             .and_then(|n| n.doc.clone())
             .filter(|d| base.is_some_and(|b| self.texts.has_version(d, b)));
-        // The note may have moved (conflict copy) or been deleted since: find the doc by its version.
-        let doc = doc.or_else(|| base.and_then(|b| self.texts.doc_with_version(b)));
+        // The note may have moved (conflict copy) or been deleted since: find its doc by version and path.
+        let doc = doc.or_else(|| base.and_then(|b| self.texts.doc_with_version_at(b, path)));
         self.texts.prepare(doc.as_deref(), base, new_text, new_doc, peer)
     }
 
@@ -411,7 +421,7 @@ impl Replica {
                             self.authors.insert(rec.author.clone(), rec.seq);
                             for (i, e) in rec.entries.iter().enumerate() {
                                 let applied = if e.get("op").and_then(Value::as_str) == Some("text") {
-                                    let a = self.apply_text(e, &rec.payload, &rec.author, rec.ts, id);
+                                    let a = self.apply_text(e, &rec.payload, &rec.author, rec.ts, id, rep);
                                     if let Some(Applied::Text(p)) = &a {
                                         let n = self.tree.get(p).unwrap();
                                         rep.text_versions.push((id, i, n.doc.clone().unwrap(), n.sha.clone()));

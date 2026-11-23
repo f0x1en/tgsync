@@ -36,6 +36,9 @@ pub struct Texts {
     /// Saved snapshot (base64) per doc, until the doc changes: saving a vault of thousands of notes
     /// re-exports only the notes that changed.
     saved: std::cell::RefCell<BTreeMap<String, String>>,
+    /// doc -> (path of the entry that started it, path it was last placed at). Writers only use it
+    /// to find a note's doc after it moved or was deleted; replay does not depend on it.
+    paths: BTreeMap<String, (String, String)>,
 }
 
 impl std::fmt::Debug for Texts {
@@ -84,9 +87,22 @@ impl Texts {
         self.versions.contains_key(&(doc.to_owned(), sha.to_owned()))
     }
 
-    /// Some doc that once had text sha `sha` (the lowest doc id, so the choice is stable).
-    pub fn doc_with_version(&self, sha: &str) -> Option<String> {
-        self.versions.keys().find(|(_, s)| s == sha).map(|(d, _)| d.clone())
+    /// Replay placed `doc` (from an entry for `entry_path`) at `at`.
+    pub fn placed(&mut self, doc: &str, entry_path: &str, at: &str) {
+        let e = self.paths.entry(doc.to_owned()).or_insert_with(|| (entry_path.to_owned(), at.to_owned()));
+        e.1 = at.to_owned();
+    }
+
+    /// The doc of the note that was at `path` with text sha `sha`, after it moved (a conflict copy of
+    /// `path`) or was deleted. Only docs that started at, or last were at, `path` count: two notes
+    /// with the same text (e.g. both empty) are different notes.
+    pub fn doc_with_version_at(&self, sha: &str, path: &str) -> Option<String> {
+        self.versions
+            .keys()
+            .filter(|(_, s)| s == sha)
+            .map(|(d, _)| d)
+            .find(|d| self.paths.get(*d).is_some_and(|(origin, last)| origin == path || last == path))
+            .cloned()
     }
 
     /// Save every doc (Loro snapshot) and the version index.
@@ -105,7 +121,8 @@ impl Texts {
             })
             .collect();
         let versions: Vec<_> = self.versions.iter().map(|((d, s), f)| serde_json::json!([d, s, b64(f)])).collect();
-        serde_json::json!({"docs": docs, "versions": versions})
+        let paths: Vec<_> = self.paths.iter().map(|(d, (o, l))| serde_json::json!([d, o, l])).collect();
+        serde_json::json!({"docs": docs, "versions": versions, "paths": paths})
     }
 
     pub fn load(v: &serde_json::Value) -> Result<Texts> {
@@ -117,6 +134,11 @@ impl Texts {
                 .ok_or_else(bad)
         };
         let mut t = Texts::default();
+        for p in v.get("paths").and_then(|x| x.as_array()).into_iter().flatten() {
+            if let (Some(d), Some(o), Some(l)) = (p[0].as_str(), p[1].as_str(), p[2].as_str()) {
+                t.paths.insert(d.to_owned(), (o.to_owned(), l.to_owned()));
+            }
+        }
         for d in v.get("docs").and_then(|x| x.as_array()).ok_or_else(bad)? {
             let doc = LoroDoc::new();
             doc.import(&unb64(&d[1])?).map_err(|e| err(e.to_string()))?;
@@ -138,7 +160,7 @@ impl Texts {
         let Some(d) = self.docs.get(doc) else { return false };
         let copy = d.fork();
         let before = copy.oplog_vv();
-        copy.import(update).is_ok() && copy.oplog_vv() == before
+        copy.import(update).is_ok_and(|st| st.pending.as_ref().is_none_or(|p| p.is_empty())) && copy.oplog_vv() == before
     }
 
     /// Replay: import an update. Returns the doc's text afterwards. Importing twice is harmless.
@@ -146,11 +168,18 @@ impl Texts {
         self.saved.get_mut().remove(doc);
         let new = !self.docs.contains_key(doc);
         let d = self.docs.entry(doc.to_owned()).or_default();
-        if let Err(e) = d.import(update) {
+        // Pending = it needs operations this doc does not have (a record went missing): Loro would
+        // keep it aside and change nothing, so it is not applied.
+        let res = d.import(update).map_err(|e| format!("bad text update: {e}"));
+        let res = res.and_then(|st| match st.pending {
+            Some(p) if !p.is_empty() => Err("text update depends on edits that never arrived".to_owned()),
+            _ => Ok(()),
+        });
+        if let Err(e) = res {
             if new {
                 self.docs.remove(doc); // a bad update must not leave an empty doc behind
             }
-            return Err(err(format!("bad text update: {e}")));
+            return Err(err(e));
         }
         let d = &self.docs[doc];
         let text = d.get_text(TEXT).to_string();
@@ -170,7 +199,8 @@ impl Texts {
         let (doc_id, fork) = match known {
             Some((doc, frontiers)) => {
                 let f = Frontiers::decode(frontiers).map_err(|e| err(e.to_string()))?;
-                (doc.to_owned(), self.docs[doc].fork_at(&f).map_err(|e| err(e.to_string()))?)
+                let d = self.docs.get(doc).ok_or_else(|| err("saved state names a note that is missing"))?;
+                (doc.to_owned(), d.fork_at(&f).map_err(|e| err(e.to_string()))?)
             }
             None => (new_doc.to_owned(), LoroDoc::new()),
         };

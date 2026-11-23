@@ -128,6 +128,9 @@ impl Tree {
             "put" => {
                 let sha = entry.get("sha")?.as_str()?.to_owned();
                 let size = entry.get("size")?.as_f64()?.trunc() as i64;
+                if sha == DIR || size < 0 {
+                    return None; // a file cannot pose as a folder; sizes are not negative
+                }
                 let mtime = match entry.get("mtime") {
                     None | Some(Value::Null) => ts,
                     Some(m) => m.as_f64()?,
@@ -162,7 +165,8 @@ impl Tree {
             }
             "delete" => {
                 // An edit beats a delete: only delete what the author saw.
-                if cur_sha.is_some() && cur_sha.as_deref() == base {
+                // (Folders go away with rmdir, never with delete.)
+                if cur_sha.is_some() && cur_sha.as_deref() == base && base != Some(DIR) {
                     self.remove(&path);
                     return Some(Applied::Delete(path));
                 }
