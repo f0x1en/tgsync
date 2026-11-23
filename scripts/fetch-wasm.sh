@@ -5,8 +5,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 sha=$(git rev-parse "${1:-$(git log -1 --format=%H -- core)}")   # gh needs the full commit id
-run=$(gh run list --commit "$sha" --workflow ci --json databaseId,status -q '.[0].databaseId')
-[ -n "$run" ] || { echo "no CI run for $sha yet; push first"; exit 1; }
+# A run shows up a little after the push: wait up to 5 minutes for it.
+for _ in $(seq 30); do
+  run=$(gh run list --commit "$sha" --workflow ci --json databaseId -q '.[0].databaseId')
+  [ -n "$run" ] && break
+  sleep 10
+done
+[ -n "$run" ] || { echo "no CI run for $sha; push first"; exit 1; }
 echo "CI run $run for ${sha%"${sha#???????}"}: waiting for its build if needed"
 gh run watch "$run" --interval 20 >/dev/null 2>&1 || true
 tmp=$(mktemp -d)

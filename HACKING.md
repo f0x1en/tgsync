@@ -54,7 +54,7 @@ TypeScript engine (2026-11-11) did 55 / 126 MB/s.
 
 Many notes (`cd ts && npm run bench-notes -- 5000`, sandbox, notes written an hour earlier): 5000 notes, first push
 4.3 s, first pull 1.5 s; then one edited note: push 0.44 s, pull 0.28 s; a push with nothing to send 0.21 s.
-20 000 notes: 8.4 s / 5.2 s, one edit 1.9 s / 1.2 s. (Files changed within the last 2 s are always hashed again,
+20 000 notes: 8.0 s / 5.1 s, one edit 1.2 s / 1.0 s. (Files changed within the last 2 s are always hashed again,
 so a benchmark on freshly written files measures hashing.) Real Telegram speed is limited by Telegram, not by this. Change the protocol only together with both.
 
 ## Rust core (`core/`, branch `rust-core`)
