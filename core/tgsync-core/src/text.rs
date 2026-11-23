@@ -144,7 +144,11 @@ impl Texts {
             .order
             .iter()
             .flat_map(|(d, q)| q.iter().map(move |s| (d, s)))
-            .filter_map(|(d, s)| self.versions.get(&(d.clone(), s.clone())).map(|f| serde_json::json!([d, s, b64(f)])))
+            .filter_map(|(d, s)| {
+                self.versions
+                    .get(&(d.clone(), s.clone()))
+                    .map(|f| serde_json::json!([d, s, b64(f)]))
+            })
             .collect();
         let paths: Vec<_> = self.paths.iter().map(|(d, (o, l))| serde_json::json!([d, o, l])).collect();
         serde_json::json!({"docs": docs, "versions": versions, "paths": paths})
