@@ -42,19 +42,23 @@ note at the same time:
 
 ## How it is tested
 
-* **Deterministic simulation** (`make sim`): 2-4 clients share one fake group; a seed picks every
+* **Deterministic simulation** (`make sim`): 2-6 clients share one fake group; a seed picks every
   action and fault: Telegram showing new messages late, refusing uploads (flood wait), delivering
   one twice; clients crashing between posting and saving, restarting from saved state; junk and
-  bit-flipped messages; the admin removing and re-adding members (key rotation) while others keep
-  writing; every fifth seed is an old (v1) vault run in compatibility mode. After the clients settle it checks that every replica holds the same tree and notes,
-  every folder equals its tree, every upload a member marked as done survived (or was knowingly
-  replaced), and every note edit is merged into its document. 10 000 seeds x 200 steps pass; a
+  bit-flipped messages; members posting malformed or forged records; the admin removing and
+  re-adding members (key rotation) while others keep writing; every fifth seed is an old (v1) vault
+  run in compatibility mode. After the clients settle it checks that every replica holds the same
+  tree and notes, every folder equals its tree, every upload a member marked as done survived (or was
+  knowingly replaced), every note edit is merged into its document, and (secrecy) every applied record
+  was sealed with the newest key and signed by its author, a member at that point. 10 000 seeds x 200 steps pass; a
   failing seed prints its trace and replays exactly. Each check was confirmed to catch the bug it
   guards against by breaking the code on purpose.
 * Bugs the simulator found and that are fixed: a junk message naming an unknown key epoch froze
   every client for good; anyone in the group could make a member believe they were removed; a
   removed member could keep writing with the old key, and teammates who had not seen the key change
-  kept writing data the removed member could read; such rejected writes are now re-sent with the new key.
+  kept writing data the removed member could read; such rejected writes are now re-sent with the new key;
+  a member who re-joined could reuse a record number, and readers then dropped those edits; someone
+  removed and added back could be stuck with old keys if anyone re-posted an old membership message.
 * Fixed test vectors (`spec/vectors.json`) shared by the Python, TypeScript and Rust code; unit
   tests for the core; the Node CLI's tests; two-process sandbox tests through `--json`; a live
   two-account test on real Telegram (`scripts/live_e2e.py`); CI on Linux, Windows and macOS, plus
