@@ -110,13 +110,13 @@ impl Vault {
         self.synced = synced;
     }
 
-    pub fn save(&self) -> Vec<u8> {
+    pub fn save(&self) -> Result<Vec<u8>> {
         use base64::Engine;
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-        let replica: Value = serde_json::from_slice(&self.replica.save()).unwrap();
+        let replica: Value = serde_json::from_slice(&self.replica.save()?).unwrap();
         let resend: Vec<Value> = self.resend.iter().map(|r| json!([r.entry, b64(&r.bytes)])).collect();
-        serde_json::to_vec(&json!({"v": 1, "replica": replica, "synced": self.synced, "resend": resend, "sent_seq": self.sent_seq}))
-            .unwrap()
+        Ok(serde_json::to_vec(&json!({"v": 1, "replica": replica, "synced": self.synced, "resend": resend, "sent_seq": self.sent_seq}))
+            .unwrap())
     }
 
     pub fn load(me: Identity, data: &[u8]) -> Result<Vault> {

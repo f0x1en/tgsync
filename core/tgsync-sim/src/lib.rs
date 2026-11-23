@@ -410,7 +410,7 @@ impl Sim {
     /// from the stored descriptors, never from the saved state).
     fn restart(&mut self, c: usize) {
         let v = &self.clients[c].vault;
-        let loaded = Vault::load(v.replica.me.clone(), &v.save()).unwrap();
+        let loaded = Vault::load(v.replica.me.clone(), &v.save().unwrap()).unwrap();
         self.trace.push(format!("c{c} restarts"));
         self.clients[c].vault = loaded;
     }
@@ -650,10 +650,10 @@ impl Sim {
         }
         for (i, cl) in self.clients.iter().enumerate() {
             let back =
-                Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save()).map_err(|e| format!("c{i}: load failed: {e}"))?;
+                Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save().unwrap()).map_err(|e| format!("c{i}: load failed: {e}"))?;
             let (a, b): (serde_json::Value, serde_json::Value) = (
-                serde_json::from_slice(&cl.vault.replica.save()).unwrap(),
-                serde_json::from_slice(&back.save()).unwrap(),
+                serde_json::from_slice(&cl.vault.replica.save().unwrap()).unwrap(),
+                serde_json::from_slice(&back.save().unwrap()).unwrap(),
             );
             // Loro snapshot bytes are not stable when re-exported: compare notes by content instead.
             let differs: Vec<&String> = a.as_object().unwrap().keys().filter(|k| *k != "texts" && a[*k] != b[*k]).collect();

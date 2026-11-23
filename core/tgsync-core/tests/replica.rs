@@ -625,8 +625,7 @@ fn a_note_update_missing_its_history_is_reported_not_applied() {
         json!({"op": "text", "path": "n.md", "doc": "dz", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, n1]}});
     g.record_with(&ring, &a, 2, 2.0, vec![e], e1.update);
     g.pull(&mut ra);
-    let (_, _, a2, _, _, _) = (0, 0, a.clone(), 0, 0, 0);
-    let mut fresh = Replica::new(a2, None);
+    let mut fresh = Replica::new(a.clone(), None);
     g.pull(&mut fresh);
     assert_eq!(
         ra.text("n.md"),
@@ -666,7 +665,7 @@ fn a_note_keeps_its_newest_256_versions() {
     assert!(t.has_version("d", &sha_hex("version 299")));
     assert!(t.has_version("d", &sha_hex("version 44")));
     assert!(!t.has_version("d", &sha_hex("version 43")), "older versions are dropped");
-    let back = Texts::load(&t.save()).unwrap();
+    let back = Texts::load(&t.save().unwrap()).unwrap();
     assert!(back == t);
     assert!(back.has_version("d", &sha_hex("version 44")) && !back.has_version("d", &sha_hex("version 43")));
 }
