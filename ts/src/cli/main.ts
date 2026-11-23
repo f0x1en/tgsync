@@ -495,13 +495,16 @@ const COMMANDS: { [name: string]: Command } = {
       const ids = await Promise.all(v.members.map((m) => memberId(m.recipient)));
       emit({
         members: v.members.map((m, i) => ({ name: m.name, id: ids[i], you: m.recipient === mine, admin: !!m.admin })),
-        waiting: reqs.map((r, i) => ({ code: codes[i], name: r.name })),
+        waiting: await Promise.all(reqs.map(async (r, i) => ({ code: codes[i], id: await memberId(r.recipient), name: r.name }))),
       }, () => {
         echo("members:");
         v.members.forEach((m, i) => echo(`  ${m.name || ids[i]}${m.admin ? "  (admin)" : ""}${m.recipient === mine ? "  (you)" : ""}`));
         if (reqs.length) {
           echo("\nwaiting to join (only accept a code the person read to you yourself):");
           reqs.forEach((r, i) => echo(`  ${codes[i]}  ${r.name || "(no name)"}     ->  tgsync accept ${codes[i]}`));
+          if (new Set(codes).size < codes.length) {
+            echo(yellow("  two requests share a code: one may be an impostor. Ask for the full id `tgsync join` printed, then `tgsync accept <id>`."));
+          }
         }
       });
     },

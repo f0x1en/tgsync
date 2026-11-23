@@ -153,7 +153,7 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
   `incoming` (others' changes not in your folder: `[{op, path, who, also_local}]`; null with `--offline` or when
   the group could not be reached), `online_error`, `problems`,
   `checks` (with `--check`: `[{ok, what, detail}]`, else null).
-- `members`: `members` (`[{name, id, you}]`), `waiting` (`[{code, name}]`).
+- `members`: `members` (`[{name, id, you, admin}]`), `waiting` (`[{code, id, name}]`).
 - `new`: `folder`, `profile`, `vault_id`, `invite`. `join`: `state` (`"waiting"` + `code`, or `"joined"` + `report`).
 - `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev` (a version id like `812.0`).
 - `log`: `log` (`[{ts, who, op, path, copy}]`, newest first; op is `put`, `delete`, `conflict`, `mkdir`, `rmdir`).
