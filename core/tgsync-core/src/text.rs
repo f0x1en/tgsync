@@ -33,6 +33,9 @@ pub fn is_text_path(path: &str) -> bool {
 pub struct Texts {
     docs: BTreeMap<String, LoroDoc>,
     versions: BTreeMap<(String, String), Vec<u8>>,
+    /// Saved snapshot (base64) per doc, until the doc changes: saving a vault of thousands of notes
+    /// re-exports only the notes that changed.
+    saved: std::cell::RefCell<BTreeMap<String, String>>,
 }
 
 impl std::fmt::Debug for Texts {
@@ -90,10 +93,14 @@ impl Texts {
     pub fn save(&self) -> serde_json::Value {
         use base64::Engine;
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let mut saved = self.saved.borrow_mut();
         let docs: Vec<_> = self
             .docs
             .iter()
-            .map(|(id, d)| serde_json::json!([id, b64(&d.export(ExportMode::Snapshot).unwrap())]))
+            .map(|(id, d)| {
+                let snap = saved.entry(id.clone()).or_insert_with(|| b64(&d.export(ExportMode::Snapshot).unwrap()));
+                serde_json::json!([id, snap])
+            })
             .collect();
         let versions: Vec<_> = self.versions.iter().map(|((d, s), f)| serde_json::json!([d, s, b64(f)])).collect();
         serde_json::json!({"docs": docs, "versions": versions})
@@ -111,7 +118,11 @@ impl Texts {
         for d in v.get("docs").and_then(|x| x.as_array()).ok_or_else(bad)? {
             let doc = LoroDoc::new();
             doc.import(&unb64(&d[1])?).map_err(|e| err(e.to_string()))?;
-            t.docs.insert(d[0].as_str().ok_or_else(bad)?.to_owned(), doc);
+            let id = d[0].as_str().ok_or_else(bad)?.to_owned();
+            if let Some(snap) = d[1].as_str() {
+                t.saved.borrow_mut().insert(id.clone(), snap.to_owned());
+            }
+            t.docs.insert(id, doc);
         }
         for x in v.get("versions").and_then(|x| x.as_array()).ok_or_else(bad)? {
             let key = (x[0].as_str().ok_or_else(bad)?.to_owned(), x[1].as_str().ok_or_else(bad)?.to_owned());
@@ -130,6 +141,7 @@ impl Texts {
 
     /// Replay: import an update. Returns the doc's text afterwards. Importing twice is harmless.
     pub fn import(&mut self, doc: &str, update: &[u8]) -> Result<String> {
+        self.saved.get_mut().remove(doc);
         let new = !self.docs.contains_key(doc);
         let d = self.docs.entry(doc.to_owned()).or_default();
         if let Err(e) = d.import(update) {

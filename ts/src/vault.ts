@@ -398,7 +398,7 @@ export class Vault {
     if (text !== null && text !== undefined) {
       const data = enc.encode(text);
       if (hexOf(nobleSha256(data)) !== sha) throw new Error("merged note does not match its hash");
-      await this.files.write(path, data, Date.now());
+      await this.files.write(path, data, mtime); // the writer's time, so the stat cache can trust it
       return;
     }
     if (blob.inline) {
