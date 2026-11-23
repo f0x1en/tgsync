@@ -885,8 +885,8 @@ impl Sim {
 
 /// Run one seed. On failure the error holds the full action trace.
 pub fn run(seed: u64, steps: usize) -> Result<Stats, String> {
-    // Every fifth seed is an old (v1) vault.
-    let mut sim = Sim::with_version(seed, 2 + (seed % 3) as usize, seed % 5 == 4);
+    // 2 to 6 clients; every fifth seed is an old (v1) vault.
+    let mut sim = Sim::with_version(seed, 2 + (seed / 5 % 5) as usize, seed % 5 == 4);
     for _ in 0..steps {
         sim.step();
     }
