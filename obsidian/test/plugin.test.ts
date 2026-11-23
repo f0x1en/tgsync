@@ -22,6 +22,11 @@ fs.appendFileSync(${JSON.stringify(`${f}.log`)}, process.argv.slice(2).join(" ")
 process.stdout.write(JSON.stringify(a[process.argv[3]] ?? { ok: false, error: "unknown command" }));
 `);
   chmodSync(f, 0o755);
+  if (process.platform === "win32") { // Windows runs neither shebangs nor extension-less files: a .cmd shim, as npm makes
+    writeFileSync(`${f}.js`, readFileSync(f));
+    writeFileSync(`${f}.cmd`, `@node "${f}.js" %*\r\n`);
+    return `${f}.cmd`;
+  }
   return f;
 }
 
@@ -52,7 +57,7 @@ test("check: shows counts, names who changed what, warns about the open note and
   assert.ok(notices.some((n) => n.includes("2 changes from bob, carol")), notices.join("\n"));
   assert.ok(notices.some((n) => n.includes("you and someone else changed plan.md")));
   assert.ok(notices.some((n) => n.includes("carol changed this note")));
-  assert.match(readFileSync(`${cli}.log`, "utf8"), /^--json status -C \/vaults\/team$/m);
+  assert.match(readFileSync(`${cli.replace(/\.cmd$/, "")}.log`, "utf8"), /^--json status -C \/vaults\/team$/m);
   // The same changes again: no new notice (only when something new arrives, or when asked).
   const before = notices.length;
   await p.check(false);
@@ -90,10 +95,11 @@ test("a shared edit that appears later is still announced; offline forgets old w
   const cli = fakeCli({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) });
   const p = await start(cli);
   await p.check(false);
-  writeFileSync(`${cli}.json`, JSON.stringify({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: true }]) }));
+  const answers = `${cli.replace(/\.cmd$/, "")}.json`;
+  writeFileSync(answers, JSON.stringify({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: true }]) }));
   await p.check(false);
   assert.ok(notices.some((n) => n.includes("you and someone else changed plan.md")), notices.join("\n"));
-  writeFileSync(`${cli}.json`, JSON.stringify({ status: { ok: true, incoming: null, pending: [], online_error: "x" } }));
+  writeFileSync(answers, JSON.stringify({ status: { ok: true, incoming: null, pending: [], online_error: "x" } }));
   await p.check(false);
   assert.deepEqual(p.incoming, []);
 });
