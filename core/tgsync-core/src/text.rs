@@ -89,7 +89,10 @@ impl Texts {
 
     /// Replay placed `doc` (from an entry for `entry_path`) at `at`.
     pub fn placed(&mut self, doc: &str, entry_path: &str, at: &str) {
-        let e = self.paths.entry(doc.to_owned()).or_insert_with(|| (entry_path.to_owned(), at.to_owned()));
+        let e = self
+            .paths
+            .entry(doc.to_owned())
+            .or_insert_with(|| (entry_path.to_owned(), at.to_owned()));
         e.1 = at.to_owned();
     }
 

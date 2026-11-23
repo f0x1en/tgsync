@@ -607,10 +607,14 @@ fn a_note_update_missing_its_history_is_reported_not_applied() {
     g.pull(&mut w);
     let e1 = w.prepare_text("n.md", None, "one", "dz", 1).unwrap();
     w.texts.import("dz", &e1.update).unwrap();
-    w.tree.apply_text("n.md", "dz", &tgsync_core::text::sha_hex("one"), 3, 1.0, None, "x", 1.0, 1);
-    let e2 = w.prepare_text("n.md", Some(&tgsync_core::text::sha_hex("one")), "one two", "dz", 2).unwrap();
+    w.tree
+        .apply_text("n.md", "dz", &tgsync_core::text::sha_hex("one"), 3, 1.0, None, "x", 1.0, 1);
+    let e2 = w
+        .prepare_text("n.md", Some(&tgsync_core::text::sha_hex("one")), "one two", "dz", 2)
+        .unwrap();
     let n = e2.update.len();
-    let e = json!({"op": "text", "path": "n.md", "doc": "dz", "sha": "x", "size": 7, "mtime": 1.0, "base": null, "blob": {"inline": [0, n]}});
+    let e =
+        json!({"op": "text", "path": "n.md", "doc": "dz", "sha": "x", "size": 7, "mtime": 1.0, "base": null, "blob": {"inline": [0, n]}});
     g.record_with(&ring, &a, 1, 1.0, vec![e], e2.update);
     let rep = g.pull(&mut ra);
     assert!(ra.tree.get("n.md").is_none());
@@ -620,7 +624,13 @@ fn a_note_update_missing_its_history_is_reported_not_applied() {
 #[test]
 fn files_cannot_pose_as_folders() {
     let (mut g, ring, a, _, mut ra, _) = pair();
-    g.record(&ring, &a, 1, 1.0, vec![put("f.bin", "dir", None), json!({"op": "mkdir", "path": "d"})]);
+    g.record(
+        &ring,
+        &a,
+        1,
+        1.0,
+        vec![put("f.bin", "dir", None), json!({"op": "mkdir", "path": "d"})],
+    );
     g.record(&ring, &a, 2, 2.0, vec![json!({"op": "delete", "path": "d", "base": "dir"})]);
     g.pull(&mut ra);
     assert!(ra.tree.get("f.bin").is_none());
