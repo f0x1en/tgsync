@@ -30,17 +30,23 @@ export class NodeFiles implements Files {
   async *readChunks(p: string, size: number): AsyncIterable<Uint8Array> {
     const fh = await open(this.abs(p), "r");
     try {
+      // Buffers sized to what is left of the file (a small note must not cost a 4 MiB buffer);
+      // at least 64 KiB, in case the file grows while it is read.
+      const total = (await fh.stat()).size;
+      let pos = 0;
       for (;;) {
-        const buf = new Uint8Array(size);
+        const want = Math.min(size, Math.max(total - pos, 64 * 1024));
+        const buf = new Uint8Array(want);
         let got = 0;
-        while (got < size) {
-          const { bytesRead } = await fh.read(buf, got, size - got, null);
+        while (got < want) {
+          const { bytesRead } = await fh.read(buf, got, want - got, null);
           if (!bytesRead) break;
           got += bytesRead;
         }
         if (!got) return;
-        yield got === size ? buf : buf.subarray(0, got);
-        if (got < size) return;
+        pos += got;
+        yield got === want ? buf : buf.subarray(0, got);
+        if (got < want) return;
       }
     } finally {
       await fh.close();
