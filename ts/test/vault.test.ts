@@ -362,3 +362,20 @@ test("a folder of the old TypeScript engine upgrades without uploading everythin
   assert.equal(ch.sent, before);
   await cleanup();
 });
+
+test("a re-joined folder continues the profile's record numbers (never reuses one)", async () => {
+  const { a, ch, cleanup } = await pair();
+  const seqs = new Map<string, number>();
+  const me: any = (a.vault as any).me;
+  me.seqs = { get: (v: string) => seqs.get(v) ?? 0, set: (v: string, n: number) => seqs.set(v, n) };
+  await a.write("one.md", "1\n");
+  await a.vault.pushChanges();
+  const used = seqs.get(a.vault.vaultId!)!;
+  assert.ok(used >= 1);
+  // A fresh folder for the same person and vault (as after a re-join) starts from the stored seq.
+  const dir = await mkdtemp(join(tmpdir(), "tgsync-rejoin-"));
+  const v = await Vault.join(new NodeFiles(dir), me, ch.transport(), a.vault.vaultId!);
+  assert.equal(v.engine.sentSeq(), used);
+  await rm(dir, { recursive: true, force: true });
+  await cleanup();
+});

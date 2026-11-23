@@ -69,7 +69,17 @@ export async function loadIdentity(profile: string): Promise<Identity> {
   if (!existsSync(p)) throw new HomeError(`no identity for profile '${profile}'; run \`tgsync new\` or \`tgsync join\``);
   const secret = readFileSync(p, "utf8").trim().split("\n").at(-1)!.trim();
   const recipient = await identityToRecipient(secret);
-  return { secret, recipient, id: await memberId(recipient), signing: signingKey(profile) };
+  return { secret, recipient, id: await memberId(recipient), signing: signingKey(profile), seqs: seqStore(profile) };
+}
+
+/** `<profile>/seqs.json`: last record seq per vault id. */
+function seqStore(profile: string): NonNullable<Identity["seqs"]> {
+  const p = join(appDir(profile), "seqs.json");
+  const read = (): { [v: string]: number } => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return {}; } };
+  return {
+    get: (v) => read()[v] ?? 0,
+    set: (v, seq) => { const d = read(); if ((d[v] ?? 0) < seq) { d[v] = seq; writeFileSync(p, JSON.stringify(d), { mode: 0o600 }); } },
+  };
 }
 
 /** The profile's Ed25519 signing key (64 hex), made on first use. Never leaves this computer. */
@@ -87,7 +97,7 @@ export async function initIdentity(profile: string): Promise<Identity> {
   if (existsSync(p)) throw new HomeError(`identity already exists at ${p}`);
   const ident = await newIdentity();
   writeFileSync(p, `# public key: ${ident.recipient}\n${ident.secret}\n`, { mode: 0o600, flag: "wx" });
-  return { ...ident, signing: signingKey(profile) };
+  return { ...ident, signing: signingKey(profile), seqs: seqStore(profile) };
 }
 
 // Things this computer remembers so you don't retype them: your vault folders, and join

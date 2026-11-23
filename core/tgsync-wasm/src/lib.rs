@@ -357,6 +357,20 @@ impl Engine {
         self.vault.replica.texts.text_at(doc, sha)
     }
 
+    /// Last record seq we posted in this vault. The host also keeps it outside the folder (with the
+    /// profile) and gives it back with `setSentSeq` after a re-join, so a fresh engine never reuses
+    /// a seq whose record the group does not show yet.
+    #[wasm_bindgen(js_name = sentSeq)]
+    pub fn sent_seq(&self) -> f64 {
+        self.vault.sent_seq as f64
+    }
+
+    #[wasm_bindgen(js_name = setSentSeq)]
+    pub fn set_sent_seq(&mut self, seq: f64) -> Result<(), JsError> {
+        self.vault.sent_seq = self.vault.sent_seq.max(whole(seq, "seq")? as u64);
+        Ok(())
+    }
+
     /// Our member id.
     #[wasm_bindgen(js_name = myId)]
     pub fn my_id(&self) -> String {
