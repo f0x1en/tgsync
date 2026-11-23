@@ -363,7 +363,14 @@ impl Replica {
                 let accepted = if replayed {
                     Err(crate::Error::Crypto("descriptor epoch is older than ours (replay?)".into()))
                 } else {
-                    descriptor::accept(body, &self.me, &mut self.keys, self.vault_id.as_deref(), false, self.admins.as_deref())
+                    descriptor::accept(
+                        body,
+                        &self.me,
+                        &mut self.keys,
+                        self.vault_id.as_deref(),
+                        false,
+                        self.admins.as_deref(),
+                    )
                 };
                 match accepted {
                     Ok(None) if self.has_keys() && !self.active => {
