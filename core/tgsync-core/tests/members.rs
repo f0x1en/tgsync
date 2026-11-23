@@ -163,7 +163,16 @@ fn in_an_old_v1_vault_any_member_adds_and_removes() {
     let mut g = Group(vec![], 0);
     let mut ring = KeyRing::new();
     ring.add(1, &[4; 32]).unwrap();
-    let d = build(&ring, "00112233aabbccdd", &[Member::new(&a.recipient, "alice"), Member::new(&b.recipient, "bob")], None, 1, None, &mut g.n()).unwrap();
+    let d = build(
+        &ring,
+        "00112233aabbccdd",
+        &[Member::new(&a.recipient, "alice"), Member::new(&b.recipient, "bob")],
+        None,
+        1,
+        None,
+        &mut g.n(),
+    )
+    .unwrap();
     g.post(d);
     let mut rb = Replica::new(b.clone(), None);
     g.pull(&mut rb);
@@ -180,5 +189,8 @@ fn in_an_old_v1_vault_any_member_adds_and_removes() {
     g.pull(&mut rb);
     assert_eq!(rb.members.len(), 2);
     assert!(rb.keys.has(2) && !ra.keys.has(2), "the key rotated without alice");
-    assert!(members::give_admin(&rb, "carol", 4, &mut g.n()).unwrap_err().to_string().contains("no admins"));
+    assert!(members::give_admin(&rb, "carol", 4, &mut g.n())
+        .unwrap_err()
+        .to_string()
+        .contains("no admins"));
 }

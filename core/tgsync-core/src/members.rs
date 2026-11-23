@@ -154,7 +154,12 @@ pub fn add(
 pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
     if let Some(vault_id) = v1_state(r)? {
         one_match(r, target)?;
-        let keep: Vec<Member> = r.members.iter().filter(|m| !(target == m.recipient || target == m.id() || target == m.name)).cloned().collect();
+        let keep: Vec<Member> = r
+            .members
+            .iter()
+            .filter(|m| !(target == m.recipient || target == m.id() || target == m.name))
+            .cloned()
+            .collect();
         if keep.is_empty() {
             return Err(err("refusing to remove the last member"));
         }
