@@ -131,7 +131,10 @@ async function vaultAt(folder: string): Promise<[string | null, boolean]> {
     try {
       const d = pick(JSON.parse(readFileSync(join(folder, file), "utf8")));
       return [d.vault_id ?? null, !!d.removed];
-    } catch { continue; } // unreadable: try the older state file
+    } catch {
+      if (file === ENGINE_FILE) throw new CliError(`${short(folder)}/${ENGINE_FILE} is damaged; move it away and run \`tgsync join\` there again`);
+      continue;
+    }
   }
   return [null, false];
 }
