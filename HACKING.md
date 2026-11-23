@@ -29,19 +29,23 @@ Delete `~/tgs` to start over.
 
 `PROTOCOL.md` describes every message format and the replay rules; `spec/vectors.json` has fixed examples
 (regenerate with `.venv/bin/python scripts/make_vectors.py`; `tests/test_vectors.py` checks Python against it).
-The Obsidian plugin must pass the same vectors. TypeScript engine (the base for the Node CLI and the plugin): `ts/` (`make ts`).
+The Rust core passes them too, plus `spec/vectors_v2.json` (protocol v2), natively and as WebAssembly.
 
-**Node CLI** (`ts/src/cli/main.ts`, built to the single file `ts/dist/tgsync.mjs` by `npm run build`): the same
-commands, output and `--json` contract as the Python CLI, which it replaces. Telegram goes through mtcute (pinned
-exact version, `ts/src/node/telegram.ts`); the login is a session string in `<profile>/mtcute.session`, and
-`tgsync login [--profile P]` logs a profile in. Profiles, keys and `telegram.json` are shared with Python
-(`~/.config/tgsync/<profile>/`). Differences from Python: local state is `.tgsync/state.json` (Python folders are
-not converted; join again); `.tgsync/config.json` `chat` is the group's invite link (the group is found by it);
-`restore` downloads old versions from the group instead of a local git copy, so REV is a version id like `812.0`
-(record message, entry). `make ts` also runs `tests/test_sandbox.py` against it, and
-`TGSYNC_CLI="node ts/dist/tgsync.mjs" python scripts/live_e2e.py` runs the live test with it.
-Obsidian plugin, a thin layer over `ts/` that adds nothing the CLI lacks: `obsidian/` (`make plugin`).
-Run `npm install` once in each.
+**Node CLI** (`ts/src/cli/main.ts`, built to the single file `ts/dist/tgsync.mjs` by `npm run build`; CI uploads it
+as `tgsync-cli`): the same commands, output and `--json` contract as the Python CLI, which it replaces. It runs on
+the Rust core: `ts/src/vault.ts` is only the host (lists the folder, moves bytes, talks to the group) around the
+WebAssembly `Engine` (`ts/src/core.ts` loads `core/pkg-web`, built by `make wasm`). Telegram goes through mtcute
+(pinned exact version, `ts/src/node/telegram.ts`); the login is a session string in `<profile>/mtcute.session`, and
+`tgsync login [--profile P]` logs a profile in. Profiles, age keys and `telegram.json` are shared with Python
+(`~/.config/tgsync/<profile>/`); the Ed25519 signing key is `<profile>/signing.key` (made on first use).
+Local state: `.tgsync/engine.json` (the engine's saved state; no keys) and `.tgsync/local.json` (stat cache, log,
+note versions, problems). A folder of the old TypeScript engine (`.tgsync/state.json`) is replayed from the group
+with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the group is found by it); `restore`
+downloads old versions from the group (notes: from the merged history), so REV is a version id like `812.0` (record
+message, entry). `make ts` also runs `tests/test_sandbox.py` against it, and
+`TGSYNC_CLI="node $PWD/ts/live/tgsync.mjs" python scripts/live_e2e.py` runs the live test with it (use a copy under
+`ts/`, since `npm test` rebuilds `dist/`). Obsidian plugin, a thin layer over the CLI's `--json` that adds nothing
+the CLI lacks: `obsidian/` (`make plugin`; tests run it against a fake `tgsync`). Run `npm install` once in each.
 
 Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this
 machine with the Rust core (chunks sealed with the platform's AES-GCM): 1 GB push 83 MB/s, pull 151 MB/s, peak
