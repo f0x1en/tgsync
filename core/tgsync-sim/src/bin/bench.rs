@@ -92,7 +92,7 @@ fn main() {
 
     // 3. Saving and loading that replica.
     let t = Instant::now();
-    let saved = r.save();
+    let saved = r.save().unwrap();
     let save_s = t.elapsed().as_secs_f64();
     let t = Instant::now();
     let back = Replica::load(a.clone(), &saved).unwrap();
@@ -145,6 +145,6 @@ fn main() {
     assert_eq!(w.text("note.md").unwrap(), text);
     println!("notes: 1000 edits of a {} KB note: diff+export {:.2} ms/edit, import {:.2} ms/edit, {} bytes/edit on the wire (vs {} KB whole file)",
              text.len() / 1000, prepare_s, apply_s, update_bytes / 1000, text.len() / 1000);
-    let saved = w.save();
+    let saved = w.save().unwrap();
     println!("notes: state with that note's whole history: {:.0} KB", saved.len() as f64 / 1e3);
 }

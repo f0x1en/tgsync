@@ -147,8 +147,8 @@ impl Engine {
         })
     }
 
-    pub fn save(&self) -> Vec<u8> {
-        self.vault.save()
+    pub fn save(&self) -> Result<Vec<u8>, JsError> {
+        self.vault.save().map_err(js)
     }
 
     // ------------------------------------------------------------------ status

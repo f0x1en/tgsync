@@ -125,20 +125,18 @@ impl Texts {
     }
 
     /// Save every doc (Loro snapshot) and the version index.
-    pub fn save(&self) -> serde_json::Value {
+    pub fn save(&self) -> Result<serde_json::Value> {
         use base64::Engine;
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
         let mut saved = self.saved.borrow_mut();
-        let docs: Vec<_> = self
-            .docs
-            .iter()
-            .map(|(id, d)| {
-                let snap = saved
-                    .entry(id.clone())
-                    .or_insert_with(|| b64(&d.export(ExportMode::Snapshot).unwrap()));
-                serde_json::json!([id, snap])
-            })
-            .collect();
+        let mut docs = Vec::with_capacity(self.docs.len());
+        for (id, d) in &self.docs {
+            if !saved.contains_key(id) {
+                let snap = d.export(ExportMode::Snapshot).map_err(|e| err(format!("cannot save note {id}: {e}")))?;
+                saved.insert(id.clone(), b64(&snap));
+            }
+            docs.push(serde_json::json!([id, saved[id]]));
+        }
         // Oldest to newest per doc, so loading keeps the order.
         let versions: Vec<_> = self
             .order
@@ -151,7 +149,7 @@ impl Texts {
             })
             .collect();
         let paths: Vec<_> = self.paths.iter().map(|(d, (o, l))| serde_json::json!([d, o, l])).collect();
-        serde_json::json!({"docs": docs, "versions": versions, "paths": paths})
+        Ok(serde_json::json!({"docs": docs, "versions": versions, "paths": paths}))
     }
 
     pub fn load(v: &serde_json::Value) -> Result<Texts> {

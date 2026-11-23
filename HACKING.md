@@ -151,7 +151,6 @@ into its document. A failing seed prints its whole trace and replays exactly.
 - Join short codes are 32 bits. `accept` refuses a code two waiting requests share and also takes the full
   member id, which `tgsync join` prints.
 - The Obsidian plugin is desktop only (it runs the CLI); a mobile plugin needs Telegram inside Obsidian.
-- If Loro cannot export a note's snapshot, saving the vault fails (never seen in tests).
 
 ## `--json`: the interface for other tools (e.g. an Obsidian plugin)
 
