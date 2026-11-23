@@ -194,6 +194,8 @@ For each message after the last processed id:
     - no node, or current sha == new sha (no change), or current sha == `base` -> set node;
     - else -> conflict: node goes to the conflict-copy path, the original stays.
   - **delete:** only if current node's sha == `base`; else ignored (an edit beats a delete).
+    (Rust core: never a folder node; folders go with `rmdir`. A `put` with sha `dir` or a negative
+    size is skipped.)
   - **mkdir:** only if no node at that path (exact or case-insensitive); creates a folder node.
   - **rmdir:** only if the current node is a folder.
 - **`c`, `j`:** nothing to apply.
