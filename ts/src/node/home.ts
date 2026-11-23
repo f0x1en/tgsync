@@ -3,7 +3,7 @@
 // and the sandbox switch. Same layout as the Python CLI, so existing keys keep working.
 import { identityToRecipient } from "age-encryption";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { memberId, newIdentity } from "../crypto.ts";
@@ -75,10 +75,20 @@ export async function loadIdentity(profile: string): Promise<Identity> {
 /** `<profile>/seqs.json`: last record seq per vault id. */
 function seqStore(profile: string): NonNullable<Identity["seqs"]> {
   const p = join(appDir(profile), "seqs.json");
-  const read = (): { [v: string]: number } => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return {}; } };
+  const read = (): { [v: string]: number } => {
+    if (!existsSync(p)) return {};
+    try { return JSON.parse(readFileSync(p, "utf8")); }
+    catch { throw new HomeError(`${p} is damaged; it keeps record numbers safe after a re-join. Remove it only if you have not re-joined a vault since`); }
+  };
   return {
     get: (v) => read()[v] ?? 0,
-    set: (v, seq) => { const d = read(); if ((d[v] ?? 0) < seq) { d[v] = seq; writeFileSync(p, JSON.stringify(d), { mode: 0o600 }); } },
+    set: (v, seq) => {
+      const d = read();
+      if ((d[v] ?? 0) >= seq) return;
+      d[v] = seq;
+      writeFileSync(`${p}.tmp`, JSON.stringify(d), { mode: 0o600 }); // write, then rename: never half a file
+      renameSync(`${p}.tmp`, p);
+    },
   };
 }
 
@@ -89,7 +99,9 @@ function signingKey(profile: string): string {
     try { writeFileSync(p, randomBytes(32).toString("hex") + "\n", { mode: 0o600, flag: "wx" }); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } // another tgsync made it just now
   }
-  return readFileSync(p, "utf8").trim();
+  const key = readFileSync(p, "utf8").trim();
+  if (!/^[0-9a-f]{64}$/.test(key)) throw new HomeError(`${p} is not a signing key (64 hex characters); it may be damaged`);
+  return key;
 }
 
 export async function initIdentity(profile: string): Promise<Identity> {

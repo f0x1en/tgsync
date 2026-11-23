@@ -152,6 +152,9 @@ export class Vault {
         }
         engine.materialized(JSON.stringify(synced));
       }
+      // ... and the last record seq it posted (a fresh engine must not reuse it).
+      const mine = old?.authors?.[me.id];
+      if (typeof mine === "number") engine.setSentSeq(mine);
     }
     const v = new Vault(files, me, transport, engine, state, makeIgnore(ig));
     v.adoptSeq();
@@ -652,7 +655,11 @@ export class Vault {
   }
 
   // ------------------------------------------------------------------ members (admins only)
-  private async postDescriptor(make: () => Uint8Array): Promise<void> {
+  private postDescriptor(make: () => Uint8Array): Promise<void> {
+    return this.exclusive(() => this.postDescriptorNow(make));
+  }
+
+  private async postDescriptorNow(make: () => Uint8Array): Promise<void> {
     await this.pull();
     this.checkMember();
     const id = await this.transport.send(KIND.descriptor, make());
@@ -671,7 +678,11 @@ export class Vault {
   }
 
   /** Join requests for this vault from people who are not members yet (latest per key). */
-  async pendingRequests(): Promise<JoinRequest[]> {
+  pendingRequests(): Promise<JoinRequest[]> {
+    return this.exclusive(() => this.pendingRequestsNow());
+  }
+
+  private async pendingRequestsNow(): Promise<JoinRequest[]> {
     await this.pull();
     const have = new Set(this.members.map((m) => m.recipient));
     const found = new Map<string, JoinRequest>();
@@ -680,7 +691,11 @@ export class Vault {
       let r: any = null;
       try { r = JSON.parse(w.decodeJoinRequest(await this.transport.fetch(m.id))); } catch { continue; }
       if (r && r.vault_id === this.vaultId && !have.has(r.recipient)) {
-        found.set(r.recipient, { vaultId: r.vault_id, recipient: r.recipient, name: r.name, msgId: m.id, signer: r.signer });
+        // Requests are not authenticated: anyone could post one with someone else's key and their own
+        // signing key. Two requests for one key with different signing keys: accept neither.
+        const prev = found.get(r.recipient);
+        const conflict = !!prev && (prev.conflict || (prev.signer ?? null) !== (r.signer ?? null));
+        found.set(r.recipient, { vaultId: r.vault_id, recipient: r.recipient, name: r.name, msgId: m.id, signer: r.signer, conflict });
       }
     }
     return [...found.values()].sort((a, b) => a.msgId - b.msgId);
@@ -688,6 +703,10 @@ export class Vault {
 
   /** Let in someone who asked to join (typing their code is the confirmation). */
   acceptRequest(req: JoinRequest, name?: string): Promise<void> {
+    if (req.conflict) {
+      return Promise.reject(new VaultError("this person's join request was posted twice with different signing keys, so one of them is not theirs; " +
+        "nothing was accepted. Ask them to make a new tgsync profile (`--profile NEW`) and ask to join again"));
+    }
     return this.addMember(req.recipient, name || req.name, req.signer ?? null);
   }
 
