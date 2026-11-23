@@ -422,9 +422,10 @@ const COMMANDS: { [name: string]: Command } = {
         memSave(m);
         mkdirSync(folder, { recursive: true }); // so the next step's `cd` works
         const sc = await shortCode(ident.recipient);
-        emit({ state: "waiting", code: sc, folder: resolve(folder) }, () => {
+        emit({ state: "waiting", code: sc, id: ident.id, folder: resolve(folder) }, () => {
           echo(`Join request sent as '${who}'. Files will go in ${short(folder!)}.`);
           echo(bold(`Tell the person who invited you this code: ${sc}`));
+          echo(`(If they are told the code is taken, give them your full id instead: ${ident.id})`);
           echo(`They run:  tgsync accept ${sc}`);
           echo(`Then you run:  cd ${short(folder!)} && tgsync join     (no need to paste the line again; any time, no hurry)`);
         });
@@ -507,16 +508,26 @@ const COMMANDS: { [name: string]: Command } = {
   },
 
   accept: {
-    help: "Let in the person whose join code is CODE (typing it is the confirmation).",
-    usage: "CODE [--name NAME] [-C VAULT]",
+    help: "Let in the person whose join code is CODE (typing it is the confirmation). CODE can also be their full id.",
+    usage: "CODE|ID [--name NAME] [-C VAULT]",
     options: { name: { type: "string" }, ...VAULT_OPT },
     async run([code], o) {
       if (!code) throw new CliError("Missing argument 'CODE'.");
       const [v] = await openVault(o.vault as string, "accept");
       const want = code.trim().toLowerCase();
-      let hit;
-      for (const r of await v.pendingRequests()) if (await shortCode(r.recipient) === want) hit = r;
-      if (!hit) throw new CliError(`nobody is waiting with code '${code}' (see \`tgsync members\`)`);
+      const hits = [];
+      for (const r of await v.pendingRequests()) {
+        if (await shortCode(r.recipient) === want || await memberId(r.recipient) === want) hits.push(r);
+      }
+      if (!hits.length) throw new CliError(`nobody is waiting with code '${code}' (see \`tgsync members\`)`);
+      // Codes are short: someone watching the group could make a key with the same code as a real
+      // request. Two requests with one code means one is fake; accept neither.
+      if (hits.length > 1) {
+        const ids = await Promise.all(hits.map(async (r) => `${r.name || "no name"}: ${await memberId(r.recipient)}`));
+        throw new CliError(`${hits.length} people are waiting with code '${code}' (${ids.join("; ")}). ` +
+          "One of them may be an impostor, so none was accepted. Ask your friend for the full id that `tgsync join` printed, then run:  tgsync accept <id>");
+      }
+      const hit = hits[0];
       await v.acceptRequest(hit, o.name as string | undefined);
       const who = (o.name as string | undefined) || hit.name || want;
       emit({ accepted: who }, () => echo(`Accepted ${who}. Tell them to run:  tgsync join`));

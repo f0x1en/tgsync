@@ -54,7 +54,9 @@ def test_two_people_in_the_sandbox(tmp_path):
     assert rc == 1 and "tgsync join" in out["error"], out
     out, _ = _tg(sb, "bob", "join", cwd=B)
     assert out["state"] == "waiting", out
-    _tg(sb, "alice", "accept", out["code"], "-C", str(A))
+    # The full member id works too (the Node CLI prints it; it settles a code two requests share).
+    out, rc = _tg(sb, "alice", "accept", out.get("id") or out["code"], "-C", str(A))
+    assert rc == 0, out
     out, _ = _tg(sb, "bob", "join", cwd=B)
     assert out["state"] == "joined", out
     assert (B / "while_out.md").read_text() == "written while bob was out\n"
