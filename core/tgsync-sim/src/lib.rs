@@ -789,7 +789,11 @@ impl Sim {
                     if epoch < snap.epoch {
                         return Err(format!("secrecy: msg {id} applied though sealed with key {epoch} < {}", snap.epoch));
                     }
-                    if !snap.members.iter().any(|m| m.id() == rec.author && m.signer.is_some() && m.signer == rec.signer) {
+                    if !snap
+                        .members
+                        .iter()
+                        .any(|m| m.id() == rec.author && m.signer.is_some() && m.signer == rec.signer)
+                    {
                         return Err(format!("secrecy: msg {id} applied though not signed by its author, a member there"));
                     }
                 }
