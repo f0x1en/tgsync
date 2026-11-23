@@ -400,8 +400,15 @@ impl Sim {
             entries.push(e);
         }
         let seq = v.next_seq();
+        // Sometimes in another member's name, signed with our own key: a forgery. Only in v2 vaults:
+        // v1 records are not authenticated, so there any member can write as anyone (a known v1 limit).
+        let author = if !self.v1 && self.rng.chance(30) {
+            self.clients[self.rng.below(self.clients.len())].vault.replica.me.id()
+        } else {
+            v.replica.me.id()
+        };
         let rec = tgsync_core::oplog::Record {
-            author: v.replica.me.id(),
+            author,
             seq,
             ts: self.clock,
             entries,
@@ -772,6 +779,25 @@ impl Sim {
                 .rev()
                 .take_while(|(at, _)| at == id)
                 .any(|(_, why)| whole_record(why));
+            // Secrecy (v2): an applied record is sealed with the newest key at its place in the log and
+            // comes from someone who was a member there, so a removed member neither reads nor writes
+            // anything new. (Checked here independently of the core's own record checks.)
+            if *kind == KIND_RECORD && r.authors != before && !rejected {
+                if let Some(snap) = r.snapshot_at(*id).filter(|s| s.admins.is_some()) {
+                    let rec = tgsync_core::oplog::decode_record(&r.keys, body).unwrap();
+                    let epoch = tgsync_core::crypto::blob_epoch(body).unwrap();
+                    if epoch < snap.epoch {
+                        return Err(format!("secrecy: msg {id} applied though sealed with key {epoch} < {}", snap.epoch));
+                    }
+                    if !snap
+                        .members
+                        .iter()
+                        .any(|m| m.id() == rec.author && m.signer.is_some() && m.signer == rec.signer)
+                    {
+                        return Err(format!("secrecy: msg {id} applied though not signed by its author, a member there"));
+                    }
+                }
+            }
             if *kind == KIND_RECORD && r.authors != before && !rejected && !self.odd.contains(id) {
                 let rec = tgsync_core::oplog::decode_record(&r.keys, body).unwrap();
                 for e in &rec.entries {

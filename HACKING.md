@@ -97,8 +97,9 @@ into its document. A failing seed prints its whole trace and replays exactly.
 first two seeds (2026-11-23): a put that ignores its `base` ("edit lost"), conflict copies that all get
 the same name (replicas differ), "edit beats delete" turned off ("edit lost"), re-sending of records
 rejected for an old key turned off ("upload lost"), migrating no synced map or no seq after a re-join
-(found real bugs before they were fixed). It does not check secrecy (who can read what): that is
-covered by the unit tests in `tests/replica.rs` and `tests/members.rs`.
+(found real bugs before they were fixed). It also checks secrecy in v2 vaults: every applied record
+is sealed with the newest key at its place in the log and signed by its author, a member there; turning
+off the old-key rule or the membership rule each fails within two seeds (members also post forged records).
 
 
 
