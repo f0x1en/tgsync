@@ -144,14 +144,14 @@ into its document. A failing seed prints its whole trace and replays exactly.
 
 ## Known limits (not fixed yet)
 
-- Note history is kept forever: every text a note had adds an entry to the version index in
-  `.tgsync/engine.json` (about 100 bytes each). Fine for years of normal use; a pruning rule is not written yet.
+- Each note keeps its newest 256 versions locally (to diff from, and for `restore`); older ones are
+  dropped from `.tgsync/engine.json`. A writer more than 256 versions behind gets a conflict copy instead of a merge.
 - A record whose post failed after sealing keeps its seq (so a post that did go through is never doubled);
   readers then note a harmless "gap in ... history".
 - Join short codes are 32 bits. `accept` refuses a code two waiting requests share and also takes the full
   member id, which `tgsync join` prints.
 - The Obsidian plugin is desktop only (it runs the CLI); a mobile plugin needs Telegram inside Obsidian.
-- If Loro cannot export a note's snapshot, saving the vault fails (never seen; Loro's export is infallible in practice).
+- If Loro cannot export a note's snapshot, saving the vault fails (never seen in tests).
 
 ## `--json`: the interface for other tools (e.g. an Obsidian plugin)
 

@@ -39,7 +39,13 @@ pub struct Texts {
     /// doc -> (path of the entry that started it, path it was last placed at). Writers only use it
     /// to find a note's doc after it moved or was deleted; replay does not depend on it.
     paths: BTreeMap<String, (String, String)>,
+    /// Per doc, the shas in `versions` from oldest to newest (at most `MAX_VERSIONS`).
+    order: BTreeMap<String, std::collections::VecDeque<String>>,
 }
+
+/// Versions kept per note (to diff from, and for restore). Older ones are dropped: a writer that far
+/// behind starts a new note (a conflict copy), and restore says the version is not available.
+const MAX_VERSIONS: usize = 256;
 
 impl std::fmt::Debug for Texts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -87,6 +93,16 @@ impl Texts {
         self.versions.contains_key(&(doc.to_owned(), sha.to_owned()))
     }
 
+    fn remember_version(&mut self, doc: &str, sha: String) {
+        let q = self.order.entry(doc.to_owned()).or_default();
+        q.retain(|s| *s != sha);
+        q.push_back(sha);
+        while q.len() > MAX_VERSIONS {
+            let old = q.pop_front().unwrap();
+            self.versions.remove(&(doc.to_owned(), old));
+        }
+    }
+
     /// Replay placed `doc` (from an entry for `entry_path`) at `at`.
     pub fn placed(&mut self, doc: &str, entry_path: &str, at: &str) {
         let e = self
@@ -123,7 +139,13 @@ impl Texts {
                 serde_json::json!([id, snap])
             })
             .collect();
-        let versions: Vec<_> = self.versions.iter().map(|((d, s), f)| serde_json::json!([d, s, b64(f)])).collect();
+        // Oldest to newest per doc, so loading keeps the order.
+        let versions: Vec<_> = self
+            .order
+            .iter()
+            .flat_map(|(d, q)| q.iter().map(move |s| (d, s)))
+            .filter_map(|(d, s)| self.versions.get(&(d.clone(), s.clone())).map(|f| serde_json::json!([d, s, b64(f)])))
+            .collect();
         let paths: Vec<_> = self.paths.iter().map(|(d, (o, l))| serde_json::json!([d, o, l])).collect();
         serde_json::json!({"docs": docs, "versions": versions, "paths": paths})
     }
@@ -153,7 +175,8 @@ impl Texts {
         }
         for x in v.get("versions").and_then(|x| x.as_array()).ok_or_else(bad)? {
             let key = (x[0].as_str().ok_or_else(bad)?.to_owned(), x[1].as_str().ok_or_else(bad)?.to_owned());
-            t.versions.insert(key, unb64(&x[2])?);
+            t.versions.insert(key.clone(), unb64(&x[2])?);
+            t.remember_version(&key.0, key.1);
         }
         Ok(t)
     }
@@ -186,7 +209,9 @@ impl Texts {
         }
         let d = &self.docs[doc];
         let text = d.get_text(TEXT).to_string();
-        self.versions.insert((doc.to_owned(), sha_hex(&text)), d.oplog_frontiers().encode());
+        let sha = sha_hex(&text);
+        self.versions.insert((doc.to_owned(), sha.clone()), d.oplog_frontiers().encode());
+        self.remember_version(doc, sha);
         Ok(text)
     }
 

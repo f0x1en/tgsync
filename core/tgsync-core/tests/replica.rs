@@ -636,3 +636,22 @@ fn files_cannot_pose_as_folders() {
     assert!(ra.tree.get("f.bin").is_none());
     assert_eq!(ra.tree.get("d").unwrap().sha, "dir", "delete does not remove a folder");
 }
+
+#[test]
+fn a_note_keeps_its_newest_256_versions() {
+    use tgsync_core::text::{sha_hex, Texts};
+    let mut t = Texts::default();
+    let mut base: Option<String> = None;
+    for i in 0..300u64 {
+        let text = format!("version {i}");
+        let edit = t.prepare(base.as_ref().map(|_| "d"), base.as_deref(), &text, "d", i + 1).unwrap();
+        t.import("d", &edit.update).unwrap();
+        base = Some(sha_hex(&text));
+    }
+    assert!(t.has_version("d", &sha_hex("version 299")));
+    assert!(t.has_version("d", &sha_hex("version 44")));
+    assert!(!t.has_version("d", &sha_hex("version 43")), "older versions are dropped");
+    let back = Texts::load(&t.save()).unwrap();
+    assert!(back == t);
+    assert!(back.has_version("d", &sha_hex("version 44")) && !back.has_version("d", &sha_hex("version 43")));
+}
