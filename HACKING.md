@@ -3,8 +3,9 @@
 ## Setup and checks
 
 ```bash
-uv venv && uv pip install -e ".[dev]"
-make check          # ruff + mypy + pytest, same as CI (~3 s)
+(cd ts && npm install); (cd obsidian && npm install)   # once; plus Rust (cargo) and Python with pytest
+make check          # Rust core tests, WebAssembly build (or CI's), Node CLI tests, sandbox tests, plugin tests
+make sim            # 10 000 simulated seeds
 make live           # two-person test on REAL Telegram (profiles `default` and `b`); KEEP=~/dir keeps folders
 ```
 
@@ -28,11 +29,11 @@ Delete `~/tgs` to start over.
 ## Protocol
 
 `PROTOCOL.md` describes every message format and the replay rules; `spec/vectors.json` has fixed examples
-(regenerate with `.venv/bin/python scripts/make_vectors.py`; `tests/test_vectors.py` checks Python against it).
+(written by the original Python version; fixed now).
 The Rust core passes them too, plus `spec/vectors_v2.json` (protocol v2), natively and as WebAssembly.
 
 **Node CLI** (`ts/src/cli/main.ts`, built to the single file `ts/dist/tgsync.mjs` by `npm run build`; CI uploads it
-as `tgsync-cli`): the same commands, output and `--json` contract as the Python CLI, which it replaces. It runs on
+as `tgsync-cli`): the same commands, output and `--json` contract as the original Python CLI, which it replaced. It runs on
 the Rust core: `ts/src/vault.ts` is only the host (lists the folder, moves bytes, talks to the group) around the
 WebAssembly `Engine` (`ts/src/core.ts` loads `core/pkg-web`, built by `make wasm`). Telegram goes through mtcute
 (pinned exact version, `ts/src/node/telegram.ts`); the login is a session string in `<profile>/mtcute.session`, and
@@ -43,8 +44,7 @@ note versions, problems). A folder of the old TypeScript engine (`.tgsync/state.
 with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the group is found by it); `restore`
 downloads old versions from the group (notes: from the merged history), so REV is a version id like `812.0` (record
 message, entry). `make ts` also runs `tests/test_sandbox.py` against it, and
-`TGSYNC_CLI="node $PWD/ts/live/tgsync.mjs" python scripts/live_e2e.py` runs the live test with it (use a copy under
-`ts/`, since `npm test` rebuilds `dist/`). Obsidian plugin, a thin layer over the CLI's `--json` that adds nothing
+`make live` runs the live test with it (a copy in `ts/live/`, since `npm test` rebuilds `dist/`). Obsidian plugin, a thin layer over the CLI's `--json` that adds nothing
 the CLI lacks: `obsidian/` (`make plugin`; tests run it against a fake `tgsync`). Run `npm install` once in each.
 
 Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this
@@ -94,52 +94,39 @@ into its document. A failing seed prints its whole trace and replays exactly.
 
 
 
+## Code map (`ts/`, the host around the core)
+
 | File | What it does |
 |---|---|
-| `cli/common.py` | The `tgsync` group, `--json` mode, vault config, remembered input, and the one place that picks Telegram or sandbox (`_transport`, `_new_group`, `_open`, `_ensure_ready`). |
-| `cli/setup.py` | `new`, `join` |
-| `cli/people.py` | `invite`, `members`, `accept`, `remove` |
-| `cli/syncing.py` | `pull`, `push`, `status` (also plain `tgsync`) |
-| `cli/restore.py` | `log`, `restore` (offline) |
-| `engine.py` | `Vault`: create/join, pull (replay the log), push (scan + upload), materialize (write files), members. No printing, no prompts. |
-| `oplog.py` | Message formats: records (batched file ops), chunks (big files). |
-| `vaultkeys.py` | Descriptors: the vault key wrapped per member, roster, add/remove (key rotation). |
-| `crypto.py` | AES-256-GCM sealing, key ring (epochs), fingerprints. |
-| `identity.py` | Per-person age key, Telegram credentials, profile folders (`root_dir`). |
-| `invites.py` | Invite codes (`tgsync1-...`) and join requests; short codes. |
-| `tree.py`, `state.py` | The replicated file tree and the local SQLite state (`.tgsync/state.db`). |
-| `history.py` | Local git snapshots in `.tgsync/history.git`. |
-| `paths.py` | Path safety, ignore rules. `lock.py`: one process per vault. |
-| `transport.py` | The `Transport` interface (`send`, `iter_after`, `fetch`, `close`) + in-memory fake for tests. |
-| `telegram.py` | Real transport (Telethon), login, rate limiting. |
-| `sandbox.py` | Folder-on-disk transport (`TGSYNC_SANDBOX`). |
+| `src/cli/main.ts` | Every command, `--json` mode, vault config, remembered input, picking Telegram or the sandbox. |
+| `src/vault.ts` | `Vault`: open/create/join, pull (feed the group's messages to the engine), push (scan the folder, upload big files, post records), materialize (write what the engine plans), status, log, restore, members. No printing, no prompts. |
+| `src/core.ts` | Loads the WebAssembly core (`core/pkg-web`). |
+| `src/node/telegram.ts` | Telegram transport (mtcute), login, rate limiting. `src/node/sandbox.ts`: folder-on-disk transport. |
+| `src/node/home.ts`, `files.ts` | Profiles (age key, signing key, Telegram login), remembered input; the folder as `Files`. |
+| `src/protocol.ts`, `crypto.ts`, `paths.ts` | Invite codes and chunk sealing (platform AES-GCM), path rules, ignore rules. |
+| `test/*.test.ts` | Vault behaviour with two people on an in-memory group, the CLI on a sandbox group, WebAssembly vs native vectors. |
 
 ## How `tgsync pull` / `push` / `status` flow
 
-`cli/syncing.pull` -> `common._open` (load `.tgsync/config.json`, connect, build `Vault`) ->
-`Vault.pull_changes()`: `pull()` (read new messages after the cursor, verify, apply to the tree) ->
-`materialize()` (write the tree to disk) -> `SyncReport` -> `common.emit_report` prints text or JSON.
-`push`: `Vault.push_changes()`: `pull()` (log only) -> `scan_local()` -> `push()` (records/chunks) -> `pull()`.
-`status`: `Vault.fetch()` (log only) -> `status()` (your changes) + `incoming()` (others' changes).
-`Vault.sync()` (all of it at once) remains for tests; the CLI has no `sync` command.
+`pull`: `Vault.pullChanges()` -> `pull()` (each new message: `engine.wantsBody` -> fetch -> `engine.feed`; then
+`finishPull`) -> `materialize()` (scan the folder, `engine.planMaterialize`, write/delete, `engine.materialized`).
+`push`: `pull()` -> scan -> upload big files as chunks -> `engine.planPush` / `sealRecord` / post / `pushed`, as many
+records as needed -> `pull()`. `status`: `fetchChanges()` -> `status()` + `incoming()`.
 
 ## Where to change what
 
-- New command: add it to the matching `cli/*.py` file (or a new file imported in `cli/__init__.py`).
-  Print results with `c.emit(data, text_fn)` and ask questions only with `c.ask(...)`, so `--json` keeps working.
-- New transport (another backend): implement the four `Transport` methods; hook it into
-  `common._transport` / `common._new_group`. The engine needs nothing else.
-- Sync/conflict behavior: `engine.py` + `tree.py`; test with the in-memory fake (`tests/conftest.py`: `mk`, `pair`).
+- New command: `src/cli/main.ts`; print with `emit(data, text_fn)`, ask only with `ask(...)`, so `--json` keeps working.
+- New transport (another backend): implement the four `Transport` methods (`src/transport.ts`).
+- Sync, merge, membership rules: the Rust core (`core/`), then `make sim` and `make rust`.
 
 ## Tests
 
-| File | Covers |
+| Where | Covers |
 |---|---|
-| `tests/test_sync.py` | Sync, conflicts, deletes, big files (in-memory fake group) |
-| `tests/test_members.py`, `test_invites_profiles.py` | Join/accept/remove, invites, profiles, remembered input |
-| `tests/test_history_cli.py` | Local history, restore, CLI basics |
-| `tests/test_crypto_paths.py` | Crypto and path safety |
+| `core/` (`make rust`, `make sim`) | Vectors, replay, membership, signed records, notes, plans; the deterministic simulator |
+| `ts/test/` (`make ts`) | The host with two people, the CLI, WebAssembly conformance |
 | `tests/test_sandbox.py` | Two real `tgsync` processes on a sandbox group, via `--json` |
+| `obsidian/test/` | The plugin against a fake `tgsync` |
 | `scripts/live_e2e.py` | The whole story on real Telegram (not in CI) |
 
 ## `--json`: the interface for other tools (e.g. an Obsidian plugin)
@@ -157,7 +144,7 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
   `checks` (with `--check`: `[{ok, what, detail}]`, else null).
 - `members`: `members` (`[{name, id, you}]`), `waiting` (`[{code, name}]`).
 - `new`: `folder`, `profile`, `vault_id`, `invite`. `join`: `state` (`"waiting"` + `code`, or `"joined"` + `report`).
-- `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev` (Python: a git snapshot id; Node: a version id like `812.0`).
+- `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev` (a version id like `812.0`).
 - `log`: `log` (`[{ts, who, op, path, copy}]`, newest first; op is `put`, `delete`, `conflict`, `mkdir`, `rmdir`).
 
 A script can run e.g. `tgsync --json status -C <vault>` and read stdout. Desktop only: Obsidian

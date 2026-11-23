@@ -55,7 +55,7 @@ note at the same time:
   every client for good; anyone in the group could make a member believe they were removed; a
   removed member could keep writing with the old key, and teammates who had not seen the key change
   kept writing data the removed member could read; such rejected writes are now re-sent with the new key.
-* Fixed test vectors (`spec/vectors.json`) shared by the Python, TypeScript and Rust code; unit
+* Fixed test vectors (`spec/vectors.json`, from the original Python version) checked by the TypeScript and Rust code; unit
   tests for the core; the Node CLI's tests; two-process sandbox tests through `--json`; a live
   two-account test on real Telegram (`scripts/live_e2e.py`); CI on Linux, Windows and macOS, plus
   a WebAssembly build smoke test.
@@ -89,13 +89,15 @@ folder only once they have fully arrived.
 
 ## Setup
 
-Install (each person; needs Python 3.10+ and git):
+Install (each person; needs Node 20+): tgsync is one file, `tgsync.mjs`, with the Rust core inside.
+Get it from the latest CI run (`gh run download -n tgsync-cli`), or build it (see Development), then:
 ```bash
-pipx install git+https://github.com/f0x1en/tgsync      # or: uv tool install git+https://github.com/f0x1en/tgsync
+install -m 755 tgsync.mjs ~/.local/bin/tgsync    # any folder on your PATH
 tgsync --version
 ```
-If `tgsync` isn't found afterwards, run `pipx ensurepath` and open a new terminal. Update later with
-`pipx upgrade tgsync`. (Developing it? `pip install -e ".[dev]"` in a clone.)
+Profiles from the old Python version (`~/.config/tgsync/<name>/`) keep working; log in once again with
+`tgsync login`. Vaults made by the old version keep working too, in compatibility mode (no merging, no
+admins); for the new features start a new vault.
 
 **api_id / api_hash:** one person creates the pair once at https://my.telegram.org -> *API
 development tools* and shares it with the team privately (it identifies the *app*, not anyone's
@@ -159,11 +161,9 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 
 ## Development
 
-```bash
-uv venv && uv pip install -e ".[dev]"      # test/lint environment
-make check                                 # ruff + mypy + pytest
-pipx install --editable .                  # optional: a global `tgsync` that follows your edits
-```
+`make check` runs everything CI runs except the long simulation (needs Rust, Node, and Python with
+pytest for the two-process sandbox tests).
+
 Try the new CLI without building anything: every CI run on branch `rust-core` uploads `tgsync-cli`
 (one file, the core embedded; needs Node 20+) and `tgsync-obsidian` (the plugin's `main.js` +
 `manifest.json`): `gh run download -n tgsync-cli` then `node tgsync.mjs --help`.

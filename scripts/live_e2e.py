@@ -7,9 +7,9 @@ approval, sync, conflict, delete-vs-edit, removal, re-join) with tiny files, the
 
     python scripts/live_e2e.py                      # profiles: default (owner) and b (friend)
     python scripts/live_e2e.py --owner me --friend you
-    TGSYNC_CLI="node ts/dist/tgsync.mjs" python scripts/live_e2e.py   # the Node CLI instead
 
-The group is deleted at the end through the owner profile's login (Node or Python, same as the CLI).
+It runs ts/live/tgsync.mjs (`make live` copies the build there, so `npm test` can rebuild meanwhile);
+TGSYNC_CLI="..." picks another program. The group is deleted at the end through the owner's login.
 
 Not part of CI (needs real accounts). Takes a few minutes because the rate limiter spaces sends.
 """
@@ -17,7 +17,6 @@ Not part of CI (needs real accounts). Takes a few minutes because the rate limit
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import re
@@ -33,8 +32,8 @@ FAILS: list[str] = []
 LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\dT\S+ \[(VRB|DBG|INF|WRN|ERR)\] ")  # TGSYNC_DEBUG lines
 TIMEOUT = 120  # seconds; no tiny-file command needs this long
 ROOT = Path(__file__).resolve().parent.parent
-CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
-MERGES = any(a.endswith("tgsync.mjs") for a in CLI)  # the Node CLI (Rust core) merges notes; Python makes copies
+CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else ["node", str(ROOT / "ts" / "live" / "tgsync.mjs")]
+MERGES = True  # notes merge (Rust core); MERGES=False expects conflict copies, as old clients made
 
 
 def tg(*args: str, expect_ok: bool = True) -> str:
@@ -70,20 +69,6 @@ def check(cond: bool, what: str) -> None:
 def files(d: Path) -> dict[str, str]:
     return {p.relative_to(d).as_posix(): p.read_text() for p in sorted(d.rglob("*"))
             if p.is_file() and ".tgsync" not in p.parts and p.name != ".tgsyncignore"}
-
-
-async def delete_group(profile: str, chat_id: int | str) -> None:
-    from telethon.tl import functions
-
-    from tgsync.telegram import connect, resolve_chat
-
-    client = await connect(profile)
-    try:
-        entity = await resolve_chat(client, str(chat_id))
-        await client(functions.channels.DeleteChannelRequest(entity))
-        print("  throwaway group deleted")
-    finally:
-        await client.disconnect()
 
 
 def main() -> int:
@@ -215,14 +200,11 @@ def main() -> int:
         print("\n== cleanup")
         if chat_id is not None:
             try:
-                if "node" in Path(CLI[0]).name:  # same login as the CLI under test
-                    r = subprocess.run(["npm", "--prefix", str(ROOT / "ts"), "run", "-s", "delete-group", "--",
-                                        a.owner, str(A)], capture_output=True, text=True)
-                    if r.returncode != 0:
-                        raise RuntimeError((r.stdout + r.stderr).strip() or "failed")
-                    print(r.stdout.rstrip())
-                else:
-                    asyncio.run(delete_group(a.owner, chat_id))
+                r = subprocess.run(["npm", "--prefix", str(ROOT / "ts"), "run", "-s", "delete-group", "--",
+                                    a.owner, str(A)], capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise RuntimeError((r.stdout + r.stderr).strip() or "failed")
+                print(r.stdout.rstrip())
             except Exception as e:  # noqa: BLE001
                 print(f"  could not delete the throwaway group (delete it by hand): {e}")
         if a.keep:

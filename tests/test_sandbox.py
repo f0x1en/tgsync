@@ -2,13 +2,14 @@
 """Two people, two processes, one sandbox group on disk: the whole CLI story offline, via --json."""
 
 import json
+from pathlib import Path
 import os
 import shlex
 import subprocess
 import sys
 
-# TGSYNC_CLI="node /abs/path/ts/dist/tgsync.mjs" runs these same tests against the Node CLI (`make ts`).
-CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else [sys.executable, "-m", "tgsync.cli"]
+# Runs the Node CLI (ts/dist/tgsync.mjs, built by `make ts`); TGSYNC_CLI="..." picks another program.
+CLI = shlex.split(os.environ["TGSYNC_CLI"]) if os.environ.get("TGSYNC_CLI") else ["node", str(Path(__file__).resolve().parent.parent / "ts" / "dist" / "tgsync.mjs")]
 
 
 def _tg(sandbox, profile, *args, cwd=None):
