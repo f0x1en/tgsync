@@ -97,7 +97,8 @@ jobs:
         shell: bash
         run: |
           python -m pip install -e ".[dev]"
-          TGSYNC_CLI="node $PWD/ts/dist/tgsync.mjs" pytest -q tests/test_sandbox.py
+          root=$(cygpath -m "$PWD" 2>/dev/null || echo "$PWD")   # Windows: a path node understands
+          TGSYNC_CLI="node $root/ts/dist/tgsync.mjs" pytest -q tests/test_sandbox.py
 
   lint:
     runs-on: ubuntu-latest
