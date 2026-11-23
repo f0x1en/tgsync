@@ -111,6 +111,12 @@ export class Vault {
   fingerprint(): string | null { return this.engine.fingerprint() ?? null; }
   get isAdmin(): boolean { return this.members.some((m) => m.recipient === this.me.recipient && m.admin); }
 
+  /** Give a (possibly fresh) engine the last seq this profile posted in this vault. */
+  private adoptSeq(): void {
+    const vid = this.vaultId;
+    if (vid && this.me.seqs) this.engine.setSentSeq(this.me.seqs.get(vid));
+  }
+
   private refreshMembers(): void {
     this.members = JSON.parse(this.engine.members()).members;
   }
@@ -147,7 +153,9 @@ export class Vault {
         engine.materialized(JSON.stringify(synced));
       }
     }
-    return new Vault(files, me, transport, engine, state, makeIgnore(ig));
+    const v = new Vault(files, me, transport, engine, state, makeIgnore(ig));
+    v.adoptSeq();
+    return v;
   }
 
   /** The vault keys for big-file chunks, sealed and opened with the platform's AES-GCM (much faster
@@ -177,6 +185,7 @@ export class Vault {
     await transport.send(KIND.descriptor, unb64(c.descriptor));
     v.engine.free();
     v.engine = new w.Engine(me.secret, me.recipient, Vault.signing(me), c.vault_id);
+    v.adoptSeq();
     await v.pull();
     if (!v.hasKeys) throw new VaultError("failed to read back our own descriptor");
     await v.initFiles();
@@ -210,6 +219,7 @@ export class Vault {
     if (v.vaultId && v.hasKeys) throw new VaultError("this folder is already a tgsync vault");
     v.engine.free();
     v.engine = new w.Engine(me.secret, me.recipient, Vault.signing(me), vaultId);
+    v.adoptSeq();
     await v.pull();
     if (!v.hasKeys || v.removed) {
       throw new VaultError(v.removed ? "you were removed from that vault"
@@ -388,7 +398,8 @@ export class Vault {
       if (plan === null) break;
       const p = JSON.parse(plan as string);
       const body = this.engine.sealRecord(Date.now() / 1000, seed());
-      await this.saveEngine(); // the seq is used now (write-ahead)
+      await this.saveEngine(); // the seq is used now (write-ahead), in the folder and with the profile
+      if (this.vaultId) this.me.seqs?.set(this.vaultId, this.engine.sentSeq());
       await this.transport.send(KIND.record, body);
       this.engine.pushed();
       await this.saveEngine();

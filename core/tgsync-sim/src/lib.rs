@@ -151,6 +151,10 @@ pub struct Sim {
     v1: bool,
     /// Message ids of odd records (see `weird_record`): no edit in them has to survive.
     odd: BTreeSet<i64>,
+    /// (client, group length) when a client re-joined with a fresh vault: its queued re-sends are
+    /// gone then (as with the real host); the text they carried is still in its folder and goes up
+    /// again as new notes.
+    rejoined: Vec<(usize, i64)>,
     /// v1: notes travel as plain puts, so their text is looked up by sha when written back.
     texts_by_sha: BTreeMap<String, String>,
     /// (client, record msg id, doc, Loro update) for every note upload marked as done.
@@ -187,6 +191,7 @@ impl Sim {
     /// `v1`: a protocol v1 vault (no admins, unsigned records, notes sent as plain puts), as made by
     /// older clients; the core must keep it working the v1 way (PROTOCOL.md section 14).
     pub fn with_version(seed: u64, n_clients: usize, v1: bool) -> Self {
+        assert!(n_clients >= 1, "a simulation needs at least one client");
         let mut rng = Rng::new(seed);
         let people: Vec<Identity> = (0..n_clients).map(|_| person(&mut rng)).collect();
         let key = rng.bytes::<32>();
@@ -242,6 +247,7 @@ impl Sim {
             text_promised: vec![],
             v1,
             odd: BTreeSet::new(),
+            rejoined: vec![],
             texts_by_sha: BTreeMap::new(),
         }
     }
@@ -328,8 +334,12 @@ impl Sim {
             )
             .unwrap()
         };
-        self.clients[k].vault.replica = Replica::new(me, None);
-        self.clients[k].vault.synced.clear();
+        // The host makes a new engine on a re-join: nothing synced, no re-send queue. The last seq it
+        // posted is kept with the profile, outside the folder, so it carries over.
+        let seq = self.clients[k].vault.sent_seq;
+        self.clients[k].vault = Vault::new(me, None);
+        self.clients[k].vault.sent_seq = seq;
+        self.rejoined.push((k, self.group.len() as i64));
         self.trace.push(format!("c0 adds c{k} back"));
         self.post(KIND_DESCRIPTOR, desc);
     }
@@ -399,7 +409,8 @@ impl Sim {
             signer: None,
         };
         let nonce = self.rng.bytes();
-        let body = tgsync_core::oplog::encode_record(&v.replica.keys, &rec, &nonce, v.replica.me.signing.as_ref()).unwrap();
+        let signing = if v.replica.admins.is_some() { v.replica.me.signing.as_ref() } else { None }; // v1: unsigned
+        let body = tgsync_core::oplog::encode_record(&v.replica.keys, &rec, &nonce, signing).unwrap();
         self.clients[c].vault.sent_seq = seq;
         self.trace.push(format!("c{c} posts an odd record (seq {seq})"));
         self.post(KIND_RECORD, body);
@@ -539,9 +550,8 @@ impl Sim {
         for (doc, update) in text_docs {
             self.text_promised.push((c, msg_id, doc, update));
         }
-        for (p, _) in &plan.done {
-            let content = self.clients[c].disk.get(p).cloned();
-            self.promised.push((c, msg_id, p.clone(), content));
+        for (p, sha) in &plan.done {
+            self.promised.push((c, msg_id, p.clone(), sha.clone())); // the sha it uploaded
         }
         self.clients[c].vault.pushed(&plan);
     }
@@ -618,8 +628,10 @@ impl Sim {
             } else if self.clients[k].vault.replica.removed {
                 // Saw its removal but was added back since: the user runs `tgsync join` again.
                 let me = self.clients[k].vault.replica.me.clone();
-                self.clients[k].vault.replica = Replica::new(me, None);
-                self.clients[k].vault.synced.clear();
+                let seq = self.clients[k].vault.sent_seq; // kept with the profile
+                self.clients[k].vault = Vault::new(me, None);
+                self.clients[k].vault.sent_seq = seq;
+                self.rejoined.push((k, self.group.len() as i64));
                 self.trace.push(format!("c{k} joins again"));
             }
         }
@@ -649,6 +661,10 @@ impl Sim {
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {
+            let v = Vault::load(cl.vault.replica.me.clone(), &cl.vault.save().unwrap()).map_err(|e| format!("c{i}: vault load failed: {e}"))?;
+            if v.synced != cl.vault.synced || v.resend != cl.vault.resend || v.sent_seq != cl.vault.sent_seq {
+                return Err(format!("c{i}: saving and loading the vault changes its synced map, re-send queue or seq"));
+            }
             let back = Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save().unwrap())
                 .map_err(|e| format!("c{i}: load failed: {e}"))?;
             let (a, b): (serde_json::Value, serde_json::Value) = (
@@ -718,7 +734,10 @@ impl Sim {
             messages: self.group.len(),
             ..Default::default()
         };
-        let in_tree: BTreeSet<&str> = self.clients[0].vault.replica.tree.nodes.values().map(|n| n.sha.as_str()).collect();
+        // Content counts as kept only at its own path or at a conflict copy of it (content ids repeat
+        // across paths, so a path-blind check could miss a lost edit).
+        let tree = &self.clients[0].vault.replica.tree;
+        let kept = |path: &str, sha: &str| tree.nodes.values().any(|n| n.sha == sha && related(&n.path, path));
         // Replay once more, collecting every delivered (non-duplicate) entry.
         let mut r = Replica::new(self.clients[0].vault.replica.me.clone(), None);
         let mut rep = Report::default();
@@ -773,8 +792,8 @@ impl Sim {
         for (path, sha) in puts {
             // Knowingly replaced: someone later wrote this path with base = this content.
             // (A conflict copy's later edits use the copy's path, so also accept any path.)
-            let replaced = bases.iter().any(|(_, b)| *b == sha);
-            if !in_tree.contains(sha.as_str()) && !replaced {
+            let replaced = bases.iter().any(|(p2, b)| *b == sha && related(p2, &path));
+            if !kept(&path, &sha) && !replaced {
                 return Err(format!("edit lost: {path} = {sha} is nowhere in the tree and nobody replaced it"));
             }
         }
@@ -789,9 +808,8 @@ impl Sim {
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
             // The same person changed or deleted this path on their own disk afterwards.
             let superseded = self.touched.iter().any(|(c2, m2, p2)| c2 == c && m2 >= msg_id && p2 == path);
-            // (v1 notes: the tree and bases hold the sha of the text.)
-            let id = if is_text_path(path) { sha_hex(sha) } else { sha.clone() };
-            if member && !superseded && !in_tree.contains(id.as_str()) && !bases.iter().any(|(_, b)| *b == id) {
+            let id = sha;
+            if member && !superseded && !kept(path, id) && !bases.iter().any(|(p2, b)| b == id && related(p2, path)) {
                 let cl = &self.clients[*c];
                 let puts_of_it: Vec<String> = self
                     .promised
@@ -810,10 +828,13 @@ impl Sim {
         }
         // Text: every note edit a member uploaded is merged into its doc (all its Loro operations
         // are in the final doc). Edits re-sent after an old-key rejection count from the re-send.
+        let stale: BTreeSet<i64> = rep.problems.iter().filter(|(_, w)| w.contains("already replaced")).map(|(id, _)| *id).collect();
         for (c, msg_id, doc, update) in &self.text_promised {
             let me = self.clients[*c].vault.replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
-            if member && !self.clients[0].vault.replica.texts.contains(doc, update) {
+            // Rejected for an old key, then the author re-joined before re-sending: see `rejoined`.
+            let dropped_by_rejoin = stale.contains(msg_id) && self.rejoined.iter().any(|(k, at)| k == c && at > msg_id);
+            if member && !dropped_by_rejoin && !self.clients[0].vault.replica.texts.contains(doc, update) {
                 return Err(format!(
                     "note edit lost: c{c}'s upload to doc {doc} (msg {msg_id}) is not in the final doc {:?}",
                     self.clients[0].vault.replica.texts.text(doc)
@@ -833,6 +854,20 @@ pub fn run(seed: u64, steps: usize) -> Result<Stats, String> {
     }
     sim.settle_and_check()
         .map_err(|e| format!("seed {seed}: {e}\ntrace:\n  {}", sim.trace.join("\n  ")))
+}
+
+/// `a` and `b` are the same path, or one is a conflict copy of the other (PROTOCOL.md section 8).
+fn related(a: &str, b: &str) -> bool {
+    fn copy_of(c: &str, p: &str) -> bool {
+        let (dir, base) = p.rsplit_once('/').map_or(("", p), |(d, b)| (d, b));
+        let (stem, ext) = match base.rfind('.') {
+            Some(i) if base[..i].chars().any(|ch| ch != '.') => base.split_at(i),
+            _ => (base, ""),
+        };
+        let prefix = if dir.is_empty() { format!("{stem} (conflict ") } else { format!("{dir}/{stem} (conflict ") };
+        c.starts_with(&prefix) && c.ends_with(ext)
+    }
+    a == b || copy_of(a, b) || copy_of(b, a)
 }
 
 fn hex8(b: [u8; 8]) -> String {

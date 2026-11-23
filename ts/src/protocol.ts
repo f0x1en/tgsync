@@ -47,7 +47,12 @@ export const openChunk = (keys: KeyRing, fileId: string, i: number, n: number, b
 // ------------------------------------------------------------------ descriptors
 export interface Member { recipient: string; name: string; id?: string; signer?: string | null; admin?: boolean }
 /** `signing`: Ed25519 signing key (64 hex) for vaults with admins and signed records (Rust engine). */
-export interface Identity { secret: string; recipient: string; id: string; signing?: string }
+export interface Identity {
+  secret: string; recipient: string; id: string; signing?: string;
+  /** Last record seq posted per vault, kept with the profile (outside the folder): a re-joined folder
+   * starts a fresh engine, which must not reuse a seq whose record the group does not show yet. */
+  seqs?: { get(vaultId: string): number; set(vaultId: string, seq: number): void };
+}
 export interface Descriptor { vaultId: string; epoch: number; members: Member[]; raw: any }
 
 /** Canonical JSON: sorted keys, no spaces, ASCII escapes (= Python json.dumps(sort_keys=True, separators=(",", ":"))). */
