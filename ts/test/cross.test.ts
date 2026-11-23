@@ -8,13 +8,14 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { newIdentity, shortCode } from "../src/crypto.ts";
 import { decodeInvite } from "../src/protocol.ts";
 import { NodeFiles } from "../src/node/files.ts";
 import { DirTransport } from "../src/node/sandbox.ts";
 import { Vault } from "../src/vault.ts";
 
-const REPO = new URL("../../", import.meta.url).pathname;
+const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const PY = join(REPO, ".venv/bin/python");
 
 test("Python CLI and TS engine on one sandbox group", { skip: !existsSync(PY) && "no Python venv" }, async () => {

@@ -7,8 +7,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
-const BIN = new URL("../dist/tgsync.mjs", import.meta.url).pathname;
+const BIN = fileURLToPath(new URL("../dist/tgsync.mjs", import.meta.url));
 
 test("restore brings back versions from the group; log and bare tgsync", async () => {
   const tmp = await mkdtemp(join(tmpdir(), "tgsync-cli-"));
