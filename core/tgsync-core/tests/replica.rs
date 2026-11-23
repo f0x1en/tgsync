@@ -621,13 +621,18 @@ fn a_note_update_missing_its_history_is_reported_not_applied() {
     assert!(rep.problems.iter().any(|(_, w)| w.contains("never arrived")), "{:?}", rep.problems);
     // The missing edit arrives later: the earlier update must not apply now on this replica only.
     let n1 = e1.update.len();
-    let e = json!({"op": "text", "path": "n.md", "doc": "dz", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, n1]}});
+    let e =
+        json!({"op": "text", "path": "n.md", "doc": "dz", "sha": "x", "size": 3, "mtime": 1.0, "base": null, "blob": {"inline": [0, n1]}});
     g.record_with(&ring, &a, 2, 2.0, vec![e], e1.update);
     g.pull(&mut ra);
     let (_, _, a2, _, _, _) = (0, 0, a.clone(), 0, 0, 0);
     let mut fresh = Replica::new(a2, None);
     g.pull(&mut fresh);
-    assert_eq!(ra.text("n.md"), fresh.text("n.md"), "a long-running replica and a fresh replay agree");
+    assert_eq!(
+        ra.text("n.md"),
+        fresh.text("n.md"),
+        "a long-running replica and a fresh replay agree"
+    );
     assert_eq!(ra.text("n.md").unwrap(), "one");
 }
 
