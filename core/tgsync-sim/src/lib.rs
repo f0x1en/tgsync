@@ -378,7 +378,9 @@ impl Sim {
                 0 => serde_json::json!({"op": "put", "path": p, "sha": 5, "size": "big", "blob": null}),
                 1 => serde_json::json!({"op": "put", "path": p, "sha": "z", "size": -3, "mtime": "now", "base": 1, "blob": {}}),
                 2 => serde_json::json!({"op": "text", "path": p, "doc": "", "blob": {"inline": [0, 99999]}}),
-                3 => serde_json::json!({"op": "text", "path": p, "doc": "dd", "sha": "q", "size": 1, "base": null, "blob": {"inline": [0, 4]}}),
+                3 => {
+                    serde_json::json!({"op": "text", "path": p, "doc": "dd", "sha": "q", "size": 1, "base": null, "blob": {"inline": [0, 4]}})
+                }
                 4 => serde_json::json!({"op": "delete", "path": p, "base": "dir"}),
                 5 => serde_json::json!({"op": "rmdir", "path": p}),
                 6 => serde_json::json!({"op": "mkdir", "path": p}),
@@ -388,7 +390,14 @@ impl Sim {
             entries.push(e);
         }
         let seq = v.next_seq();
-        let rec = tgsync_core::oplog::Record { author: v.replica.me.id(), seq, ts: self.clock, entries, payload: b"junk".to_vec(), signer: None };
+        let rec = tgsync_core::oplog::Record {
+            author: v.replica.me.id(),
+            seq,
+            ts: self.clock,
+            entries,
+            payload: b"junk".to_vec(),
+            signer: None,
+        };
         let nonce = self.rng.bytes();
         let body = tgsync_core::oplog::encode_record(&v.replica.keys, &rec, &nonce, v.replica.me.signing.as_ref()).unwrap();
         self.clients[c].vault.sent_seq = seq;
@@ -513,7 +522,11 @@ impl Sim {
             plan.done.len(),
             if twice { " (delivered twice)" } else { "" },
             if crash { " (crash before marking synced)" } else { "" },
-            plan.entries.iter().map(|e| format!("{}:{}", e["op"].as_str().unwrap_or("?"), e["path"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(" ")
+            plan.entries
+                .iter()
+                .map(|e| format!("{}:{}", e["op"].as_str().unwrap_or("?"), e["path"].as_str().unwrap_or("?")))
+                .collect::<Vec<_>>()
+                .join(" ")
         ));
         self.post(KIND_RECORD, body.clone());
         if twice {
@@ -717,15 +730,28 @@ impl Sim {
             // Applied = new seq and no problem other than a gap note for this message.
             // (Problems about single entries, e.g. a bad note update, do not reject the record.)
             let whole_record = |why: &str| {
-                ["unreadable record", "replayed/duplicate", "unsigned record", "record not signed", "record sealed with a key"]
-                    .iter()
-                    .any(|p| why.starts_with(p))
+                [
+                    "unreadable record",
+                    "replayed/duplicate",
+                    "unsigned record",
+                    "record not signed",
+                    "record sealed with a key",
+                ]
+                .iter()
+                .any(|p| why.starts_with(p))
             };
-            let rejected = rep.problems.iter().rev().take_while(|(at, _)| at == id).any(|(_, why)| whole_record(why));
+            let rejected = rep
+                .problems
+                .iter()
+                .rev()
+                .take_while(|(at, _)| at == id)
+                .any(|(_, why)| whole_record(why));
             if *kind == KIND_RECORD && r.authors != before && !rejected && !self.odd.contains(id) {
                 let rec = tgsync_core::oplog::decode_record(&r.keys, body).unwrap();
                 for e in &rec.entries {
-                    let Some(path) = e["path"].as_str().map(str::to_string) else { continue }; // odd entries
+                    let Some(path) = e["path"].as_str().map(str::to_string) else {
+                        continue;
+                    }; // odd entries
                     if let Some(b) = e["base"].as_str() {
                         bases.insert((path.clone(), b.to_string()));
                     }

@@ -6,7 +6,7 @@ Telegram account. Notes that two people edit at the same time merge (CRDT); ever
 both versions. A small CLI and a desktop Obsidian plugin; your editor and file manager are the UI.
 
 > Status: alpha. The engine is being rewritten in Rust (branch `rust-core`); the Node CLI already
-> runs on it. Use a throwaway group first.
+> runs on it, and the two-account test on real Telegram passes with it. Use a throwaway group first.
 
 ## Design in one picture
 
