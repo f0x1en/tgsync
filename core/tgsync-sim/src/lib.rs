@@ -21,7 +21,7 @@ use tgsync_core::vault::Vault;
 /// What `base` is for a file with this content: text notes use the sha of the text, other files
 /// use their content id directly (content ids stand in for sha-256 of file bytes).
 fn base_of(path: &str, content: Option<&String>) -> Option<String> {
-    content.map(|c| if is_text_path(path) { sha_hex(c) } else { c.clone() })
+    content.map(|c| if c != DIR && is_text_path(path) { sha_hex(c) } else { c.clone() })
 }
 
 /// The files a replica's tree describes: path -> text (notes), content id (other files) or "dir".
@@ -149,6 +149,8 @@ pub struct Sim {
     touched: Vec<(usize, i64, String)>,
     /// A protocol v1 vault (see `with_version`).
     v1: bool,
+    /// Message ids of odd records (see `weird_record`): no edit in them has to survive.
+    odd: BTreeSet<i64>,
     /// v1: notes travel as plain puts, so their text is looked up by sha when written back.
     texts_by_sha: BTreeMap<String, String>,
     /// (client, record msg id, doc, Loro update) for every note upload marked as done.
@@ -239,6 +241,7 @@ impl Sim {
             touched: vec![],
             text_promised: vec![],
             v1,
+            odd: BTreeSet::new(),
             texts_by_sha: BTreeMap::new(),
         }
     }
@@ -262,6 +265,10 @@ impl Sim {
         }
         if self.faults && self.rng.chance(2) {
             self.garbage();
+            return;
+        }
+        if self.faults && self.rng.chance(2) {
+            self.weird_record(c);
             return;
         }
         match self.rng.below(10) {
@@ -355,6 +362,41 @@ impl Sim {
         self.post(kind, body);
     }
 
+    /// A member (buggy or hostile) posts a properly sealed and signed record whose entries are odd:
+    /// wrong types, unsafe paths, out-of-range blobs, garbage note updates, unknown ops. Replay must
+    /// skip what makes no sense, never panic, and every replica must still agree.
+    fn weird_record(&mut self, c: usize) {
+        let v = &self.clients[c].vault;
+        if v.replica.removed || !v.replica.has_keys() {
+            return;
+        }
+        let paths = ["a.md", "../x", ".tgsync/s", "CON.md", "w/", "", "notes/x.md", "img.png", "dir"];
+        let mut entries = vec![];
+        for _ in 0..1 + self.rng.below(4) {
+            let p = paths[self.rng.below(paths.len())];
+            let e = match self.rng.below(9) {
+                0 => serde_json::json!({"op": "put", "path": p, "sha": 5, "size": "big", "blob": null}),
+                1 => serde_json::json!({"op": "put", "path": p, "sha": "z", "size": -3, "mtime": "now", "base": 1, "blob": {}}),
+                2 => serde_json::json!({"op": "text", "path": p, "doc": "", "blob": {"inline": [0, 99999]}}),
+                3 => serde_json::json!({"op": "text", "path": p, "doc": "dd", "sha": "q", "size": 1, "base": null, "blob": {"inline": [0, 4]}}),
+                4 => serde_json::json!({"op": "delete", "path": p, "base": "dir"}),
+                5 => serde_json::json!({"op": "rmdir", "path": p}),
+                6 => serde_json::json!({"op": "mkdir", "path": p}),
+                7 => serde_json::json!({"op": "teleport", "path": p}),
+                _ => serde_json::json!("not an object"),
+            };
+            entries.push(e);
+        }
+        let seq = v.next_seq();
+        let rec = tgsync_core::oplog::Record { author: v.replica.me.id(), seq, ts: self.clock, entries, payload: b"junk".to_vec(), signer: None };
+        let nonce = self.rng.bytes();
+        let body = tgsync_core::oplog::encode_record(&v.replica.keys, &rec, &nonce, v.replica.me.signing.as_ref()).unwrap();
+        self.clients[c].vault.sent_seq = seq;
+        self.trace.push(format!("c{c} posts an odd record (seq {seq})"));
+        self.post(KIND_RECORD, body);
+        self.odd.insert(self.group.len() as i64);
+    }
+
     /// The program stops and starts again: the replica is saved and loaded back (keys come back
     /// from the stored descriptors, never from the saved state).
     fn restart(&mut self, c: usize) {
@@ -382,6 +424,9 @@ impl Sim {
 
     fn edit(&mut self, c: usize) {
         let path = PATHS[self.rng.below(PATHS.len())].to_string();
+        if self.clients[c].disk.get(&path).map(String::as_str) == Some(DIR) {
+            return; // a folder of that name is there (e.g. from an odd record): no file can be written
+        }
         if is_text_path(&path) {
             // Insert one new word at a random place.
             self.next_content += 1;
@@ -449,6 +494,7 @@ impl Sim {
         let text_docs: Vec<(String, Vec<u8>)> = plan
             .entries
             .iter()
+            .skip(plan.resent) // re-sent entries were counted by the push that first sent them
             .filter(|e| e["op"] == "text")
             .map(|e| {
                 let (off, len) = (
@@ -463,10 +509,11 @@ impl Sim {
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
         self.trace.push(format!(
-            "c{c} push seq {seq} {} entries, {resent} sent again{}{}",
+            "c{c} push seq {seq} {} entries, {resent} sent again{}{} {}",
             plan.done.len(),
             if twice { " (delivered twice)" } else { "" },
-            if crash { " (crash before marking synced)" } else { "" }
+            if crash { " (crash before marking synced)" } else { "" },
+            plan.entries.iter().map(|e| format!("{}:{}", e["op"].as_str().unwrap_or("?"), e["path"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(" ")
         ));
         self.post(KIND_RECORD, body.clone());
         if twice {
@@ -576,7 +623,16 @@ impl Sim {
                 break;
             }
             if round > 20 {
-                return Err("clients never settle (they keep uploading)".into());
+                let mut why = vec![];
+                for (i, cl) in self.clients.iter().enumerate() {
+                    for (p, c) in &cl.disk {
+                        let (sy, tr) = (cl.vault.synced.get(p), cl.vault.replica.tree.get(p).map(|n| &n.sha));
+                        if base_of(p, Some(c)).as_ref() != sy {
+                            why.push(format!("c{i} {p}: disk {c:?} synced {sy:?} tree {tr:?}"));
+                        }
+                    }
+                }
+                return Err(format!("clients never settle (they keep uploading):\n  {}", why.join("\n  ")));
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {
@@ -659,16 +715,24 @@ impl Sim {
             let before = r.authors.clone();
             r.feed(*id, *kind, body, &mut rep);
             // Applied = new seq and no problem other than a gap note for this message.
-            let rejected = rep.problems.last().is_some_and(|(at, why)| at == id && !why.starts_with("gap"));
-            if *kind == KIND_RECORD && r.authors != before && !rejected {
+            // (Problems about single entries, e.g. a bad note update, do not reject the record.)
+            let whole_record = |why: &str| {
+                ["unreadable record", "replayed/duplicate", "unsigned record", "record not signed", "record sealed with a key"]
+                    .iter()
+                    .any(|p| why.starts_with(p))
+            };
+            let rejected = rep.problems.iter().rev().take_while(|(at, _)| at == id).any(|(_, why)| whole_record(why));
+            if *kind == KIND_RECORD && r.authors != before && !rejected && !self.odd.contains(id) {
                 let rec = tgsync_core::oplog::decode_record(&r.keys, body).unwrap();
                 for e in &rec.entries {
-                    let path = e["path"].as_str().unwrap().to_string();
+                    let Some(path) = e["path"].as_str().map(str::to_string) else { continue }; // odd entries
                     if let Some(b) = e["base"].as_str() {
                         bases.insert((path.clone(), b.to_string()));
                     }
-                    if e["op"] == "put" {
-                        puts.push((path, e["sha"].as_str().unwrap().to_string()));
+                    // Only puts replay can accept (odd ones may come back through a re-send).
+                    let valid = e["size"].as_f64().is_some_and(|n| n >= 0.0) && e["sha"] != "dir" && e["blob"].is_object();
+                    if let (true, true, Some(sha)) = (e["op"] == "put", valid, e["sha"].as_str()) {
+                        puts.push((path, sha.to_string()));
                     }
                 }
             }
