@@ -409,7 +409,11 @@ impl Sim {
             signer: None,
         };
         let nonce = self.rng.bytes();
-        let signing = if v.replica.admins.is_some() { v.replica.me.signing.as_ref() } else { None }; // v1: unsigned
+        let signing = if v.replica.admins.is_some() {
+            v.replica.me.signing.as_ref()
+        } else {
+            None
+        }; // v1: unsigned
         let body = tgsync_core::oplog::encode_record(&v.replica.keys, &rec, &nonce, signing).unwrap();
         self.clients[c].vault.sent_seq = seq;
         self.trace.push(format!("c{c} posts an odd record (seq {seq})"));
@@ -661,9 +665,12 @@ impl Sim {
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {
-            let v = Vault::load(cl.vault.replica.me.clone(), &cl.vault.save().unwrap()).map_err(|e| format!("c{i}: vault load failed: {e}"))?;
+            let v =
+                Vault::load(cl.vault.replica.me.clone(), &cl.vault.save().unwrap()).map_err(|e| format!("c{i}: vault load failed: {e}"))?;
             if v.synced != cl.vault.synced || v.resend != cl.vault.resend || v.sent_seq != cl.vault.sent_seq {
-                return Err(format!("c{i}: saving and loading the vault changes its synced map, re-send queue or seq"));
+                return Err(format!(
+                    "c{i}: saving and loading the vault changes its synced map, re-send queue or seq"
+                ));
             }
             let back = Replica::load(cl.vault.replica.me.clone(), &cl.vault.replica.save().unwrap())
                 .map_err(|e| format!("c{i}: load failed: {e}"))?;
@@ -828,7 +835,12 @@ impl Sim {
         }
         // Text: every note edit a member uploaded is merged into its doc (all its Loro operations
         // are in the final doc). Edits re-sent after an old-key rejection count from the re-send.
-        let stale: BTreeSet<i64> = rep.problems.iter().filter(|(_, w)| w.contains("already replaced")).map(|(id, _)| *id).collect();
+        let stale: BTreeSet<i64> = rep
+            .problems
+            .iter()
+            .filter(|(_, w)| w.contains("already replaced"))
+            .map(|(id, _)| *id)
+            .collect();
         for (c, msg_id, doc, update) in &self.text_promised {
             let me = self.clients[*c].vault.replica.me.id();
             let member = r.snapshot_at(*msg_id).is_some_and(|s| s.members.iter().any(|m| m.id() == me));
@@ -864,7 +876,11 @@ fn related(a: &str, b: &str) -> bool {
             Some(i) if base[..i].chars().any(|ch| ch != '.') => base.split_at(i),
             _ => (base, ""),
         };
-        let prefix = if dir.is_empty() { format!("{stem} (conflict ") } else { format!("{dir}/{stem} (conflict ") };
+        let prefix = if dir.is_empty() {
+            format!("{stem} (conflict ")
+        } else {
+            format!("{dir}/{stem} (conflict ")
+        };
         c.starts_with(&prefix) && c.ends_with(ext)
     }
     a == b || copy_of(a, b) || copy_of(b, a)
