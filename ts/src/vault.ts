@@ -219,11 +219,13 @@ export class Vault {
   /** Replay new log messages in order (reads the group; writes no files). */
   async pull(): Promise<Report> {
     const rep = newReport();
+    let fed = 0;
     for (let pass = 0; pass < 2; pass++) {
       this.engine.beginPass();
       for await (const m of this.transport.iterAfter(this.engine.cursor())) {
         const body = this.engine.wantsBody(m.kind, m.id) ? await this.transport.fetch(m.id) : new Uint8Array(0);
         this.engine.feed(m.id, m.kind, body);
+        fed++;
       }
       if (!(this.engine.blocked() && this.engine.hasKeys())) break;
     }
@@ -239,8 +241,10 @@ export class Vault {
       this.state.addProblem(id, what);
     }
     this.refreshMembers();
-    await this.saveEngine();
-    await this.state.save();
+    if (fed) { // nothing new: nothing to save (saving a big vault's state takes a while)
+      await this.saveEngine();
+      await this.state.save();
+    }
     return rep;
   }
 
