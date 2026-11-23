@@ -67,9 +67,19 @@ jobs:
         working-directory: ts
       - run: npm run typecheck && npm test
         working-directory: ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tgsync-cli
+          path: ts/dist/tgsync.mjs
       - name: Obsidian plugin (build + tests against a fake tgsync)
         working-directory: obsidian
         run: npm ci && npm run build && npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tgsync-obsidian
+          path: |
+            obsidian/main.js
+            obsidian/manifest.json
       - name: sandbox tests (two Node CLI processes)
         run: |
           python -m pip install -e ".[dev]"

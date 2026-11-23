@@ -164,6 +164,10 @@ uv venv && uv pip install -e ".[dev]"      # test/lint environment
 make check                                 # ruff + mypy + pytest
 pipx install --editable .                  # optional: a global `tgsync` that follows your edits
 ```
+Try the new CLI without building anything: every CI run on branch `rust-core` uploads `tgsync-cli`
+(one file, the core embedded; needs Node 20+) and `tgsync-obsidian` (the plugin's `main.js` +
+`manifest.json`): `gh run download -n tgsync-cli` then `node tgsync.mjs --help`.
+
 The Rust core and the Node CLI on it (branch `rust-core`):
 ```bash
 make rust                                  # core tests, test vectors, a short simulation
