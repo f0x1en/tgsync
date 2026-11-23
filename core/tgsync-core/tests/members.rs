@@ -194,3 +194,32 @@ fn in_an_old_v1_vault_any_member_adds_and_removes() {
         .to_string()
         .contains("no admins"));
 }
+
+#[test]
+fn a_reposted_old_descriptor_does_not_trap_someone_removed_and_re_added() {
+    // Found by the simulator (seed 7342): bob is added, removed, then someone re-posts the old
+    // descriptor that added him, then alice adds him back. Bob replays it all in one pull (a fresh
+    // join) and must end with the newest key, not the old one from the re-post.
+    let (a, b) = (person(1), person(2));
+    let mut g = Group(vec![], 0);
+    let d = members::create(&a, "alice", "00112233aabbccdd", &[5; 32], 1, &mut g.n()).unwrap();
+    g.post(d);
+    let mut ra = Replica::new(a.clone(), None);
+    g.pull(&mut ra);
+    let added = members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 2, &mut g.n()).unwrap();
+    g.post(added.clone());
+    g.pull(&mut ra);
+    let d = members::remove(&ra, "bob", &[6; 32], 3, &mut g.n()).unwrap();
+    g.post(d);
+    g.pull(&mut ra);
+    g.post(added); // the re-post
+    g.pull(&mut ra);
+    let d = members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 4, &mut g.n()).unwrap();
+    g.post(d);
+    g.pull(&mut ra);
+    let mut rb = Replica::new(b.clone(), None);
+    let rep = g.pull(&mut rb);
+    assert!(rb.keys.has(2), "bob holds the newest key: {:?}", rep.problems);
+    assert!(!rb.removed);
+    assert_eq!(rb.members.len(), 2);
+}
