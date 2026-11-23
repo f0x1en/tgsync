@@ -132,7 +132,9 @@ impl Texts {
         let mut docs = Vec::with_capacity(self.docs.len());
         for (id, d) in &self.docs {
             if !saved.contains_key(id) {
-                let snap = d.export(ExportMode::Snapshot).map_err(|e| err(format!("cannot save note {id}: {e}")))?;
+                let snap = d
+                    .export(ExportMode::Snapshot)
+                    .map_err(|e| err(format!("cannot save note {id}: {e}")))?;
                 saved.insert(id.clone(), b64(&snap));
             }
             docs.push(serde_json::json!([id, saved[id]]));
