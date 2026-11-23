@@ -113,7 +113,7 @@ impl Vault {
     pub fn save(&self) -> Result<Vec<u8>> {
         use base64::Engine;
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-        let replica: Value = serde_json::from_slice(&self.replica.save()?).unwrap();
+        let replica = self.replica.save_value()?;
         let resend: Vec<Value> = self.resend.iter().map(|r| json!([r.entry, b64(&r.bytes)])).collect();
         Ok(
             serde_json::to_vec(&json!({"v": 1, "replica": replica, "synced": self.synced, "resend": resend, "sent_seq": self.sent_seq}))
@@ -125,7 +125,7 @@ impl Vault {
         use base64::Engine;
         let bad = || Error::Crypto("bad saved vault state".into());
         let v: Value = serde_json::from_slice(data).map_err(|_| bad())?;
-        let replica = Replica::load(me, &serde_json::to_vec(&v["replica"]).unwrap())?;
+        let replica = Replica::load_value(me, &v["replica"])?;
         let synced = v["synced"]
             .as_object()
             .ok_or_else(bad)?

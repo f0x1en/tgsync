@@ -243,6 +243,11 @@ impl Replica {
     /// Everything needed to continue later, as JSON bytes. Holds no keys: [`Replica::load`] gets them
     /// back by unwrapping the stored descriptors with our identity.
     pub fn save(&self) -> crate::Result<Vec<u8>> {
+        Ok(serde_json::to_vec(&self.save_value()?).unwrap())
+    }
+
+    /// [`Replica::save`] as JSON (to embed it without serializing twice).
+    pub fn save_value(&self) -> crate::Result<Value> {
         use base64::Engine;
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
         let msgs = |l: &[(i64, Vec<u8>)]| l.iter().map(|(i, b)| serde_json::json!([i, b64(b)])).collect::<Vec<_>>();
@@ -252,20 +257,24 @@ impl Replica {
             .iter()
             .map(|(i, s)| serde_json::json!([i, s.epoch, s.members.iter().map(member).collect::<Vec<_>>(), s.admins]))
             .collect();
-        Ok(serde_json::to_vec(&serde_json::json!({
+        Ok(serde_json::json!({
             "v": 1, "vault_id": self.vault_id, "cursor": self.cursor, "authors": self.authors,
             "removed": self.removed, "active": self.active, "desc_seen": self.desc_seen,
             "accepted": msgs(&self.accepted), "all_descriptors": msgs(&self.all_descriptors), "pending": msgs(&self.pending),
             "history": history, "tree": self.tree.nodes.values().map(|n| n.to_json()).collect::<Vec<_>>(),
             "texts": self.texts.save()?,
         }))
-        .unwrap())
     }
 
     pub fn load(me: Identity, data: &[u8]) -> crate::Result<Replica> {
+        let v: Value = serde_json::from_slice(data).map_err(|_| crate::Error::Crypto("bad saved state".into()))?;
+        Self::load_value(me, &v)
+    }
+
+    /// [`Replica::load`] from parsed JSON.
+    pub fn load_value(me: Identity, v: &Value) -> crate::Result<Replica> {
         use base64::Engine;
         let bad = || crate::Error::Crypto("bad saved state".into());
-        let v: Value = serde_json::from_slice(data).map_err(|_| bad())?;
         let msgs = |k: &str| -> crate::Result<Vec<(i64, Vec<u8>)>> {
             v.get(k)
                 .and_then(Value::as_array)
