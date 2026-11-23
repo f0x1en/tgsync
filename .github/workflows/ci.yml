@@ -26,6 +26,8 @@ jobs:
     defaults: { run: { working-directory: core } }
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
       - run: cargo test
       - name: simulation (2000 seeds)
         if: matrix.os == 'ubuntu-latest'
@@ -36,6 +38,8 @@ jobs:
     defaults: { run: { working-directory: core } }
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - run: rustup target add wasm32-unknown-unknown
@@ -90,6 +94,8 @@ jobs:
     defaults: { run: { working-directory: core } }
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
       - name: cargo fmt (the diff is uploaded as fmt.patch)
         run: |
           cargo fmt --all
