@@ -75,7 +75,10 @@ export async function loadIdentity(profile: string): Promise<Identity> {
 /** The profile's Ed25519 signing key (64 hex), made on first use. Never leaves this computer. */
 function signingKey(profile: string): string {
   const p = join(appDir(profile), "signing.key");
-  if (!existsSync(p)) writeFileSync(p, randomBytes(32).toString("hex") + "\n", { mode: 0o600, flag: "wx" });
+  if (!existsSync(p)) {
+    try { writeFileSync(p, randomBytes(32).toString("hex") + "\n", { mode: 0o600, flag: "wx" }); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } // another tgsync made it just now
+  }
   return readFileSync(p, "utf8").trim();
 }
 
