@@ -12,6 +12,8 @@ export interface Transport {
 }
 
 export class TransportError extends Error {}
+/** No connection to Telegram: stop the whole command (every further call would fail the same way). */
+export class OfflineError extends TransportError {}
 
 /** Shared in-memory group for tests; each client gets its own `transport()`. */
 export class FakeChannel {

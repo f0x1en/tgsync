@@ -7,7 +7,7 @@ import type { Files, Stat } from "./files.ts";
 import { INTERNAL_DIR, PathError, TMP_SUFFIX, makeIgnore, normalize } from "./paths.ts";
 import { KeyRing } from "./crypto.ts";
 import { DEFAULT_CHUNK, INLINE_MAX, KIND, openChunk, sealChunk, type Identity, type JoinRequest, type Member } from "./protocol.ts";
-import type { Transport } from "./transport.ts";
+import { OfflineError, type Transport } from "./transport.ts";
 import { w } from "./core.ts";
 
 export const BIG_FILE = 8 * 1024 * 1024; // files at least this big get a heads-up while moving
@@ -202,7 +202,10 @@ export class Vault {
       if (m.kind !== KIND.descriptor) continue;
       let data: Uint8Array;
       let vid: unknown;
-      try { data = await transport.fetch(m.id); vid = JSON.parse(dec.decode(data)).vault_id; } catch { continue; }
+      try { data = await transport.fetch(m.id); vid = JSON.parse(dec.decode(data)).vault_id; } catch (e) {
+        if (e instanceof OfflineError) throw e; // not "no vault here"
+        continue;
+      }
       if (typeof vid !== "string") continue;
       if (!engines.has(vid)) engines.set(vid, new w.Engine(me.secret, me.recipient, Vault.signing(me), vid));
       const e = engines.get(vid)!;
@@ -390,6 +393,7 @@ export class Vault {
           disk[rel] = { ...base, blob: up.blob };
         }
       } catch (e) {
+        if (e instanceof OfflineError) throw e;
         keepAsIs(rel, (e as Error).message);
       }
     }
@@ -477,7 +481,9 @@ export class Vault {
     const synced: { [p: string]: string } = plan.synced;
     const onDisk = (p: string) => files.get(p)?.raw ?? p; // the file's own name (Unicode form) if it exists
     const undo = (p: string) => { if (before[p] === undefined) delete synced[p]; else synced[p] = before[p]; };
+    let offline: OfflineError | null = null;
     for (const op of plan.ops) {
+      if (offline) { undo(op.path); continue; } // not done: stays as it was, for the next pull
       if (unreadable.has(op.path)) { // never write over (or delete) a file we could not read
         rep.skipped.push(`${op.path}: could not read your copy; left alone`);
         undo(op.path);
@@ -504,8 +510,9 @@ export class Vault {
           }
         }
       } catch (e) {
-        rep.problems.push(`${op.path}: could not ${op.op}: ${(e as Error).message}`);
         undo(op.path);
+        if (e instanceof OfflineError) { offline = e; continue; }
+        rep.problems.push(`${op.path}: could not ${op.op}: ${(e as Error).message}`);
       }
     }
     for (const [p, n] of Object.entries(tree)) {
@@ -522,6 +529,7 @@ export class Vault {
     this.engine.materialized(JSON.stringify(synced));
     await this.saveEngine();
     await this.state.save();
+    if (offline) throw offline; // what was written is saved; the next pull does the rest
   }
 
   // ---------------------------------------------------- the user's commands
@@ -689,7 +697,10 @@ export class Vault {
     for await (const m of this.transport.iterAfter(0)) {
       if (m.kind !== KIND.join) continue;
       let r: any = null;
-      try { r = JSON.parse(w.decodeJoinRequest(await this.transport.fetch(m.id))); } catch { continue; }
+      try { r = JSON.parse(w.decodeJoinRequest(await this.transport.fetch(m.id))); } catch (e) {
+        if (e instanceof OfflineError) throw e; // not "no requests"
+        continue;
+      }
       if (r && r.vault_id === this.vaultId && !have.has(r.recipient)) {
         // Requests are not authenticated: anyone could post one with someone else's key and their own
         // signing key. Two requests for one key with different signing keys: accept neither.

@@ -10,9 +10,10 @@ import { test } from "node:test";
 import { newIdentity } from "../src/crypto.ts";
 import { makeIgnore, DEFAULT_IGNORE } from "../src/paths.ts";
 import { NodeFiles } from "../src/node/files.ts";
-import { FakeChannel } from "../src/transport.ts";
+import { FakeChannel, OfflineError } from "../src/transport.ts";
 import { Vault } from "../src/vault.ts";
 import { w } from "../src/core.ts";
+import { KIND } from "../src/protocol.ts";
 
 const V = JSON.parse(readFileSync(new URL("../../spec/vectors.json", import.meta.url), "utf8"));
 
@@ -390,5 +391,30 @@ test("a join request posted again with someone else's signing key is refused", a
   assert.equal(reqs.length, 1);
   assert.ok(reqs[0].conflict);
   await assert.rejects(a.vault.acceptRequest(reqs[0]), /different signing keys/);
+  await cleanup();
+});
+
+test("losing the connection during a pull stops it with one error; the next pull finishes", async () => {
+  const { a, b, ch, cleanup } = await pair();
+  const big = new Uint8Array(300 * 1024).map((_, i) => (i * 7) % 251); // above INLINE_MAX: sent as chunks
+  await a.write("big.bin", big);
+  await a.write("big2.bin", big.slice(1));
+  await a.write("n1.md", "one");
+  await a.write("n2.md", "two");
+  await a.vault.pushChanges();
+  const t = (b.vault as any).transport;
+  const fetch = t.fetch;
+  let calls = 0;
+  t.fetch = async (id: number) => {
+    if (ch.messages.get(id)![0] === KIND.chunk) { calls++; throw new OfflineError("no connection to Telegram"); }
+    return fetch(id);
+  };
+  await assert.rejects(b.vault.pullChanges(), OfflineError);
+  assert.equal(calls, 1, "stopped at the first failure instead of trying every file");
+  t.fetch = fetch;
+  await b.vault.pullChanges();
+  assert.deepEqual(await b.files(), ["big.bin", "big2.bin", "n1.md", "n2.md"]);
+  assert.deepEqual(new Uint8Array(await readFile(join(b.root, "big.bin"))), big);
+  assert.equal(await b.read("n2.md"), "two");
   await cleanup();
 });

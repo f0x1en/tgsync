@@ -2,7 +2,7 @@
 // Dead connections. mtcute reconnects forever, so a call over a dead network or proxy would wait
 // forever. A call fails once the client has been unable to connect for OFFLINE_MS in a row. Slow but
 // working transfers (a big chunk over mobile data) are never cut: only "connecting"/"offline" time counts.
-import { TransportError } from "../transport.ts";
+import { OfflineError } from "../transport.ts";
 
 export const OFFLINE_MS = 60_000;
 const downSince = new WeakMap<object, number | null>();
@@ -23,7 +23,7 @@ export function whileReachable<T>(tg: object, p: Promise<T>, ms = OFFLINE_MS): P
     t = setInterval(() => {
       const since = downSince.get(tg);
       if (since != null && Date.now() - since >= ms) {
-        no(new TransportError(`no connection to Telegram for ${Math.round(ms / 1000)}s (network or proxy down?); ` +
+        no(new OfflineError(`no connection to Telegram for ${Math.round(ms / 1000)}s (network or proxy down?); ` +
           "nothing was lost: run the same command again when the connection is back"));
       }
     }, Math.min(1000, ms));
