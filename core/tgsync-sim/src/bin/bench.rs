@@ -179,5 +179,9 @@ fn main() {
     let mut j = Replica::new(joiner.clone(), None);
     feed(&mut j, &log);
     assert!(j.keys.has(201), "the joiner holds the newest key");
-    println!("members: joining after 200 add/remove cycles ({} descriptors) takes {:.2} s", log.len(), t.elapsed().as_secs_f64());
+    println!(
+        "members: joining after 200 add/remove cycles ({} descriptors) takes {:.2} s",
+        log.len(),
+        t.elapsed().as_secs_f64()
+    );
 }
