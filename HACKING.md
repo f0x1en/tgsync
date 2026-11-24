@@ -42,7 +42,8 @@ seq posted in that vault, so a re-joined (fresh) folder never reuses one (one fi
 vaults never write the same file; the older `seqs.json` is still read).
 Local state: `.tgsync/engine.json` (the engine's saved state; no keys) and `.tgsync/local.json` (stat cache, log,
 note versions, problems). `.tgsync/lock` (the running process's id) lets one tgsync run at a time per
-folder: a second one waits up to 10 s, then stops with a message; a lock left by a process that is gone is
+folder: a second one says it is waiting and waits up to 90 s (longer than a run waits for a dead
+connection), then stops with a message; a lock left by a process that is gone is
 taken over. A folder of the old TypeScript engine (`.tgsync/state.json`) is replayed from the group
 with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the group is found by it); `restore`
 downloads old versions from the group (notes: from the merged history), so REV is a version id like `812.0` (record
