@@ -959,7 +959,15 @@ mod tests {
         }
         let mut all = vec![];
         paths(&saved, vec![], &mut all);
-        let replacements = [None, Some(json!(null)), Some(json!("x")), Some(json!(-1)), Some(json!(1e300)), Some(json!([])), Some(json!({}))];
+        let replacements = [
+            None,
+            Some(json!(null)),
+            Some(json!("x")),
+            Some(json!(-1)),
+            Some(json!(1e300)),
+            Some(json!([])),
+            Some(json!({})),
+        ];
         std::panic::set_hook(Box::new(|_| {}));
         let mut panics = vec![];
         for path in &all {
@@ -968,7 +976,11 @@ mod tests {
                 let (last, parent) = path.split_last().unwrap();
                 let mut cur = &mut v;
                 for k in parent {
-                    cur = if let Some(i) = k.as_u64() { &mut cur[i as usize] } else { &mut cur[k.as_str().unwrap()] };
+                    cur = if let Some(i) = k.as_u64() {
+                        &mut cur[i as usize]
+                    } else {
+                        &mut cur[k.as_str().unwrap()]
+                    };
                 }
                 match (r, last.as_u64()) {
                     (None, Some(i)) => {
@@ -992,7 +1004,13 @@ mod tests {
             }
         }
         let _ = std::panic::take_hook();
-        assert!(panics.is_empty(), "{} of {} damaged states panic, e.g.:\n{}", panics.len(), all.len() * replacements.len(), panics.iter().take(25).cloned().collect::<Vec<_>>().join("\n"));
+        assert!(
+            panics.is_empty(),
+            "{} of {} damaged states panic, e.g.:\n{}",
+            panics.len(),
+            all.len() * replacements.len(),
+            panics.iter().take(25).cloned().collect::<Vec<_>>().join("\n")
+        );
     }
 
     #[test]
