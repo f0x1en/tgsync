@@ -98,6 +98,9 @@ export default class TgsyncPlugin extends Plugin {
     this.running = true;
     try {
       const s = await this.run<Status>(["status"]);
+      // Another tgsync run in this vault (say a push from a terminal): skip this check quietly and keep
+      // what we know, else the same changes would be announced again next time.
+      if (!s.ok && !loud && /another tgsync is running/.test(s.error ?? "")) return;
       if (!s.ok) { this.forget(); this.show("error"); if (loud) new Notice(`tgsync: ${s.error ?? "unexpected answer from tgsync"}`); return; }
       const mine = s.pending?.length ?? 0;
       if (s.incoming === null || s.incoming === undefined) {

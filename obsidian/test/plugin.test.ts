@@ -103,3 +103,18 @@ test("a shared edit that appears later is still announced; offline forgets old w
   await p.check(false);
   assert.deepEqual(p.incoming, []);
 });
+
+test("a check while another tgsync runs in the vault is skipped quietly; nothing is announced twice", async () => {
+  notices.length = 0;
+  const cli = fakeCli({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) });
+  const p = await start(cli);
+  await p.check(false);
+  const answers = `${cli.replace(/\.cmd$/, "")}.json`;
+  writeFileSync(answers, JSON.stringify({ status: { ok: false, error: "another tgsync is running in ~/vaults/team (process 7); run this again when it has finished" } }));
+  await p.check(false);
+  assert.equal(p.bars[0].text, "tgsync: 1 to pull", "status bar kept");
+  writeFileSync(answers, JSON.stringify({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) }));
+  const before = notices.length;
+  await p.check(false);
+  assert.equal(notices.length, before, "the same change is not announced again");
+});
