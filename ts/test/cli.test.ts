@@ -74,3 +74,31 @@ test("restore brings back versions from the group; log and bare tgsync", async (
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+// Ported from the Python suite (tests/test_invites_profiles.py on main).
+test("helpful refusals: not a vault lists yours, a vault cannot be made twice, unsafe profile names", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "tgsync-cli-"));
+  const run = (args: string[], profile = "alice") => {
+    const env: NodeJS.ProcessEnv = { ...process.env, TGSYNC_SANDBOX: join(tmp, "sb"), TGSYNC_PROFILE: profile };
+    delete env.TGSYNC_HOME;
+    const r = spawnSync("node", [BIN, "--json", ...args], { env, cwd: tmp, input: "", encoding: "utf8" });
+    return JSON.parse(r.stdout);
+  };
+  try {
+    const A = join(tmp, "alice"), plain = join(tmp, "plain");
+    assert.ok(run(["new", A]).ok);
+    const twice = run(["new", A]);
+    assert.equal(twice.ok, false);
+    assert.match(twice.error, /already a tgsync vault/);
+    const notVault = run(["status", "-C", plain]);
+    assert.equal(notVault.ok, false);
+    assert.match(notVault.error, /is not a tgsync vault/);
+    assert.match(notVault.error, /Your vaults on this computer/);
+    assert.ok(notVault.error.includes("alice"), notVault.error);
+    const bad = run(["new", join(tmp, "b")], "../evil"); // a vault's own saved profile wins elsewhere
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /profile names may only use/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
