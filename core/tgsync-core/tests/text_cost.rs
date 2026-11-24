@@ -34,5 +34,10 @@ fn applying_an_edit_costs_about_a_plain_loro_import() {
         texts.import("d0", u).unwrap();
     }
     let ours_s = start.elapsed().as_secs_f64();
-    assert!(ours_s < 4.0 * loro_s, "1000 edits: {:.0} ms here, {:.0} ms in plain Loro", ours_s * 1e3, loro_s * 1e3);
+    assert!(
+        ours_s < 4.0 * loro_s,
+        "1000 edits: {:.0} ms here, {:.0} ms in plain Loro",
+        ours_s * 1e3,
+        loro_s * 1e3
+    );
 }
