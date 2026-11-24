@@ -497,3 +497,47 @@ test("joining with the same files already on disk uploads only real differences"
   assert.equal(await c.read("same.md"), "shared text");
   await cleanup();
 });
+
+test("a big upload cut off midway continues from where it stopped; changed parts are sent again", async () => {
+  const { a, b, ch, cleanup } = await pair();
+  const big = new Uint8Array(1_000_000).map((_, i) => (i * 31) % 251); // 1 MB in 100 KB chunks: 10 parts
+  await a.write("big.bin", big);
+  const t = (a.vault as any).transport;
+  const send = t.send;
+  let n = 0;
+  t.send = async (kind: string, data: Uint8Array) => {
+    if (kind === KIND.chunk && ++n > 6) throw new OfflineError("no connection to Telegram"); // 6 parts get out
+    return send(kind, data);
+  };
+  await assert.rejects(a.vault.pushChanges(100_000), OfflineError);
+  t.send = send;
+  const before = [...ch.messages.values()].filter(([k]) => k === KIND.chunk).length;
+  await a.vault.pushChanges(100_000);
+  const after = [...ch.messages.values()].filter(([k]) => k === KIND.chunk).length;
+  assert.equal(after - before, 4, "only the 4 missing parts were sent");
+  await b.vault.pullChanges();
+  assert.ok(Buffer.from(big).equals(await readFile(join(b.root, "big.bin"))));
+
+  // cut off again, then the file is edited (new mtime): the old parts are not reused
+  const big2 = big.map((x) => x ^ 1);
+  await a.write("big.bin", big2);
+  n = 0;
+  t.send = async (kind: string, data: Uint8Array) => {
+    if (kind === KIND.chunk && ++n > 6) throw new OfflineError("no connection to Telegram");
+    return send(kind, data);
+  };
+  await assert.rejects(a.vault.pushChanges(100_000), OfflineError);
+  t.send = send;
+  const big3 = big2.slice();
+  big3[250_000] ^= 0xff;
+  await a.write("big.bin", big3);
+  await utimes(join(a.root, "big.bin"), new Date(Date.now() + 5000), new Date(Date.now() + 5000)); // surely a new mtime
+  const mid = [...ch.messages.values()].filter(([k]) => k === KIND.chunk).length;
+  await a.vault.pushChanges(100_000);
+  const end = [...ch.messages.values()].filter(([k]) => k === KIND.chunk).length;
+  assert.equal(end - mid, 10, "a changed file is uploaded whole");
+  await b.vault.pullChanges();
+  assert.ok(Buffer.from(big3).equals(await readFile(join(b.root, "big.bin"))));
+  assert.equal((a.vault as any).state.d.uploads, undefined, "nothing left to resume");
+  await cleanup();
+});
