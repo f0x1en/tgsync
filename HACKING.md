@@ -163,6 +163,9 @@ off the old-key rule or the membership rule each fails within two seeds (members
   readers then note a harmless "gap in ... history".
 - Join short codes are 32 bits. `accept` refuses a code two waiting requests share and also takes the full
   member id, which `tgsync join` prints.
+- Every membership change carries all vault keys so far (wrapped for each member), so late joiners can
+  read the whole history. Descriptors grow with each removal (one new key each), and joining replays
+  them all: quadratic in removals. Measured: joining after 200 add/remove cycles takes 0.09 s.
 - Unchanged files are not re-hashed: a file whose size and modification time match the last scan (taken
   more than a moment after that mtime) counts as unchanged. A tool that rewrites a file and then sets its
   old mtime back hides the edit; editors and sync tools do not do this. Edits within the same moment are
