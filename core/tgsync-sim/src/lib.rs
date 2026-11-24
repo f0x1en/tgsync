@@ -347,6 +347,15 @@ impl Sim {
     /// Someone in the group (not a member, or a buggy client) posts junk: random bytes, or a real
     /// message with bits flipped, under any kind. Replicas must skip it without panicking.
     fn garbage(&mut self) {
+        // Anyone in the group can re-post an old message exactly (forward or copy it): an old
+        // membership change or record must never count again.
+        if !self.group.is_empty() && self.rng.chance(25) {
+            let src = self.rng.below(self.group.len());
+            let (_, kind, body) = self.group[src].clone();
+            self.trace.push(format!("re-post of msg {} (kind {kind})", src + 1));
+            self.post(kind, body);
+            return;
+        }
         let kind = ['d', 'r', 'c', 'j', 'x'][self.rng.below(5)];
         // (Copies flip bits only in the first 48 bytes: message bytes are not the same in every run,
         // because Loro's encoding is not byte-stable, so a position based on the length would make

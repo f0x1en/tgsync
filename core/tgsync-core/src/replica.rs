@@ -82,10 +82,6 @@ pub struct Replica {
     pub removed: bool,
     /// We already wrote this vault to disk (a later exclusion means "removed", not "not added yet").
     pub active: bool,
-    /// After a descriptor dropped us before we ever synced (we start over as a fresh joiner): its
-    /// epoch. An older descriptor posted later is a re-post, never a real re-add; trusting it would
-    /// leave us with old keys for good.
-    floor: u32,
     /// Membership history: (descriptor msg id, what it says). Same on every replica.
     pub history: Vec<(i64, Snapshot)>,
     /// Every descriptor seen, in order, not yet in `history` (we had no keys to check it yet).
@@ -113,7 +109,6 @@ impl Replica {
             authors: BTreeMap::new(),
             removed: false,
             active: false,
-            floor: 0,
             history: vec![],
             pending: vec![],
             all_descriptors: vec![],
@@ -264,7 +259,7 @@ impl Replica {
             .collect();
         Ok(serde_json::json!({
             "v": 1, "vault_id": self.vault_id, "cursor": self.cursor, "authors": self.authors,
-            "removed": self.removed, "active": self.active, "floor": self.floor, "desc_seen": self.desc_seen,
+            "removed": self.removed, "active": self.active, "desc_seen": self.desc_seen,
             "accepted": msgs(&self.accepted), "all_descriptors": msgs(&self.all_descriptors), "pending": msgs(&self.pending),
             "history": history, "tree": self.tree.nodes.values().map(|n| n.to_json()).collect::<Vec<_>>(),
             "texts": self.texts.save()?,
@@ -304,7 +299,6 @@ impl Replica {
         r.desc_seen = v["desc_seen"].as_i64().ok_or_else(bad)?;
         r.removed = v["removed"].as_bool().ok_or_else(bad)?;
         r.active = v["active"].as_bool().ok_or_else(bad)?;
-        r.floor = v["floor"].as_u64().unwrap_or(0) as u32; // absent in older saves
         r.authors = v["authors"]
             .as_object()
             .ok_or_else(bad)?
@@ -356,50 +350,50 @@ impl Replica {
         match kind {
             KIND_DESCRIPTOR if id > self.desc_seen => {
                 self.desc_seen = id;
-                self.all_descriptors.push((id, body.to_vec()));
-                self.pending.push((id, body.to_vec()));
-                let epoch = descriptor::parse(body).ok().and_then(|d| d["epoch"].as_u64()).unwrap_or(0);
-                let replayed = !self.has_keys() && epoch < u64::from(self.floor);
-                let accepted = if replayed {
-                    Err(crate::Error::Crypto("descriptor epoch is older than ours (replay?)".into()))
+                // A re-post of a descriptor already in the log (anyone can forward one) must not
+                // count again: adding a member keeps the epoch, so the epoch alone cannot tell an
+                // old one from a new one.
+                let cid = descriptor::content_id(body);
+                if cid.is_some() && self.all_descriptors.iter().any(|(_, b)| descriptor::content_id(b) == cid) {
+                    rep.problems.push((id, "rejected descriptor: a re-post of an earlier one".into()));
                 } else {
-                    descriptor::accept(
+                    self.all_descriptors.push((id, body.to_vec()));
+                    self.pending.push((id, body.to_vec()));
+                    match descriptor::accept(
                         body,
                         &self.me,
                         &mut self.keys,
                         self.vault_id.as_deref(),
                         false,
                         self.admins.as_deref(),
-                    )
-                };
-                match accepted {
-                    Ok(None) if self.has_keys() && !self.active => {
-                        // Dropped before we ever synced: a later re-add is a fresh join.
-                        self.floor = self.floor.max(u32::try_from(epoch).unwrap_or(u32::MAX));
-                        self.keys = KeyRing::new();
-                        self.members.clear();
-                        self.admins = None;
-                        self.history.clear();
-                        self.pending = self.all_descriptors.clone();
-                        self.accepted.clear();
-                    }
-                    Ok(None) => {
-                        if self.has_keys() {
-                            self.removed = true;
+                    ) {
+                        Ok(None) if self.has_keys() && !self.active => {
+                            // Dropped before we ever synced: a later re-add is a fresh join.
+                            self.keys = KeyRing::new();
+                            self.members.clear();
+                            self.admins = None;
+                            self.history.clear();
+                            self.pending = self.all_descriptors.clone();
+                            self.accepted.clear();
                         }
-                    }
-                    Ok(Some(d)) => {
-                        self.accepted.push((id, body.to_vec()));
-                        self.vault_id.get_or_insert(d.vault_id);
-                        self.members = d.members;
-                        if d.admins.is_some() {
-                            self.admins = d.admins;
+                        Ok(None) => {
+                            if self.has_keys() {
+                                self.removed = true;
+                            }
                         }
-                        rep.descriptors.push((id, body.to_vec()));
+                        Ok(Some(d)) => {
+                            self.accepted.push((id, body.to_vec()));
+                            self.vault_id.get_or_insert(d.vault_id);
+                            self.members = d.members;
+                            if d.admins.is_some() {
+                                self.admins = d.admins;
+                            }
+                            rep.descriptors.push((id, body.to_vec()));
+                        }
+                        Err(e) => rep.problems.push((id, format!("rejected descriptor: {e}"))),
                     }
-                    Err(e) => rep.problems.push((id, format!("rejected descriptor: {e}"))),
+                    self.flush_history();
                 }
-                self.flush_history();
             }
             KIND_RECORD if !self.removed => {
                 if !self.has_keys() || self.blocked {

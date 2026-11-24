@@ -116,6 +116,14 @@ fn sha(v: &Value) -> [u8; 32] {
     Sha256::digest(canon(v).as_bytes()).into()
 }
 
+/// What a descriptor says, without its proof: the same for an exact re-post and for one a member
+/// sealed again with a fresh proof. `None` if it does not parse.
+pub fn content_id(data: &[u8]) -> Option<[u8; 32]> {
+    let mut d = parse(data).ok()?;
+    d.as_object_mut()?.remove("proof");
+    Some(sha(&d))
+}
+
 fn keycheck(key: &[u8], vault_id: &str, epoch: u32) -> String {
     hex::encode(mac(key, &[b"descriptor", vault_id.as_bytes(), epoch.to_string().as_bytes()]))
 }
