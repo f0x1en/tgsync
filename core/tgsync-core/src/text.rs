@@ -196,22 +196,29 @@ impl Texts {
     /// Replay: import an update. Returns the doc's text afterwards. Importing twice is harmless.
     pub fn import(&mut self, doc: &str, update: &[u8]) -> Result<String> {
         self.saved.get_mut().remove(doc);
-        // Import into a copy and keep it only if it applied completely. Pending = it needs operations
-        // this doc does not have (a record went missing): Loro would keep it queued inside the doc and
-        // apply it later, on some replicas only (a restarted one no longer holds the queue).
-        let d = match self.docs.get(doc) {
-            Some(d) => d.fork(),
-            None => LoroDoc::new(),
-        };
+        // Keep an update only if it applied completely. Pending = it needs operations this doc does not
+        // have (a record went missing): Loro would keep it queued inside the doc and apply it later, on
+        // some replicas only (a restarted one no longer holds the queue). Then the doc is rebuilt as it
+        // was before (a snapshot holds no queued updates). Importing into a copy every time would cost
+        // a copy of the note's whole history per edit.
+        let d = self.docs.entry(doc.to_owned()).or_default();
+        let before = d.oplog_frontiers();
         let res = d.import(update).map_err(|e| format!("bad text update: {e}"));
         let res = res.and_then(|st| match st.pending {
             Some(p) if !p.is_empty() => Err("text update depends on edits that never arrived".to_owned()),
             _ => Ok(()),
         });
         if let Err(e) = res {
+            if before.is_empty() {
+                self.docs.remove(doc); // nothing was there before
+            } else {
+                let restore_failed = |e2: String| err(format!("{e}; restoring the note failed: {e2}"));
+                let snap = d.export(ExportMode::snapshot_at(&before)).map_err(|e2| restore_failed(e2.to_string()))?;
+                let back = LoroDoc::from_snapshot(&snap).map_err(|e2| restore_failed(e2.to_string()))?;
+                self.docs.insert(doc.to_owned(), back);
+            }
             return Err(err(e));
         }
-        self.docs.insert(doc.to_owned(), d);
         let d = &self.docs[doc];
         let text = d.get_text(TEXT).to_string();
         let sha = sha_hex(&text);
