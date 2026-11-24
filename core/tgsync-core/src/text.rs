@@ -213,7 +213,9 @@ impl Texts {
                 self.docs.remove(doc); // nothing was there before
             } else {
                 let restore_failed = |e2: String| err(format!("{e}; restoring the note failed: {e2}"));
-                let snap = d.export(ExportMode::snapshot_at(&before)).map_err(|e2| restore_failed(e2.to_string()))?;
+                let snap = d
+                    .export(ExportMode::snapshot_at(&before))
+                    .map_err(|e2| restore_failed(e2.to_string()))?;
                 let back = LoroDoc::from_snapshot(&snap).map_err(|e2| restore_failed(e2.to_string()))?;
                 self.docs.insert(doc.to_owned(), back);
             }
