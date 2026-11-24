@@ -418,3 +418,29 @@ test("losing the connection during a pull stops it with one error; the next pull
   assert.equal(await b.read("n2.md"), "two");
   await cleanup();
 });
+
+test("losing the connection during a push: pushing again finishes, nothing lost or doubled", async () => {
+  const { a, b, ch, cleanup } = await pair();
+  const big = new Uint8Array(300 * 1024).map((_, i) => (i * 13) % 251);
+  await a.write("big.bin", big);
+  await a.write("n1.md", "one");
+  const t = (a.vault as any).transport;
+  const send = t.send;
+  let sent = 0;
+  t.send = async (kind: string, data: Uint8Array) => {
+    if (sent++ >= 1) throw new OfflineError("no connection to Telegram"); // the first message goes out
+    return send(kind, data);
+  };
+  await assert.rejects(a.vault.pushChanges(), OfflineError);
+  t.send = send;
+  await a.vault.pushChanges();
+  const again = await a.vault.pushChanges();
+  assert.deepEqual(again.pushed_paths, [], "everything is up already");
+  await b.vault.pullChanges();
+  assert.deepEqual(await b.files(), ["big.bin", "n1.md"]);
+  assert.deepEqual(new Uint8Array(await readFile(join(b.root, "big.bin"))), big);
+  assert.equal(await b.read("n1.md"), "one");
+  const records = [...ch.messages.values()].filter(([k]) => k === KIND.record).length;
+  assert.ok(records <= 3, `records posted: ${records}`);
+  await cleanup();
+});
