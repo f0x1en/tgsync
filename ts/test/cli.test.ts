@@ -60,6 +60,16 @@ test("restore brings back versions from the group; log and bare tgsync", async (
     const outside = run([]);
     assert.match(outside.out, /Commands:/);
     assert.match(outside.out, /tgsync new \./);
+
+    // one run per folder: a live holder makes us stop with a clear message, a dead one is taken over
+    const lock = join(A, ".tgsync", "lock");
+    await writeFile(lock, String(process.pid)); // this test process: alive
+    const busy = json("push", "-C", A);
+    assert.equal(busy.ok, false);
+    assert.match(busy.error, /another tgsync is running/);
+    await writeFile(lock, "999999999"); // no such process
+    assert.ok(json("push", "-C", A).ok);
+    assert.equal(await readFile(lock, "utf8").catch(() => "released"), "released");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
