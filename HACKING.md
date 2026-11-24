@@ -149,6 +149,10 @@ records as needed -> `pull()`. `status`: `fetchChanges()` -> `status()` + `incom
   readers then note a harmless "gap in ... history".
 - Join short codes are 32 bits. `accept` refuses a code two waiting requests share and also takes the full
   member id, which `tgsync join` prints.
+- Unchanged files are not re-hashed: a file whose size and modification time match the last scan (taken
+  more than a moment after that mtime) counts as unchanged. A tool that rewrites a file and then sets its
+  old mtime back hides the edit; editors and sync tools do not do this. Edits within the same moment are
+  detected (the file is hashed again).
 - The Obsidian plugin is desktop only (it runs the CLI); a mobile plugin needs Telegram inside Obsidian.
 
 ## `--json`: the interface for other tools (e.g. an Obsidian plugin)
