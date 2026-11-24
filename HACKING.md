@@ -37,8 +37,9 @@ the Rust core: `ts/src/vault.ts` is only the host (lists the folder, moves bytes
 WebAssembly `Engine` (`ts/src/core.ts` loads `core/pkg-web`, built by `make wasm`). Telegram goes through mtcute
 (pinned exact version, `ts/src/node/telegram.ts`); the login is a session string in `<profile>/mtcute.session`, and
 `tgsync login [--profile P]` logs a profile in. Profiles, age keys and `telegram.json` are shared with Python
-(`~/.config/tgsync/<profile>/`); the Ed25519 signing key is `<profile>/signing.key` (made on first use). `<profile>/seqs.json` keeps the last record seq
-posted per vault, so a re-joined (fresh) folder never reuses one.
+(`~/.config/tgsync/<profile>/`); the Ed25519 signing key is `<profile>/signing.key` (made on first use). `<profile>/seqs/<vault id>` keeps the last record
+seq posted in that vault, so a re-joined (fresh) folder never reuses one (one file per vault: runs in two
+vaults never write the same file; the older `seqs.json` is still read).
 Local state: `.tgsync/engine.json` (the engine's saved state; no keys) and `.tgsync/local.json` (stat cache, log,
 note versions, problems). A folder of the old TypeScript engine (`.tgsync/state.json`) is replayed from the group
 with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the group is found by it); `restore`

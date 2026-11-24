@@ -72,22 +72,36 @@ export async function loadIdentity(profile: string): Promise<Identity> {
   return { secret, recipient, id: await memberId(recipient), signing: signingKey(profile), seqs: seqStore(profile) };
 }
 
-/** `<profile>/seqs.json`: last record seq per vault id. */
-function seqStore(profile: string): NonNullable<Identity["seqs"]> {
-  const p = join(appDir(profile), "seqs.json");
-  const read = (): { [v: string]: number } => {
-    if (!existsSync(p)) return {};
-    try { return JSON.parse(readFileSync(p, "utf8")); }
-    catch { throw new HomeError(`${p} is damaged; it keeps record numbers safe after a re-join. Remove it only if you have not re-joined a vault since`); }
+/** `<profile>/seqs/<vault id>`: the last record seq we posted in that vault (kept outside the folder,
+ *  so a re-join never reuses one). One file per vault: two tgsync runs in different vaults never
+ *  write the same file. `<profile>/seqs.json` (older versions: all vaults in one file) is still read. */
+export function seqStore(profile: string): NonNullable<Identity["seqs"]> {
+  const dir = join(appDir(profile), "seqs");
+  const old = join(appDir(profile), "seqs.json");
+  const damaged = (p: string) => new HomeError(`${p} is damaged; it keeps record numbers safe after a re-join. Remove it only if you have not re-joined a vault since`);
+  const fileOf = (v: string) => {
+    if (!/^[0-9a-f]{1,64}$/.test(v)) throw new HomeError(`unexpected vault id ${JSON.stringify(v)}`);
+    return join(dir, v);
   };
+  const readNum = (p: string): number => {
+    if (!existsSync(p)) return 0;
+    const n = Number(readFileSync(p, "utf8").trim());
+    if (!Number.isSafeInteger(n) || n < 0) throw damaged(p);
+    return n;
+  };
+  const readOld = (v: string): number => {
+    if (!existsSync(old)) return 0;
+    try { return JSON.parse(readFileSync(old, "utf8"))[v] ?? 0; } catch { throw damaged(old); }
+  };
+  const get = (v: string) => Math.max(readNum(fileOf(v)), readOld(v));
   return {
-    get: (v) => read()[v] ?? 0,
+    get,
     set: (v, seq) => {
-      const d = read();
-      if ((d[v] ?? 0) >= seq) return;
-      d[v] = seq;
-      writeFileSync(`${p}.tmp`, JSON.stringify(d), { mode: 0o600 }); // write, then rename: never half a file
-      renameSync(`${p}.tmp`, p);
+      if (get(v) >= seq) return;
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const tmp = `${fileOf(v)}.${process.pid}.tmp`; // write, then rename: never half a file
+      writeFileSync(tmp, String(seq), { mode: 0o600 });
+      renameSync(tmp, fileOf(v));
     },
   };
 }
