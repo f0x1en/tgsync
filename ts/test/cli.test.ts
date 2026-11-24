@@ -61,12 +61,16 @@ test("restore brings back versions from the group; log and bare tgsync", async (
     assert.match(outside.out, /Commands:/);
     assert.match(outside.out, /tgsync new \./);
 
-    // one run per folder: a live holder makes us stop with a clear message, a dead one is taken over
+    // one run per folder: we wait for a live holder (here a process that ends after 3 s), and take
+    // over a lock whose process is gone
     const lock = join(A, ".tgsync", "lock");
-    await writeFile(lock, String(process.pid)); // this test process: alive
-    const busy = json("push", "-C", A);
-    assert.equal(busy.ok, false);
-    assert.match(busy.error, /another tgsync is running/);
+    // (detached, so the system collects it when it ends; a child of this blocked test would linger)
+    const holder = spawnSync("node", ["-e", "const c = require('child_process').spawn(process.execPath, " +
+      "['-e', 'setTimeout(() => {}, 3000)'], { detached: true, stdio: 'ignore' }); c.unref(); console.log(c.pid)"], { encoding: "utf8" });
+    await writeFile(lock, holder.stdout.trim());
+    const t0 = Date.now();
+    assert.ok(json("push", "-C", A).ok);
+    assert.ok(Date.now() - t0 >= 2000, "waited for the holder");
     await writeFile(lock, "999999999"); // no such process
     assert.ok(json("push", "-C", A).ok);
     assert.equal(await readFile(lock, "utf8").catch(() => "released"), "released");

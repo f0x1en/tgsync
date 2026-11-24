@@ -148,7 +148,8 @@ async function lockedFiles(folder: string): Promise<NodeFiles> {
   if (!locked.has(dir)) {
     const p = join(dir, INTERNAL_DIR, "lock");
     mkdirSync(join(dir, INTERNAL_DIR), { recursive: true });
-    const until = Date.now() + 10_000;
+    const until = Date.now() + 90_000; // longer than a run waits for a dead connection (60 s)
+    let said = false;
     for (;;) {
       try { writeFileSync(p, String(process.pid), { flag: "wx" }); break; } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
@@ -164,6 +165,7 @@ async function lockedFiles(folder: string): Promise<NodeFiles> {
         try { if (readFileSync(p, "utf8") === holder) unlinkSync(p); } catch { /* someone else did */ }
         continue;
       }
+      if (!said) { info(`waiting for another tgsync run in ${short(dir)} (process ${pid}) to finish...`); said = true; }
       if (Date.now() > until) {
         throw new CliError(`another tgsync is running in ${short(dir)} (process ${pid}); run this again when it has finished`);
       }
