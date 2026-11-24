@@ -181,10 +181,11 @@ folders are nodes with `sha = "dir"`. Path clashes are checked case-insensitivel
 **Unicode lowercase** (Python `str.lower()`, JavaScript `toLowerCase()`; not `casefold`, so `ß` and `ss` differ).
 
 For each message after the last processed id:
-- **`d`:** accept (section 4). Excludes us and we already used this vault -> we were removed: stop
-  applying records. Excludes us and we never synced -> forget keys (a later re-add is a fresh join),
-  but remember that descriptor's epoch: while we hold no keys, reject any descriptor with an older
-  epoch (a re-post of an old one would otherwise leave us with old keys for good).
+- **`d`:** first, a descriptor whose content (everything but `proof`) equals one earlier in the log
+  is a re-post (anyone can forward one): skip it. Adding a member keeps the epoch, so the epoch check
+  alone would let an old add bring back an old member list. Otherwise accept (section 4). Excludes
+  us and we already used this vault -> we were removed: stop applying records. Excludes us and we
+  never synced -> forget keys (a later re-add is a fresh join).
   Rejected -> record a problem, continue.
 - **`r`:** if we hold no keys, or the record's epoch (header bytes 4-8) is one we do not hold yet:
   stop advancing the cursor here (read it again once a descriptor gives the key). Else open it.

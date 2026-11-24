@@ -223,3 +223,29 @@ fn a_reposted_old_descriptor_does_not_trap_someone_removed_and_re_added() {
     assert!(!rb.removed);
     assert_eq!(rb.members.len(), 2);
 }
+
+#[test]
+fn a_reposted_add_does_not_undo_a_later_add() {
+    // Adding someone keeps the epoch, so an old add re-posted later has a current epoch. It must
+    // not bring back the member list it had (which would drop carol).
+    let (a, b, c) = (person(1), person(2), person(3));
+    let mut g = Group(vec![], 0);
+    let d = members::create(&a, "alice", "00112233aabbccdd", &[5; 32], 1, &mut g.n()).unwrap();
+    g.post(d);
+    let mut ra = Replica::new(a.clone(), None);
+    g.pull(&mut ra);
+    let add_bob = members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 2, &mut g.n()).unwrap();
+    g.post(add_bob.clone());
+    g.pull(&mut ra);
+    let d = members::add(&ra, &c.recipient, "carol", c.signer().as_deref(), 3, &mut g.n()).unwrap();
+    g.post(d);
+    g.pull(&mut ra);
+    let mut rc = Replica::new(c.clone(), None);
+    g.pull(&mut rc);
+    rc.active = true; // carol has synced
+    g.post(add_bob); // the re-post
+    let rep = g.pull(&mut rc);
+    g.pull(&mut ra);
+    assert!(!rc.removed, "carol is still a member: {:?}", rep.problems);
+    assert_eq!((ra.members.len(), rc.members.len()), (3, 3));
+}
