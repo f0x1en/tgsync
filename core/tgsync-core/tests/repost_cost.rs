@@ -25,5 +25,10 @@ fn feed_junk(n: usize) -> f64 {
 fn junk_membership_messages_cost_linear_time() {
     feed_junk(500); // warm up
     let (small, big) = (feed_junk(2000), feed_junk(8000));
-    assert!(big < 8.0 * small, "8000 junk messages: {:.0} ms, 2000: {:.0} ms", big * 1e3, small * 1e3);
+    assert!(
+        big < 8.0 * small,
+        "8000 junk messages: {:.0} ms, 2000: {:.0} ms",
+        big * 1e3,
+        small * 1e3
+    );
 }
