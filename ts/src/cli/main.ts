@@ -608,15 +608,15 @@ const COMMANDS: { [name: string]: Command } = {
       const chat = String(cfg.chat);
       if (!o.offline || o.check) {
         try {
-          const tg = isSandboxLink(chat) ? null : await withTimeout(connectOrRelogin(profile), 60_000);
-          tr = await withTimeout(transportFor(chat, tg, cfg.chat_peer), 60_000);
+          const tg = isSandboxLink(chat) ? null : await connectOrRelogin(profile); // no time limit: a login may be typed here
+          tr = await transportFor(chat, tg, cfg.chat_peer); // gives up when offline (node/reachable.ts)
           savePeer(dir, cfg, tr);
         } catch (e) { onlineError = (e as Error).message || String(e); }
       }
       const v = await Vault.open(new NodeFiles(resolve(dir)), ident, tr ?? (null as unknown as Transport));
       if (!o.offline && tr) {
         try { // reads only the small change messages; your files are not touched
-          await withTimeout(v.fetchChanges(), 60_000);
+          await v.fetchChanges();
         } catch (e) { onlineError = (e as Error).message || String(e); }
       }
       const s = await v.status();
@@ -724,12 +724,6 @@ async function pick(title: string, rows: string[]): Promise<number> {
   echo(title);
   rows.forEach((r, i) => echo(`  ${String(i + 1).padStart(2)}) ${r}`));
   return (await askNumber("Which one (number)", rows.length, 1, "PATH and REV")) - 1;
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let t: NodeJS.Timeout;
-  return Promise.race([p, new Promise<T>((_, no) => { t = setTimeout(() => no(new Error("timed out")), ms); })])
-    .finally(() => clearTimeout(t));
 }
 
 /** Online health check; stops at the first check that blocks the rest. */
