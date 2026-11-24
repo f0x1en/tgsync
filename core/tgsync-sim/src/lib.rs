@@ -545,7 +545,10 @@ impl Sim {
             })
             .collect();
         let nonce = self.rng.bytes();
-        let body = self.clients[c].vault.seal_record(seq, &plan, self.clock, &nonce).unwrap();
+        // Each device's clock is off by up to +-6 hours (and some run backwards in time order):
+        // replay must depend on the order of the log, never on the times writers claim.
+        let skew = ((c * 7919 % 13) as f64 - 6.0) * 3600.0;
+        let body = self.clients[c].vault.seal_record(seq, &plan, self.clock + skew, &nonce).unwrap();
         let twice = self.faults && self.rng.chance(3);
         let crash = self.faults && self.rng.chance(5);
         self.trace.push(format!(
