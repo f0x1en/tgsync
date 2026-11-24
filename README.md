@@ -96,7 +96,8 @@ note. Other files keep both versions: the later one as `file (conflict ...).ext`
 files print a heads-up ("downloading ... big files take a while") and appear in your folder only
 once they have fully arrived. If Telegram cannot be reached for 60 seconds (network or proxy down),
 the command stops and says so; nothing is lost, and running it again later finishes the job (a big
-upload continues with the parts it had already sent).
+upload continues with the parts it had already sent). One tgsync runs in a folder at a time: a second
+one (say the Obsidian plugin while you push in a terminal) waits for the first to finish.
 
 ## Setup
 
