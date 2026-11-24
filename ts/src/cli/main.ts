@@ -9,7 +9,7 @@
 //   tgsync new DIR      start a vault        tgsync join CODE   join one
 //   tgsync invite / members / accept CODE / remove NAME
 //   tgsync --json ...   one JSON object on stdout, for scripts and plugins
-import { existsSync, readFileSync, readdirSync, renameSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -139,6 +139,44 @@ async function vaultAt(folder: string): Promise<[string | null, boolean]> {
   return [null, false];
 }
 
+/** The folder's files, after taking its lock `.tgsync/lock` (held until this process exits). Two runs
+ *  in one folder at once (say the Obsidian plugin and a terminal) would both post with the same record
+ *  number, and readers would drop one of them. A lock left by a process that is gone is taken over. */
+const locked = new Set<string>();
+async function lockedFiles(folder: string): Promise<NodeFiles> {
+  const dir = resolve(folder);
+  if (!locked.has(dir)) {
+    const p = join(dir, INTERNAL_DIR, "lock");
+    mkdirSync(join(dir, INTERNAL_DIR), { recursive: true });
+    const until = Date.now() + 10_000;
+    for (;;) {
+      try { writeFileSync(p, String(process.pid), { flag: "wx" }); break; } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      }
+      let holder = "";
+      try { holder = readFileSync(p, "utf8"); } catch { continue; } // just released
+      const pid = Number(holder);
+      const alive = (() => {
+        if (!Number.isInteger(pid) || pid <= 0) return true; // being written right now
+        try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+      })();
+      if (!alive) {
+        try { if (readFileSync(p, "utf8") === holder) unlinkSync(p); } catch { /* someone else did */ }
+        continue;
+      }
+      if (Date.now() > until) {
+        throw new CliError(`another tgsync is running in ${short(dir)} (process ${pid}); run this again when it has finished`);
+      }
+      await new Promise((ok) => setTimeout(ok, 200));
+    }
+    locked.add(dir);
+    process.on("exit", () => {
+      try { if (readFileSync(p, "utf8") === String(process.pid)) unlinkSync(p); } catch { /* gone */ }
+    });
+  }
+  return new NodeFiles(dir);
+}
+
 /** The invite line for a vault we are a member of (never one without a key fingerprint). */
 function inviteFor(v: Vault, link: string, api: [number, string] | null): string {
   const fp = v.fingerprint();
@@ -233,7 +271,7 @@ async function openVault(vault: string, cmd: string): Promise<[Vault, Cfg]> {
   const tg = isSandboxLink(chat) ? null : await connectOrRelogin(profile);
   const tr = await transportFor(chat, tg, cfg.chat_peer);
   savePeer(vault, cfg, tr);
-  const v = await Vault.open(new NodeFiles(resolve(vault)), await loadIdentity(profile), tr);
+  const v = await Vault.open(await lockedFiles(vault), await loadIdentity(profile), tr);
   v.notify = say;
   return [v, cfg];
 }
@@ -352,7 +390,7 @@ const COMMANDS: { [name: string]: Command } = {
       else chat = link = (await createGroup(tg, basename(resolve(folder)) || "tgsync vault"))[1];
       const tr = await transportFor(chat, tg); // the group is found by its link from now on
       mkdirSync(folder, { recursive: true });
-      const v = await Vault.create(new NodeFiles(resolve(folder)), ident, tr, (o.name as string) || await defaultName(tg, profile));
+      const v = await Vault.create(await lockedFiles(folder), ident, tr, (o.name as string) || await defaultName(tg, profile));
       const cfg: Cfg = { chat, profile };
       if (link) cfg.invite = link;
       if (tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(tr.chat);
@@ -410,7 +448,7 @@ const COMMANDS: { [name: string]: Command } = {
       const tr = await transportFor(inv.link, tg);
       let rejoin = false;
       if (same) { // catch up first: this folder may not know yet that we were removed
-        const old = await Vault.open(new NodeFiles(resolve(folder)), ident, tr);
+        const old = await Vault.open(await lockedFiles(folder), ident, tr);
         await old.pull();
         rejoin = old.removed;
         old.engine.free(); // its state files are moved aside below; this object must not save them again
@@ -445,7 +483,7 @@ const COMMANDS: { [name: string]: Command } = {
         }
       }
       mkdirSync(folder, { recursive: true });
-      const v = await Vault.join(new NodeFiles(resolve(folder)), ident, tr, inv.vaultId);
+      const v = await Vault.join(await lockedFiles(folder), ident, tr, inv.vaultId);
       v.notify = say;
       saveCfg(folder, { chat: inv.link, chat_peer: tr instanceof TelegramTransport ? savedPeer(tr.chat) : undefined,
                         profile, invite: inv.link, code });
@@ -613,7 +651,7 @@ const COMMANDS: { [name: string]: Command } = {
           savePeer(dir, cfg, tr);
         } catch (e) { onlineError = (e as Error).message || String(e); }
       }
-      const v = await Vault.open(new NodeFiles(resolve(dir)), ident, tr ?? (null as unknown as Transport));
+      const v = await Vault.open(await lockedFiles(dir), ident, tr ?? (null as unknown as Transport));
       if (!o.offline && tr) {
         try { // reads only the small change messages; your files are not touched
           await v.fetchChanges();
