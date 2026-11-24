@@ -27,3 +27,17 @@ test("record numbers: one file per vault, never go down, older seqs.json still c
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("reading a small file in chunks does not allocate a whole chunk (hashing 20 000 notes stays fast)", async () => {
+  const { NodeFiles } = await import("../src/node/files.ts");
+  const dir = mkdtempSync(join(tmpdir(), "tgsync-files-"));
+  try {
+    writeFileSync(join(dir, "n.md"), "a small note");
+    const parts: Uint8Array[] = [];
+    for await (const p of new NodeFiles(dir).readChunks("n.md", 32 * 1024 * 1024)) parts.push(p);
+    assert.equal(Buffer.concat(parts).toString(), "a small note");
+    assert.ok(parts.every((p) => p.buffer.byteLength <= 64 * 1024), `buffer of ${parts[0].buffer.byteLength} bytes`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
