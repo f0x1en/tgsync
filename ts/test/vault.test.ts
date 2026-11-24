@@ -497,3 +497,33 @@ test("joining with the same files already on disk uploads only real differences"
   assert.equal(await c.read("same.md"), "shared text");
   await cleanup();
 });
+
+test("pushing with nothing changed reads no file; nor do files the last pull wrote", async () => {
+  const { a, b, cleanup } = await pair();
+  const past = new Date(Date.now() - 3600_000); // not "just modified": no re-hash for safety
+  for (let i = 0; i < 20; i++) {
+    await a.write(`n${i}.md`, `note ${i}`);
+    await utimes(join(a.root, `n${i}.md`), past, past);
+  }
+  await a.write("x.bin", new Uint8Array(300 * 1024));
+  await utimes(join(a.root, "x.bin"), past, past);
+  await utimes(join(a.root, ".tgsyncignore"), past, past); // made by the vault just now
+  await a.vault.pushChanges();
+  const count = (p: Peer) => {
+    const f = (p.vault as any).files;
+    const n = { reads: 0 };
+    const [read, readChunks] = [f.read.bind(f), f.readChunks.bind(f)];
+    f.read = (path: string) => { if (!path.startsWith(".tgsync")) n.reads++; return read(path); };
+    f.readChunks = (path: string, size: number) => { n.reads++; return readChunks(path, size); };
+    return n;
+  };
+  const na = count(a);
+  await a.vault.pushChanges();
+  assert.equal(na.reads, 0, "an idle push read files");
+  await utimes(join(b.root, ".tgsyncignore"), past, past); // made at join, same as alice's: not rewritten
+  await b.vault.pullChanges();
+  const nb = count(b);
+  await b.vault.pushChanges();
+  assert.equal(nb.reads, 0, "files the pull wrote were read again");
+  await cleanup();
+});
