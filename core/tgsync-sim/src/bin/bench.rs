@@ -147,4 +147,37 @@ fn main() {
              text.len() / 1000, prepare_s, apply_s, update_bytes / 1000, text.len() / 1000);
     let saved = w.save().unwrap();
     println!("notes: state with that note's whole history: {:.0} KB", saved.len() as f64 / 1e3);
+
+    // 5. Membership churn: 200 times someone is added and removed (400 descriptors, 200 key changes),
+    // then a member joining replays them all.
+    let (owner, joiner) = (person(9), person(10));
+    let mut log: Vec<Vec<u8>> = vec![];
+    let mut n = 0u8;
+    let mut nonce = || {
+        n = n.wrapping_add(1);
+        [n; 12]
+    };
+    log.push(members::create(&owner, "o", "8899aabbccddeeff", &[1; 32], 0, &mut nonce).unwrap());
+    let mut o = Replica::new(owner.clone(), None);
+    let feed = |r: &mut Replica, log: &[Vec<u8>]| {
+        let mut rep = Report::default();
+        for (i, d) in log.iter().enumerate().skip(r.cursor as usize) {
+            r.feed(i as i64 + 1, 'd', d, &mut rep);
+        }
+    };
+    feed(&mut o, &log);
+    let guest = person(11);
+    for k in 0..200u32 {
+        log.push(members::add(&o, &guest.recipient, "g", guest.signer().as_deref(), 0, &mut nonce).unwrap());
+        feed(&mut o, &log);
+        let key = [(k % 250) as u8 + 2; 32];
+        log.push(members::remove(&o, "g", &key, 0, &mut nonce).unwrap());
+        feed(&mut o, &log);
+    }
+    log.push(members::add(&o, &joiner.recipient, "j", joiner.signer().as_deref(), 0, &mut nonce).unwrap());
+    let t = Instant::now();
+    let mut j = Replica::new(joiner.clone(), None);
+    feed(&mut j, &log);
+    assert!(j.keys.has(201), "the joiner holds the newest key");
+    println!("members: joining after 200 add/remove cycles ({} descriptors) takes {:.2} s", log.len(), t.elapsed().as_secs_f64());
 }

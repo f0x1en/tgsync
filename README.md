@@ -67,7 +67,8 @@ note at the same time:
 
 Measured on one laptop core (`cargo run --release -p tgsync-sim --bin bench`): sealing/opening
 32 MiB chunks 924/1247 MB/s; replaying 2000 signed records (50 000 files) 0.33 s; saving/loading
-that state 224/192 ms; a note edit costs 2.2 ms to prepare and 0.2 ms to apply. End to end through
+that state 224/192 ms; a note edit costs 2.2 ms to prepare and 0.2 ms to apply; joining after 200
+add/remove cycles (402 membership messages) 0.09 s. End to end through
 the Node CLI on a sandbox group (`cd ts && npm run bench`), a 1 GB file uploads at 83 MB/s and downloads
 at 151 MB/s with flat memory (316 MB peak). A vault of 20 000 notes: first push 8 s, first pull
 5 s, then one edited note 1.2 s to push and 1.0 s to pull (`npm run bench-notes`). Real transfer speed is
