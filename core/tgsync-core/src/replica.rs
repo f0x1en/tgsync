@@ -88,6 +88,8 @@ pub struct Replica {
     pending: Vec<(i64, Vec<u8>)>,
     /// Every descriptor seen, in order (to rebuild the history after a fresh re-join).
     all_descriptors: Vec<(i64, Vec<u8>)>,
+    /// `descriptor::content_id` of each of `all_descriptors` (to spot re-posts fast). Not saved.
+    desc_ids: std::collections::HashSet<[u8; 32]>,
     /// Descriptors that included us, in order: re-reading them with our identity gives back the
     /// vault keys when the replica is loaded (keys are never saved).
     accepted: Vec<(i64, Vec<u8>)>,
@@ -112,6 +114,7 @@ impl Replica {
             history: vec![],
             pending: vec![],
             all_descriptors: vec![],
+            desc_ids: Default::default(),
             accepted: vec![],
             desc_seen: 0,
             blocked: false,
@@ -306,6 +309,7 @@ impl Replica {
             .map(|(k, s)| (k.clone(), s.as_u64().unwrap_or(0)))
             .collect();
         r.all_descriptors = msgs("all_descriptors")?;
+        r.desc_ids = r.all_descriptors.iter().filter_map(|(_, b)| descriptor::content_id(b)).collect();
         r.pending = msgs("pending")?;
         for (_, d) in msgs("accepted")? {
             r.load_descriptor(&d);
@@ -354,7 +358,7 @@ impl Replica {
                 // count again: adding a member keeps the epoch, so the epoch alone cannot tell an
                 // old one from a new one.
                 let cid = descriptor::content_id(body);
-                if cid.is_some() && self.all_descriptors.iter().any(|(_, b)| descriptor::content_id(b) == cid) {
+                if cid.is_some_and(|c| !self.desc_ids.insert(c)) {
                     rep.problems.push((id, "rejected descriptor: a re-post of an earlier one".into()));
                 } else {
                     self.all_descriptors.push((id, body.to_vec()));
