@@ -2,7 +2,7 @@
 // The engine, two people on an in-memory group with real folders (ported from tests/test_sync.py).
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, rmdir, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -442,5 +442,58 @@ test("losing the connection during a push: pushing again finishes, nothing lost 
   assert.equal(await b.read("n1.md"), "one");
   const records = [...ch.messages.values()].filter(([k]) => k === KIND.record).length;
   assert.ok(records <= 3, `records posted: ${records}`);
+  await cleanup();
+});
+
+// Ported from the Python suite (tests/test_sync.py on main): host behaviors no other test covers.
+
+test("the group sees only ciphertext: no file names or contents", async () => {
+  const { a, ch, cleanup } = await pair();
+  await a.write("secret-plans.md", "TOP SECRET LAUNCH CODES");
+  await a.vault.pushChanges();
+  const blob = Buffer.concat([...ch.messages.values()].filter(([k]) => k !== KIND.descriptor).map(([, d]) => d));
+  assert.ok(!blob.includes("TOP SECRET") && !blob.includes("secret-plans"));
+  await cleanup();
+});
+
+test("editor scratch files are not synced", async () => {
+  const { a, b, cleanup } = await pair();
+  for (const junk of [".note.md.swp", "note.md~", "4913", ".#lock", "#auto#", ".netrwhist"]) await a.write(junk, "junk");
+  await a.write("note.md", "real");
+  await sync(a); await sync(b);
+  assert.deepEqual(await b.files(), ["note.md"]);
+  await cleanup();
+});
+
+test("an edit with the same size and modification time is still detected", async () => {
+  const { a, b, cleanup } = await pair();
+  await a.write("n.md", "v1");
+  await sync(a);
+  const st = await stat(join(a.root, "n.md"));
+  await a.write("n.md", "v2");
+  await utimes(join(a.root, "n.md"), st.atime, st.mtime); // identical size and mtime
+  await sync(a);
+  await sync(b);
+  assert.equal(await b.read("n.md"), "v2");
+  await cleanup();
+});
+
+test("joining with the same files already on disk uploads only real differences", async () => {
+  const { a, ch, cleanup } = await pair();
+  await a.write("same.md", "shared text");
+  await a.write("other.md", "alice's version");
+  await sync(a);
+  const c = new Peer(join(dirname(a.root), "carol"));
+  await mkdir(c.root);
+  await c.write("same.md", "shared text"); // e.g. re-joined in her old folder: files there, state fresh
+  await c.write("other.md", "carol's own edit");
+  const ic = await newIdentity();
+  await a.vault.addMember(ic.recipient, "carol", w.signerOf(ic.signing));
+  c.vault = await Vault.join(new NodeFiles(c.root), ic, ch.transport(), a.vault.vaultId!);
+  await c.vault.pullChanges(); // as `tgsync join` does
+  const rep = await c.vault.pushChanges();
+  assert.ok(!rep.pushed_paths.includes("same.md"), "identical to the vault: not uploaded again");
+  assert.ok(rep.pushed_paths.includes("other.md"), "a real difference is shared, not lost");
+  assert.equal(await c.read("same.md"), "shared text");
   await cleanup();
 });
