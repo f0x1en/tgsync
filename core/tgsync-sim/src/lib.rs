@@ -927,6 +927,74 @@ fn hex8(b: [u8; 8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A damaged `.tgsync/engine.json` must give an error, never a panic: in WebAssembly a panic
+    /// aborts the whole program with no useful message. Every field of a real saved state is in turn
+    /// removed or replaced by a value of the wrong type (first element only, for arrays).
+    #[test]
+    fn damaged_saved_state_errors_without_panicking() {
+        use serde_json::{json, Value};
+        let mut sim = super::Sim::new(3, 3);
+        for _ in 0..300 {
+            sim.step();
+        }
+        sim.settle_and_check().unwrap();
+        let me = sim.clients[0].vault.replica.me.clone();
+        let saved: Value = serde_json::from_slice(&sim.clients[0].vault.save().unwrap()).unwrap();
+        fn paths(v: &Value, at: Vec<Value>, out: &mut Vec<Vec<Value>>) {
+            match v {
+                Value::Object(m) => m.iter().for_each(|(k, x)| {
+                    let mut p = at.clone();
+                    p.push(json!(k));
+                    out.push(p.clone());
+                    paths(x, p, out);
+                }),
+                Value::Array(a) if !a.is_empty() => {
+                    let mut p = at.clone();
+                    p.push(json!(0));
+                    out.push(p.clone());
+                    paths(&a[0], p, out);
+                }
+                _ => {}
+            }
+        }
+        let mut all = vec![];
+        paths(&saved, vec![], &mut all);
+        let replacements = [None, Some(json!(null)), Some(json!("x")), Some(json!(-1)), Some(json!(1e300)), Some(json!([])), Some(json!({}))];
+        std::panic::set_hook(Box::new(|_| {}));
+        let mut panics = vec![];
+        for path in &all {
+            for r in &replacements {
+                let mut v = saved.clone();
+                let (last, parent) = path.split_last().unwrap();
+                let mut cur = &mut v;
+                for k in parent {
+                    cur = if let Some(i) = k.as_u64() { &mut cur[i as usize] } else { &mut cur[k.as_str().unwrap()] };
+                }
+                match (r, last.as_u64()) {
+                    (None, Some(i)) => {
+                        cur.as_array_mut().unwrap().remove(i as usize);
+                    }
+                    (None, None) => {
+                        cur.as_object_mut().unwrap().remove(last.as_str().unwrap());
+                    }
+                    (Some(x), Some(i)) => cur[i as usize] = x.clone(),
+                    (Some(x), None) => cur[last.as_str().unwrap()] = x.clone(),
+                }
+                let bytes = serde_json::to_vec(&v).unwrap();
+                let me = me.clone();
+                if std::panic::catch_unwind(move || {
+                    let _ = tgsync_core::vault::Vault::load(me, &bytes);
+                })
+                .is_err()
+                {
+                    panics.push(format!("{path:?} -> {r:?}"));
+                }
+            }
+        }
+        let _ = std::panic::take_hook();
+        assert!(panics.is_empty(), "{} of {} damaged states panic, e.g.:\n{}", panics.len(), all.len() * replacements.len(), panics.iter().take(25).cloned().collect::<Vec<_>>().join("\n"));
+    }
+
     #[test]
     fn seeds_converge() {
         // Quick smoke run; `make sim` runs 10000 seeds in release mode.
