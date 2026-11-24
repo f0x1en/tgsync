@@ -13,6 +13,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { caption, parseCaption } from "../protocol.ts";
 import { TransportError, type Message, type Transport } from "../transport.ts";
+import { watchConnection, whileReachable } from "./reachable.ts";
 import { appDir } from "./home.ts";
 
 // Telegram does not publish exact limits. Folklore: ~20 messages/minute and ~1/second per chat.
@@ -81,7 +82,9 @@ function makeClient(creds: Creds): TelegramClient {
     logLevel: process.env.TGSYNC_DEBUG ? 4 : 0,
     updates: false,
   });
-  return new TelegramClient({ client: base });
+  const tg = new TelegramClient({ client: base });
+  watchConnection(tg);
+  return tg;
 }
 
 function unreachable(profile: string, creds: Creds, e: unknown): TransportError {
@@ -125,8 +128,7 @@ export async function connect(profile: string): Promise<TelegramClient> {
   const tg = makeClient(creds);
   try {
     await tg.importSession(readFileSync(sessionPath(profile), "utf8").trim());
-    await tg.connect();
-    await tg.getMe();
+    await whileReachable(tg, (async () => { await tg.connect(); await tg.getMe(); })());
   } catch (e) {
     await tg.destroy();
     if (tl.RpcError.is(e) && (e.code === 401 || /AUTH_KEY|SESSION_REVOKED|USER_DEACTIVATED/.test(e.text))) {
@@ -215,7 +217,7 @@ export class TelegramTransport implements Transport {
   private async retry<T>(fn: () => Promise<T>): Promise<T> {
     for (let i = 0; i < MAX_FLOOD_RETRIES; i++) {
       try {
-        return await fn();
+        return await whileReachable(this.tg, fn());
       } catch (e) {
         if (tl.RpcError.is(e, "FLOOD_WAIT_%d")) {
           this.sendRl.slowDown();
@@ -242,7 +244,11 @@ export class TelegramTransport implements Transport {
   }
 
   async *iterAfter(afterId: number): AsyncIterable<Message> {
-    for await (const m of this.tg.iterHistory(this.chat.id, { reverse: true, offset: { id: afterId + 1, date: 0 } })) {
+    const it = this.tg.iterHistory(this.chat.id, { reverse: true, offset: { id: afterId + 1, date: 0 } })[Symbol.asyncIterator]();
+    for (;;) {
+      const r = await whileReachable(this.tg, it.next());
+      if (r.done) break;
+      const m = r.value;
       if (m.id <= afterId) continue;
       const kind = parseCaption(m.text);
       if (kind && m.media?.type === "document") {
