@@ -143,7 +143,11 @@ export async function connect(profile: string): Promise<TelegramClient> {
 /** Invite link (t.me/+..., t.me/joinchat/...), @username or numeric id -> chat (joins via the link if needed).
  *  `peer` is what `savedPeer` returned on an earlier run. This login keeps no chat list between runs, and
  *  a private group needs its access hash, so the hash is saved; then the link (rate-limited lookups) is rarely used. */
-export async function resolveChat(tg: TelegramClient, ref: string, peer?: string): Promise<Chat> {
+export function resolveChat(tg: TelegramClient, ref: string, peer?: string): Promise<Chat> {
+  return whileReachable(tg, resolveChatNow(tg, ref, peer));
+}
+
+async function resolveChatNow(tg: TelegramClient, ref: string, peer?: string): Promise<Chat> {
   const [id, hash] = (peer ?? "").split(":");
   if (id && hash) {
     try {
@@ -169,14 +173,17 @@ export function savedPeer(chat: Chat): string | undefined {
 }
 
 /** A private supergroup (everyone can post) and an invite link for it. */
-export async function createGroup(tg: TelegramClient, title: string): Promise<[Chat, string]> {
-  const chat = await tg.createSupergroup({ title, description: "tgsync vault" });
-  return [chat, (await tg.exportInviteLink(chat.id)).link];
+export function createGroup(tg: TelegramClient, title: string): Promise<[Chat, string]> {
+  return whileReachable(tg, (async (): Promise<[Chat, string]> => {
+    const chat = await tg.createSupergroup({ title, description: "tgsync vault" });
+    return [chat, (await tg.exportInviteLink(chat.id)).link];
+  })());
 }
 
 /** A fresh invite link (needs admin rights in the group). */
 export async function exportInvite(tg: TelegramClient, chat: Chat): Promise<string> {
-  try { return (await tg.exportInviteLink(chat.id)).link; } catch (e) {
+  try { return (await whileReachable(tg, tg.exportInviteLink(chat.id))).link; } catch (e) {
+    if (e instanceof TransportError) throw e; // no connection
     throw new TransportError(`cannot create an invite link (${(e as Error).message}); pass --link with the group's link`);
   }
 }
