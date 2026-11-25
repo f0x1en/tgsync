@@ -1,120 +1,120 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The plugin against a fake `tgsync` (canned --json answers) and a stub `obsidian` module.
+// The plugin (engine inside) on a sandbox group, with a stub `obsidian` module. Alice uses the CLI
+// (../ts/dist/tgsync.mjs, built by `npm test` in ts/); Bob uses Obsidian with the plugin.
 // `npm test` bundles this file with `obsidian` aliased to ./obsidian-stub.ts.
 import assert from "node:assert/strict";
-import { appendFileSync, chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { FileSystemAdapter, MarkdownView, TFile, notices } from "obsidian";
+import { FileSystemAdapter, MarkdownView, notices } from "obsidian";
 import TgsyncPlugin from "../src/main.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "tgsync-plugin-"));
+(globalThis as any).window = globalThis; // timers, as in the app
+const CLI = join(__dirname, "..", "..", "ts", "dist", "tgsync.mjs");
+const tmp = mkdtempSync(join(tmpdir(), "tgsync-plugin-"));
+process.env.TGSYNC_SANDBOX = join(tmp, "sb"); // the plugin's engine finds bob's keys in the sandbox
+delete process.env.TGSYNC_HOME;
+const A = join(tmp, "alice"), B = join(tmp, "bob");
 
-/** A fake tgsync: answers each command from `answers`, logs its arguments to `<path>.log`. */
-function fakeCli(answers: Record<string, unknown>): string {
-  const f = join(dir, `tgsync-${Math.random().toString(36).slice(2)}`);
-  writeFileSync(`${f}.json`, JSON.stringify(answers));
-  writeFileSync(f, `#!/usr/bin/env node
-const fs = require("fs");
-const a = JSON.parse(fs.readFileSync(${JSON.stringify(`${f}.json`)}, "utf8"));
-fs.appendFileSync(${JSON.stringify(`${f}.log`)}, process.argv.slice(2).join(" ") + "\\n");
-process.stdout.write(JSON.stringify(a[process.argv[3]] ?? { ok: false, error: "unknown command" }));
-`);
-  chmodSync(f, 0o755);
-  if (process.platform === "win32") { // Windows runs neither shebangs nor extension-less files: a .cmd shim, as npm makes
-    writeFileSync(`${f}.js`, readFileSync(f));
-    writeFileSync(`${f}.cmd`, `@node "${f}.js" %*\r\n`);
-    return `${f}.cmd`;
-  }
-  return f;
+function cli(profile: string, ...args: string[]): any {
+  const r = spawnSync("node", [CLI, "--json", ...args], { env: { ...process.env, TGSYNC_PROFILE: profile }, encoding: "utf8" });
+  return JSON.parse(r.stdout);
 }
 
-const editor = new MarkdownView();
+// alice makes the vault; bob asks to join and is let in (as he will from the plugin later)
+const inv = cli("alice", "new", A).invite;
+cli("alice", "accept", cli("bob", "join", inv, B).code, "-C", A);
+assert.equal(cli("bob", "join").state, "joined");
 
-async function start(cli: string, active: string | null = null) {
+const editor = new MarkdownView();
+const handlers: (() => void)[] = [];
+
+async function start(folder: string, settings: object = {}) {
   const app: any = {
-    vault: { adapter: new FileSystemAdapter("/vaults/team") },
-    workspace: { on: () => ({}), onLayoutReady: () => {}, getActiveFile: () => (active ? new TFile(active) : null),
-                 getLeavesOfType: () => [{ view: editor }] },
+    vault: { adapter: new FileSystemAdapter(folder), on: (_ev: string, f: () => void) => { handlers.push(f); return {}; } },
+    workspace: { onLayoutReady: () => {}, getLeavesOfType: () => [{ view: editor }] },
   };
   const p: any = new TgsyncPlugin(app);
-  await p.saveData({ cli, checkMinutes: 0 });
+  await p.saveData(settings);
   await p.onload();
+  p.editDelay = 50;
   return p;
 }
 
-const status = (incoming: unknown[], pending: unknown[] = []) => ({ ok: true, incoming, pending, online_error: null });
-
-test("check: shows counts, names who changed what, warns about the open note and shared edits", async () => {
+test("sync downloads others' changes and uploads yours; quiet unless asked", async () => {
+  const p = await start(B);
+  writeFileSync(join(A, "from-alice.md"), "hello bob\n");
+  cli("alice", "push", "-C", A);
   notices.length = 0;
-  const cli = fakeCli({ status: status(
-    [{ op: "put", path: "plan.md", who: "bob", also_local: true }, { op: "put", path: "x.png", who: "carol", also_local: false }],
-    [{ op: "put", path: "plan.md" }]) });
-  const p = await start(cli, "x.png");
-  await p.check(false);
-  assert.equal(p.bars[0].text, "tgsync: 2 to pull, 1 to push");
-  assert.ok(notices.some((n) => n.includes("2 changes from bob, carol")), notices.join("\n"));
-  assert.ok(notices.some((n) => n.includes("you and someone else changed plan.md")));
-  assert.ok(notices.some((n) => n.includes("carol changed this note")));
-  assert.match(readFileSync(`${cli.replace(/\.cmd$/, "")}.log`, "utf8"), /^--json status -C \/vaults\/team$/m);
-  // The same changes again: no new notice (only when something new arrives, or when asked).
-  const before = notices.length;
-  await p.check(false);
-  assert.equal(notices.length, before);
+  await p.sync(false);
+  assert.equal(readFileSync(join(B, "from-alice.md"), "utf8"), "hello bob\n");
+  assert.equal(p.state, "synced");
+  assert.equal(p.bars[0].text, "✓ Synced");
+  assert.deepEqual(notices, []); // automatic syncs say nothing
+  assert.ok(editor.saved > 0, "open notes are saved before syncing");
+
+  writeFileSync(join(B, "from-bob.md"), "hi alice\n");
+  await p.sync(true);
+  assert.ok(notices.some((n) => n.includes("1 uploaded")), notices.join("\n"));
+  cli("alice", "pull", "-C", A);
+  assert.equal(readFileSync(join(A, "from-bob.md"), "utf8"), "hi alice\n");
+  await p.onunload();
 });
 
-test("pull and push report what happened; errors and offline are shown", async () => {
-  notices.length = 0;
-  const cli = fakeCli({
-    status: status([]),
-    pull: { ok: true, report: { written: ["a.md", "b.md"], deleted: ["c.md"], pushed_paths: [], conflicts: [["d.bin", "d (conflict ab12cd 2026-11-23 0100).bin"]], skipped: [], problems: [] } },
-    push: { ok: false, error: "you were removed from this vault" },
-  });
-  const p = await start(cli);
-  const saved = editor.saved;
-  await p.pull();
-  assert.equal(editor.saved, saved + 1, "open notes are saved before pulling");
-  assert.ok(notices.includes("tgsync: 2 updated, 1 deleted"), notices.join("\n"));
-  assert.ok(notices.some((n) => n.includes("both changed d.bin")));
-  assert.equal(p.bars[0].text, "tgsync: up to date");
-  await p.push();
-  assert.ok(notices.includes("tgsync: you were removed from this vault"));
-
-  const off = await start(fakeCli({ status: { ok: true, incoming: null, pending: [{ op: "put", path: "a.md" }], online_error: "no network" } }));
-  await off.check(true);
-  assert.equal(off.bars[0].text, "tgsync: offline, 1 to push");
-  const broken = await start(join(dir, "no-such-program"));
-  await broken.check(true);
-  assert.equal(broken.bars[0].text, "tgsync: error");
-  assert.ok(notices.some((n) => n.startsWith("tgsync: could not run")));
+test("an edit is uploaded by itself a moment later", async () => {
+  const p = await start(B);
+  writeFileSync(join(B, "typed.md"), "typed in Obsidian\n");
+  for (const h of handlers) h(); // Obsidian reports the change
+  await new Promise((r) => setTimeout(r, 150));
+  assert.ok(p.running, "the edit started a sync by itself");
+  await p.running;
+  cli("alice", "pull", "-C", A);
+  assert.equal(readFileSync(join(A, "typed.md"), "utf8"), "typed in Obsidian\n");
+  await p.onunload();
 });
 
-test("a shared edit that appears later is still announced; offline forgets old warnings", async () => {
+test("both changed one file: both versions kept and the user is told; notes merge", async () => {
+  const p = await start(B);
+  writeFileSync(join(A, "pic.bin"), "v1");
+  writeFileSync(join(A, "plan.md"), "plan\n");
+  cli("alice", "push", "-C", A);
+  await p.sync(false);
+  writeFileSync(join(A, "pic.bin"), "alice");
+  writeFileSync(join(B, "pic.bin"), "bob");
+  writeFileSync(join(A, "plan.md"), "plan\nalice's line\n");
+  writeFileSync(join(B, "plan.md"), "bob's line\nplan\n");
+  cli("alice", "push", "-C", A);
   notices.length = 0;
-  const cli = fakeCli({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) });
-  const p = await start(cli);
-  await p.check(false);
-  const answers = `${cli.replace(/\.cmd$/, "")}.json`;
-  writeFileSync(answers, JSON.stringify({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: true }]) }));
-  await p.check(false);
-  assert.ok(notices.some((n) => n.includes("you and someone else changed plan.md")), notices.join("\n"));
-  writeFileSync(answers, JSON.stringify({ status: { ok: true, incoming: null, pending: [], online_error: "x" } }));
-  await p.check(false);
-  assert.deepEqual(p.incoming, []);
+  await p.sync(false);
+  assert.ok(notices.some((n) => n.includes("pic.bin was changed on two devices")), notices.join("\n"));
+  const note = readFileSync(join(B, "plan.md"), "utf8");
+  assert.ok(note.includes("alice's line") && note.includes("bob's line"), note);
+  await p.onunload();
 });
 
-test("a check while another tgsync runs in the vault is skipped quietly; nothing is announced twice", async () => {
+test("a terminal run holding the folder: skipped quietly, no error", async () => {
+  const p = await start(B);
+  writeFileSync(join(B, ".tgsync", "lock"), String(process.pid)); // held by "someone" alive
   notices.length = 0;
-  const cli = fakeCli({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) });
-  const p = await start(cli);
-  await p.check(false);
-  const answers = `${cli.replace(/\.cmd$/, "")}.json`;
-  writeFileSync(answers, JSON.stringify({ status: { ok: false, error: "another tgsync is running in ~/vaults/team (process 7); run this again when it has finished" } }));
-  await p.check(false);
-  assert.equal(p.bars[0].text, "tgsync: 1 to pull", "status bar kept");
-  writeFileSync(answers, JSON.stringify({ status: status([{ op: "put", path: "plan.md", who: "bob", also_local: false }]) }));
-  const before = notices.length;
-  await p.check(false);
-  assert.equal(notices.length, before, "the same change is not announced again");
+  await p.sync(false);
+  assert.equal(p.state, "synced");
+  assert.deepEqual(notices, []);
+  writeFileSync(join(B, ".tgsync", "lock"), "999999999"); // gone: taken over
+  await p.sync(false);
+  assert.ok(!existsSync(join(B, ".tgsync", "lock")), "lock released after the sync");
+  await p.onunload();
+});
+
+test("not a vault, and sync switched off", async () => {
+  const plain = mkdtempSync(join(tmpdir(), "tgsync-plain-"));
+  const p = await start(plain);
+  await p.sync(false);
+  assert.equal(p.state, "not set up");
+  await p.onunload();
+  const q = await start(B, { auto: false });
+  q.schedule();
+  assert.equal(q.bars[0].text, "Sync paused");
+  await q.onunload();
 });

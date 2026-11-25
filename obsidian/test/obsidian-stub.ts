@@ -8,6 +8,7 @@ export class TFile { constructor(public path: string) {} }
 class El {
   text = ""; classes: string[] = [];
   setText(t: string) { this.text = t; }
+  setAttr(_k: string, _v: string) {}
   addClass(c: string) { this.classes.push(c); }
   onClickEvent(_f: () => void) {}
   empty() {}
@@ -22,6 +23,7 @@ export class Plugin {
   addCommand(c: { id: string; callback: () => unknown }) { this.commands.push(c); }
   addSettingTab() {}
   registerEvent() {}
+  registerDomEvent() {}
   registerInterval(n: number) { return n; }
   async loadData() { return this.data; }
   async saveData(d: unknown) { this.data = d; }

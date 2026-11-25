@@ -48,8 +48,8 @@ connection), then stops with a message; a lock left by a process that is gone is
 taken over. A folder of the old TypeScript engine (`.tgsync/state.json`) is replayed from the group
 with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the group is found by it); `restore`
 downloads old versions from the group (notes: from the merged history), so REV is a version id like `812.0` (record
-message, entry). `make live` runs the live test with it (a copy in `ts/live/`, since `npm test` rebuilds `dist/`). Obsidian plugin, a thin layer over the CLI's `--json` that adds nothing
-the CLI lacks: `obsidian/` (`make plugin`; tests run it against a fake `tgsync`). Run `npm install` once in each.
+message, entry). `make live` runs the live test with it (a copy in `ts/live/`, since `npm test` rebuilds `dist/`). Obsidian plugin: `obsidian/` (`make plugin`); it runs the engine itself through `ts/src/node/host.ts` (one
+Telegram connection; the vault opened under the folder lock for each sync) and syncs automatically. Run `npm install` once in each.
 
 Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this
 machine with the Rust core (chunks sealed with the platform's AES-GCM): 1 GB push 83 MB/s, pull 151 MB/s, peak
@@ -137,7 +137,7 @@ records as needed -> `pull()`. `status`: `fetchChanges()` -> `status()` + `incom
 |---|---|
 | `core/` (`make rust`, `make sim`) | Vectors, replay, membership, signed records, notes, plans; the deterministic simulator |
 | `ts/test/` (`make ts`) | The host with two people, the CLI, two real `tgsync` processes on a sandbox group (`sandbox.test.ts`), WebAssembly conformance |
-| `obsidian/test/` | The plugin against a fake `tgsync` |
+| `obsidian/test/` | The plugin (stub `obsidian` module) and the CLI sharing a sandbox group |
 | `ts/scripts/live-e2e.ts` (`make live`) | The whole story on real Telegram (not in CI) |
 
 ## Known limits (not fixed yet)
@@ -155,9 +155,10 @@ records as needed -> `pull()`. `status`: `fetchChanges()` -> `status()` + `incom
   more than a moment after that mtime) counts as unchanged. A tool that rewrites a file and then sets its
   old mtime back hides the edit; editors and sync tools do not do this. Edits within the same moment are
   detected (the file is hashed again).
-- The Obsidian plugin is desktop only (it runs the CLI); a mobile plugin needs Telegram inside Obsidian.
+- The Obsidian plugin is desktop only (it uses Node's files and network); phones need Obsidian's file API and mtcute's web build.
+- Setting a vault up (login, new, join, accept) still needs the CLI.
 
-## `--json`: the interface for other tools (e.g. an Obsidian plugin)
+## `--json`: the interface for other tools and scripts
 
 `tgsync --json <command> ...` prints exactly **one JSON object** on stdout and never asks questions.
 Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
@@ -175,6 +176,5 @@ Progress and human messages go to stderr. Exit code 0 on success, 1 on error.
 - `accept`: `accepted`. `remove` (needs `--yes`): `removed`, `epoch`. `invite`: `invite`. `restore` (needs PATH and REV): `restored`, `rev` (a version id like `812.0`).
 - `log`: `log` (`[{ts, who, op, path, copy}]`, newest first; op is `put`, `delete`, `conflict`, `mkdir`, `rmdir`).
 
-A script can run e.g. `tgsync --json status -C <vault>` and read stdout. Desktop only: Obsidian
-mobile cannot start processes, so a mobile plugin would need the sync logic itself.
+A script can run e.g. `tgsync --json status -C <vault>` and read stdout.
 Add fields freely; don't rename or remove them without bumping the version.

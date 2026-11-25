@@ -17,6 +17,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 import { memberId, shortCode } from "../crypto.ts";
 import { createRequire } from "node:module";
 import { INTERNAL_DIR, normalize } from "../paths.ts";
+import { LockBusy, takeLock } from "../node/lock.ts";
 import { decodeInvite, encodeInvite, type Identity } from "../protocol.ts";
 import type { Transport } from "../transport.ts";
 import { ENGINE_FILE, LOCAL_FILE, OLD_STATE, Vault, type Incoming, type Report } from "../vault.ts";
@@ -175,37 +176,12 @@ const locked = new Set<string>();
 async function lockedFiles(folder: string): Promise<NodeFiles> {
   const dir = resolve(folder);
   if (!locked.has(dir)) {
-    const p = join(dir, INTERNAL_DIR, "lock");
-    mkdirSync(join(dir, INTERNAL_DIR), { recursive: true });
-    const until = Date.now() + 90_000; // longer than a run waits for a dead connection (60 s)
-    let said = false;
-    for (;;) {
-      try { writeFileSync(p, String(process.pid), { flag: "wx" }); break; } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      }
-      let holder = "";
-      try { holder = readFileSync(p, "utf8"); } catch { continue; } // just released
-      const pid = Number(holder);
-      const alive = (() => {
-        // no number: being written right now, unless it is old (the Python CLI left an empty lock in every vault)
-        if (!Number.isInteger(pid) || pid <= 0) { try { return Date.now() - statSync(p).mtimeMs < 5000; } catch { return true; } }
-        try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
-      })();
-      if (!alive) {
-        try { if (readFileSync(p, "utf8") === holder) unlinkSync(p); } catch { /* someone else did */ }
-        continue;
-      }
-      if (!said) { info(`waiting for another tgsync run in ${short(dir)} (process ${pid}) to finish...`); said = true; }
-      if (Date.now() > until) {
-        throw new CliError(`another tgsync is running in ${short(dir)} (process ${pid}); run this again when it has finished`);
-      }
-      await new Promise((ok) => setTimeout(ok, 200));
-    }
+    // longer than a run waits for a dead connection (60 s)
+    const release = await takeLock(dir, 90_000, (pid) => info(`waiting for another tgsync run in ${short(dir)} (process ${pid}) to finish...`))
+      .catch((e) => { throw e instanceof LockBusy ? new CliError(`another tgsync is running in ${short(dir)} (process ${e.pid}); run this again when it has finished`) : e; });
     locked.add(dir);
     fromPythonState(dir);
-    process.on("exit", () => {
-      try { if (readFileSync(p, "utf8") === String(process.pid)) unlinkSync(p); } catch { /* gone */ }
-    });
+    process.on("exit", release);
   }
   return new NodeFiles(dir);
 }

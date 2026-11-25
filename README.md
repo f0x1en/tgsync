@@ -3,7 +3,7 @@
 A shared, end-to-end encrypted folder (works great as an Obsidian vault) that uses a private
 Telegram group as a dumb, untrusted server. Each teammate runs their own copy with their own
 Telegram account. Notes that two people edit at the same time merge (CRDT); everything else keeps
-both versions. A small CLI and a desktop Obsidian plugin; your editor and file manager are the UI.
+both versions. An Obsidian plugin that syncs by itself (desktop for now), and a small CLI.
 
 > Status: alpha. The engine is being rewritten in Rust (branch `rust-core`); the Node CLI already
 > runs on it, and the two-account test on real Telegram passes with it. Use a throwaway group first.
@@ -186,7 +186,7 @@ make rust                                  # core tests, test vectors, a short s
 make sim                                   # 10 000 simulated seeds (a few minutes)
 make wasm                                  # core -> WebAssembly (or fetches CI's build without the wasm32 target)
 cd ts && npm install && npm run build      # Node CLI: node ts/dist/tgsync.mjs
-cd obsidian && npm install && npm run build   # Obsidian plugin (desktop): copy main.js + manifest.json
+cd obsidian && npm install && npm run build   # Obsidian plugin (desktop, engine inside): copy main.js + manifest.json
 ```
 Try it offline with two people, no Telegram: `export TGSYNC_SANDBOX=~/tgs TGSYNC_PROFILE=alice`
 (and `bob` in a second terminal). Code map, sandbox walkthrough, `--json` output for scripts and
