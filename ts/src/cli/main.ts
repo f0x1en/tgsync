@@ -9,33 +9,35 @@
 //   tgsync new DIR      start a vault        tgsync join CODE   join one
 //   tgsync invite / members / accept CODE / remove NAME
 //   tgsync --json ...   one JSON object on stdout, for scripts and plugins
-import { existsSync, readFileSync, readdirSync, renameSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { memberId, shortCode } from "../crypto.ts";
-import { createRequire } from "node:module";
-import { INTERNAL_DIR, normalize } from "../paths.ts";
+import { normalize } from "../paths.ts";
 import { LockBusy, takeLock } from "../node/lock.ts";
-import { decodeInvite, encodeInvite, type Identity } from "../protocol.ts";
+import { decodeInvite, type Identity } from "../protocol.ts";
 import type { Transport } from "../transport.ts";
-import { ENGINE_FILE, LOCAL_FILE, OLD_STATE, Vault, type Incoming, type Report } from "../vault.ts";
+import { Vault, type Incoming, type Report } from "../vault.ts";
 import { NodeFiles } from "../node/files.ts";
 import {
-  checkProfileName, currentProfile, initIdentity, isSandboxLink, listProfiles, loadIdentity, mem, memSave,
+  checkProfileName, currentProfile, isSandboxLink, listProfiles, loadIdentity, mem,
   newSandboxGroup, sandboxRoot,
 } from "../node/home.ts";
-import { DirTransport, PREFIX } from "../node/sandbox.ts";
 import {
-  NotLoggedIn, TelegramTransport, connect, createGroup, exportInvite, interactiveLogin, loadCreds, parseProxy,
-  resolveChat, saveCreds, savedPeer, type Creds, type LoginPrompts,
+  NotLoggedIn, TelegramTransport, connect, createGroup, interactiveLogin, loadCreds, parseProxy,
+  saveCreds, savedPeer, type Creds, type LoginPrompts,
 } from "../node/telegram.ts";
+import {
+  SetupError, cfgPath, checkJoinFolder, createVault, ensureIdentity, findRequest, fromPythonState, inviteLine,
+  joinStep, knownVaults, openGroup, rememberVault, saveCfg, short, vaultAt, type Cfg,
+} from "../node/setup.ts";
 import type { TelegramClient } from "@mtcute/core/client.js";
 
 const VERSION = "0.3.0";
 
-class CliError extends Error {}
+class CliError extends SetupError {}
 
 // ------------------------------------------------------------------ output and --json mode
 // `tgsync --json <command>` prints exactly one JSON object on stdout ({"ok": true, ...} or
@@ -94,79 +96,13 @@ function printReport(r: Report, nothing: string): void {
       !r.skipped.length && !r.problems.length) echo(nothing);
 }
 
-/** Path as you would type it: ~/x instead of /home/you/x. */
-function short(p: string): string {
-  const abs = resolve(p), rel = relative(homedir(), abs);
-  return rel && !rel.startsWith("..") && !rel.startsWith(sep) ? "~/" + rel.split(sep).join("/") : abs;
-}
-
 const expand = (p: string) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
 
 // ------------------------------------------------------------------ vault folders
-interface Cfg { chat: string; chat_peer?: string; profile: string; invite?: string; code?: string; [k: string]: unknown }
-
-const cfgPath = (vault: string) => join(vault, INTERNAL_DIR, "config.json");
-
 function loadCfg(vault: string, cmd: string): Cfg {
   if (!existsSync(cfgPath(vault))) throw notAVault(vault, cmd);
   rememberVault(vault);
   return JSON.parse(readFileSync(cfgPath(vault), "utf8"));
-}
-
-function saveCfg(vault: string, cfg: Cfg): void {
-  mkdirSync(join(vault, INTERNAL_DIR), { recursive: true });
-  writeFileSync(cfgPath(vault), JSON.stringify(cfg, null, 2));
-}
-
-function rememberVault(vault: string): void {
-  const m = mem(), path = resolve(vault), old = m.vaults ?? [];
-  m.vaults = [...old.filter((v) => v !== path && existsSync(cfgPath(v))), path];
-  if (JSON.stringify(m.vaults) !== JSON.stringify(old)) memSave(m);
-}
-
-const knownVaults = () => (mem().vaults ?? []).filter((v) => existsSync(cfgPath(v)));
-
-/** A folder of the old Python CLI keeps its state in `.tgsync/state.db` (SQLite). Write what the
- *  engine needs from it (vault id, what was synced, our last record number) as `.tgsync/state.json`,
- *  the format `Vault.open` already takes over; otherwise every file looks changed on both sides. */
-function fromPythonState(folder: string): void {
-  const db = join(folder, INTERNAL_DIR, "state.db");
-  if (!existsSync(db) || existsSync(join(folder, ENGINE_FILE)) || existsSync(join(folder, OLD_STATE))) return;
-  let sqlite: any;
-  try { sqlite = createRequire(import.meta.url)("node:sqlite"); } catch {
-    throw new CliError(`${short(folder)} was made by the old tgsync; reading it needs Node 22.13 or newer (you have ${process.version})`);
-  }
-  const d = new sqlite.DatabaseSync(db, { readOnly: true });
-  try {
-    const kv = (k: string) => (d.prepare("SELECT v FROM kv WHERE k=?").get(k) as any)?.v ?? null;
-    const cols = (d.prepare("PRAGMA table_info(synced)").all() as any[]).map((c) => c.name);
-    const obs = cols.includes("observed_ns") ? "observed_ns" : "0";
-    const synced: { [p: string]: [string, number, number, number] } = {};
-    // times in ms (nanoseconds do not fit a JavaScript number)
-    for (const r of d.prepare(`SELECT path, sha, size, mtime_ns / 1e6 AS m, ${obs} / 1e6 AS o FROM synced`).all() as any[]) {
-      synced[r.path] = [r.sha, r.size, r.m, r.o];
-    }
-    const authors = Object.fromEntries((d.prepare("SELECT author, seq FROM authors").all() as any[]).map((r) => [r.author, Number(r.seq)]));
-    writeFileSync(join(folder, OLD_STATE), JSON.stringify({ v: 1, vault_id: kv("vault_id"), synced, authors }));
-  } finally {
-    d.close();
-  }
-}
-
-/** -> [vault id, were we removed from it] for a vault folder; [null, false] if none. */
-async function vaultAt(folder: string): Promise<[string | null, boolean]> {
-  fromPythonState(folder);
-  for (const [file, pick] of [[ENGINE_FILE, (d: any) => d.replica], [OLD_STATE, (d: any) => d]] as const) {
-    if (!existsSync(join(folder, file))) continue;
-    try {
-      const d = pick(JSON.parse(readFileSync(join(folder, file), "utf8")));
-      return [d.vault_id ?? null, !!d.removed];
-    } catch {
-      if (file === ENGINE_FILE) throw new CliError(`${short(folder)}/${ENGINE_FILE} is damaged; move it away and run \`tgsync join\` there again`);
-      continue;
-    }
-  }
-  return [null, false];
 }
 
 /** The folder's files, after taking its lock `.tgsync/lock` (held until this process exits). Two runs
@@ -184,13 +120,6 @@ async function lockedFiles(folder: string): Promise<NodeFiles> {
     process.on("exit", release);
   }
   return new NodeFiles(dir);
-}
-
-/** The invite line for a vault we are a member of (never one without a key fingerprint). */
-function inviteFor(v: Vault, link: string, api: [number, string] | null): string {
-  const fp = v.fingerprint();
-  if (v.removed || !v.hasKeys || !v.vaultId || !fp) throw new CliError("This folder has no vault keys (were you removed?), so it cannot invite anyone.");
-  return encodeInvite({ link, vaultId: v.vaultId, fingerprint: fp, api });
 }
 
 function notAVault(vault: string, cmd = "status"): CliError {
@@ -251,24 +180,11 @@ async function connectOrRelogin(profile: string): Promise<TelegramClient> {
 /** The group behind a link, real or sandbox. `tg` is null in the sandbox. */
 async function transportFor(ref: string, tg: TelegramClient | null, peer?: string): Promise<Transport> {
   let tr: Transport;
-  if (isSandboxLink(ref)) {
-    if (sandboxRoot() === null) { // its keys live in the sandbox config dir
-      const base = resolve(ref.slice(PREFIX.length), "..", "..");
-      throw new CliError(`This is a sandbox vault. First run:  export TGSYNC_SANDBOX=${base}`);
-    }
-    if (!existsSync(ref.slice(PREFIX.length))) throw new CliError(`sandbox group ${ref.slice(PREFIX.length)} does not exist (was the sandbox deleted?)`);
-    tr = new DirTransport(ref);
-  } else {
-    if (!tg) throw new CliError("this vault's group is on Telegram, but TGSYNC_SANDBOX is set; unset it first");
-    let chat;
-    try { chat = await resolveChat(tg, ref, peer); } catch (e) {
-      await tg.destroy().catch(() => {}); // else the open connection keeps the process alive
-      throw e;
-    }
-    const t = new TelegramTransport(tg, chat);
-    t.log = err;
-    tr = t;
+  try { tr = await openGroup(ref, tg, peer); } catch (e) {
+    await tg?.destroy().catch(() => {}); // else the open connection keeps the process alive
+    throw e;
   }
+  if (tr instanceof TelegramTransport) tr.log = err;
   OPEN.push(tr);
   return tr;
 }
@@ -320,11 +236,8 @@ async function credsFor(profile: string, proxy?: string, api?: [number, string] 
 
 /** Make sure the profile has a key (and, for Telegram, credentials and a login). Client is null in the sandbox. */
 async function ensureReady(profile: string, api: [number, string] | null, proxy?: string): Promise<[Identity, TelegramClient | null]> {
-  let ident: Identity;
-  try { ident = await loadIdentity(profile); } catch {
-    ident = await initIdentity(profile);
-    info(`Created a new key for account '${profile}'.`);
-  }
+  const [ident, made] = await ensureIdentity(profile);
+  if (made) info(`Created a new key for account '${profile}'.`);
   if (sandboxRoot() !== null) return [ident, null];
   const creds = await credsFor(profile, proxy, api);
   try {
@@ -399,13 +312,10 @@ const COMMANDS: { [name: string]: Command } = {
       else chat = link = (await createGroup(tg, basename(resolve(folder)) || "tgsync vault"))[1];
       const tr = await transportFor(chat, tg); // the group is found by its link from now on
       mkdirSync(folder, { recursive: true });
-      const v = await Vault.create(await lockedFiles(folder), ident, tr, (o.name as string) || await defaultName(tg, profile));
-      const cfg: Cfg = { chat, profile };
-      if (link) cfg.invite = link;
-      if (tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(tr.chat);
-      saveCfg(folder, cfg);
-      rememberVault(folder);
-      const code = link ? inviteFor(v, link, null) : null;
+      const { v, invite: code } = await createVault({
+        folder, files: await lockedFiles(folder), ident, tr, profile, chat, link,
+        name: (o.name as string) || await defaultName(tg, profile),
+      });
       emit({ folder: resolve(folder), profile, vault_id: v.vaultId, invite: code }, () => {
         echo(`Vault ready in ${short(folder)} (account '${profile}').\n`);
         echo(`  cd ${short(folder)}`);
@@ -446,64 +356,29 @@ const COMMANDS: { [name: string]: Command } = {
         folder = await ask("Folder for the vault", "FOLDER", def);
       }
       folder = expand(folder);
-      const [vid] = await vaultAt(folder);
-      const same = existsSync(cfgPath(folder)) && vid === inv.vaultId; // this vault is already here: back in?
-      if (existsSync(cfgPath(folder)) && !same) {
-        throw new CliError(`${short(folder)} already holds a different tgsync vault. Pick an empty or new folder, e.g.:\n` +
-          `  tgsync join <invite line> ~/vaults/${inv.vaultId.slice(0, 6)}`);
-      }
+      const same = await checkJoinFolder(folder, inv.vaultId); // this vault is already here: back in?
       const profile = await chooseProfile((o.profile as string | undefined) ?? saved?.profile);
       const [ident, tg] = await ensureReady(profile, inv.api, o.proxy as string | undefined);
       const tr = await transportFor(inv.link, tg);
-      let rejoin = false;
-      if (same) { // catch up first: this folder may not know yet that we were removed
-        const old = await Vault.open(await lockedFiles(folder), ident, tr);
-        await old.pull();
-        rejoin = old.removed;
-        old.engine.free(); // its state files are moved aside below; this object must not save them again
-        if (!rejoin) throw new CliError(`You already joined this vault in ${short(folder)}. To use it:  cd ${short(folder)} && tgsync`);
-      }
-      const found = await Vault.discover(tr, ident);
-      if (!found.has(inv.vaultId)) {
-        const who = (o.name as string | undefined) || await defaultName(tg, profile);
-        await Vault.postJoinRequest(tr, ident, inv.vaultId, who);
-        const m = mem();
-        (m.joins ??= {})[inv.vaultId] = { code, profile, folder: resolve(folder) };
-        memSave(m);
-        mkdirSync(folder, { recursive: true }); // so the next step's `cd` works
-        const sc = await shortCode(ident.recipient);
-        emit({ state: "waiting", code: sc, id: ident.id, folder: resolve(folder) }, () => {
-          echo(`Join request sent as '${who}'. Files will go in ${short(folder!)}.`);
-          echo(bold(`Tell the person who invited you this code: ${sc}`));
-          echo(`(If they are told the code is taken, give them your full id instead: ${ident.id})`);
-          echo(`They run:  tgsync accept ${sc}`);
-          echo(`Then you run:  cd ${short(folder!)} && tgsync join     (no need to paste the line again; any time, no hurry)`);
+      const dir = folder;
+      const r = await joinStep({
+        folder, files: () => lockedFiles(dir), ident, tr, profile, inv, code, same, notify: say,
+        who: async () => (o.name as string | undefined) || await defaultName(tg, profile),
+      });
+      if (r.state === "waiting") {
+        emit({ state: "waiting", code: r.code, id: r.id, folder: resolve(folder) }, () => {
+          echo(`Join request sent as '${r.who}'. Files will go in ${short(dir)}.`);
+          echo(bold(`Tell the person who invited you this code: ${r.code}`));
+          echo(`(If they are told the code is taken, give them your full id instead: ${r.id})`);
+          echo(`They run:  tgsync accept ${r.code}`);
+          echo(`Then you run:  cd ${short(dir)} && tgsync join     (no need to paste the line again; any time, no hurry)`);
         });
         return;
       }
-      if (found.get(inv.vaultId)!.replace(/ /g, "") !== inv.fingerprint.replace(/ /g, "")) {
-        throw new CliError("KEY FINGERPRINT MISMATCH between the invite and the vault - refusing to join");
-      }
-      if (rejoin) { // start the vault state fresh; the old one is kept next to it, files stay
-        const stamp = Math.floor(Date.now() / 1000);
-        for (const f of [ENGINE_FILE, LOCAL_FILE, OLD_STATE]) {
-          const st = join(folder, f);
-          if (existsSync(st)) renameSync(st, `${st}.removed-${stamp}`);
-        }
-      }
-      mkdirSync(folder, { recursive: true });
-      const v = await Vault.join(await lockedFiles(folder), ident, tr, inv.vaultId);
-      v.notify = say;
-      saveCfg(folder, { chat: inv.link, chat_peer: tr instanceof TelegramTransport ? savedPeer(tr.chat) : undefined,
-                        profile, invite: inv.link, code });
-      rememberVault(folder);
-      const m = mem();
-      if (m.joins?.[inv.vaultId]) { delete m.joins[inv.vaultId]; memSave(m); }
-      const rep = await v.pullChanges();
-      emit({ state: "joined", folder: resolve(folder), report: rep }, () => {
-        echo(`Joined. Files go in ${short(folder!)}`);
-        printReport(rep, "No files in the vault yet.");
-        echo(`\nFrom now on, in ${short(folder!)}:  tgsync (what changed)   tgsync pull   tgsync push`);
+      emit({ state: "joined", folder: resolve(folder), report: r.report }, () => {
+        echo(`Joined. Files go in ${short(dir)}`);
+        printReport(r.report, "No files in the vault yet.");
+        echo(`\nFrom now on, in ${short(dir)}:  tgsync (what changed)   tgsync pull   tgsync push`);
       });
     },
   },
@@ -514,11 +389,6 @@ const COMMANDS: { [name: string]: Command } = {
     options: { link: { type: "string" }, "include-api": { type: "boolean" }, ...VAULT_OPT },
     async run(_a, o) {
       const [v, cfg] = await openVault(o.vault as string, "invite");
-      await v.pull();
-      const tr = v.transport;
-      const use = (o.link as string | undefined) ?? cfg.invite ??
-        (tr instanceof TelegramTransport ? await exportInvite(tr.tg, tr.chat) : String(cfg.chat));
-      if (cfg.invite !== use) { cfg.invite = use; saveCfg(o.vault as string, cfg); }
       let api: [number, string] | null = null;
       if (o["include-api"]) {
         const creds = loadCreds(cfg.profile ?? "default");
@@ -526,7 +396,7 @@ const COMMANDS: { [name: string]: Command } = {
         api = [creds.api_id, creds.api_hash];
         info(yellow("This code contains your api_id/api_hash: only share it with people you trust."));
       }
-      const code = inviteFor(v, use, api);
+      const code = await inviteLine(v, o.vault as string, cfg, o.link as string | undefined, api);
       emit({ invite: code }, () => {
         echo(`\n  tgsync join ${code}\n`);
         echo("They read you a short code; then:  tgsync accept <code>");
@@ -568,19 +438,7 @@ const COMMANDS: { [name: string]: Command } = {
       if (!code) throw new CliError("Missing argument 'CODE'.");
       const [v] = await openVault(o.vault as string, "accept");
       const want = code.trim().toLowerCase();
-      const hits = [];
-      for (const r of await v.pendingRequests()) {
-        if (await shortCode(r.recipient) === want || await memberId(r.recipient) === want) hits.push(r);
-      }
-      if (!hits.length) throw new CliError(`nobody is waiting with code '${code}' (see \`tgsync members\`)`);
-      // Codes are short: someone watching the group could make a key with the same code as a real
-      // request. Two requests with one code means one is fake; accept neither.
-      if (hits.length > 1) {
-        const ids = await Promise.all(hits.map(async (r) => `${r.name || "no name"}: ${await memberId(r.recipient)}`));
-        throw new CliError(`${hits.length} people are waiting with code '${code}' (${ids.join("; ")}). ` +
-          "One of them may be an impostor, so none was accepted. Ask your friend for the full id that `tgsync join` printed, then run:  tgsync accept <id>");
-      }
-      const hit = hits[0];
+      const hit = await findRequest(v, code);
       await v.acceptRequest(hit, o.name as string | undefined);
       const who = (o.name as string | undefined) || hit.name || want;
       emit({ accepted: who }, () => echo(`Accepted ${who}. Tell them to run:  tgsync join`));
@@ -837,7 +695,7 @@ export async function main(argv: string[]): Promise<number> {
     const msg = e instanceof Error ? e.message : String(e);
     if (JSON_MODE) echo(JSON.stringify({ ok: false, error: msg }));
     else err(`Error: ${msg}`);
-    if (!(e instanceof CliError) && process.env.TGSYNC_DEBUG && e instanceof Error) err(e.stack ?? "");
+    if (!(e instanceof SetupError) && process.env.TGSYNC_DEBUG && e instanceof Error) err(e.stack ?? "");
     return 1;
   } finally {
     if (lines) process.stdin.destroy(); // a question left stdin open
