@@ -99,14 +99,37 @@ function unreachable(profile: string, creds: Creds, e: unknown): TransportError 
     "add --proxy socks5://127.0.0.1:PORT to `tgsync new` / `tgsync join`.");
 }
 
-export interface LoginPrompts { phone(): Promise<string>; code(): Promise<string>; password(): Promise<string> }
+/** `code(where)`: `where` says where Telegram sent the login code (codeWhere). */
+export interface LoginPrompts { phone(): Promise<string>; code(where: string): Promise<string>; password(): Promise<string> }
+
+/** Where Telegram sent the login code, in words, from its delivery type. */
+export function codeWhere(type: string): string {
+  switch (type) {
+    case "app": return "Telegram sent it as a message from \"Telegram\" in your Telegram app (on your phone or another device where you are logged in)";
+    case "sms": case "sms_word": case "sms_phrase": case "firebase": return "Telegram sent it by SMS to your phone";
+    case "call": return "Telegram is calling your phone and will read it out";
+    case "flash_call": case "missed_call": return "Telegram is calling your phone: the code is the last digits of the calling number";
+    case "email": return "Telegram sent it to your login email address";
+    case "fragment": return "Telegram sent it to your number on fragment.com";
+    default: return "Look in your Telegram app, your SMS and your email";
+  }
+}
 
 /** Log in on the terminal (phone, code, 2FA password) and save the session. Returns "Name (@user)". */
 export async function interactiveLogin(profile: string, creds: Creds, ask: LoginPrompts): Promise<string> {
   const tg = makeClient(creds);
   try {
-    const me = await tg.start({ phone: ask.phone, code: ask.code, password: ask.password,
-                                invalidCodeCallback: () => {} }).catch((e) => { throw wrapConnect(profile, creds, e); });
+    let where = "";
+    const me = await tg.start({
+      phone: ask.phone, code: () => ask.code(where), password: ask.password, invalidCodeCallback: () => {},
+      codeSentCallback: (sent) => {
+        if (sent.type === "email_required") {
+          throw new TransportError("Telegram wants this account to have a login email first. Open Telegram on your phone, " +
+            "set one up (Settings → Privacy and Security → Login Email), then log in here again.");
+        }
+        where = codeWhere(sent.type);
+      },
+    }).catch((e) => { throw wrapConnect(profile, creds, e); });
     writePrivate(sessionPath(profile), await tg.exportSession());
     return `${me.firstName ?? ""} (@${me.username ?? me.id})`;
   } finally {

@@ -28,7 +28,7 @@ export function ask(app: App, title: string, desc: string, secret = false): Prom
 
 export const loginPrompts = (app: App): LoginPrompts => ({
   phone: () => ask(app, "Log in to Telegram", "Your phone number, with the country code (for example +491701234567)."),
-  code: () => ask(app, "Log in to Telegram", "Type the login code Telegram just sent you (look in your Telegram app)."),
+  code: (where) => ask(app, "Log in to Telegram", `Type the login code. ${where}.`),
   password: () => ask(app, "Log in to Telegram", "Your account has two-step verification. Type its password.", true),
 });
 

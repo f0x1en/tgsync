@@ -161,7 +161,7 @@ async function hidden(question: string): Promise<string> {
 
 const LOGIN: LoginPrompts = {
   phone: () => ask("Your phone number (international format, e.g. +491701234567)", "a terminal"),
-  code: () => ask("The login code Telegram just sent you (in the Telegram app)", "a terminal"),
+  code: (where) => ask(`The login code (${where})`, "a terminal"),
   password: () => hidden("Your Telegram 2FA password"),
 };
 
