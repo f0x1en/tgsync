@@ -50,6 +50,9 @@ with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the 
 downloads old versions from the group (notes: from the merged history), so REV is a version id like `812.0` (record
 message, entry). `make live` runs the live test with it (a copy in `ts/live/`, since `npm test` rebuilds `dist/`). Obsidian plugin: `obsidian/` (`make plugin`); it runs the engine itself through `ts/src/node/host.ts` (one
 Telegram connection; the vault opened under the folder lock for each sync) and syncs automatically. Run `npm install` once in each.
+Setup in Obsidian (log in, start, join, invite, let in) is `obsidian/src/setup.ts` over `ts/src/node/setup.ts` (shared with the CLI);
+the windows are `obsidian/src/ui.ts`. The shared Telegram API key is built in from `TGSYNC_API_ID`/`TGSYNC_API_HASH` at build time
+and never committed: a build without them asks users for their own key (Advanced settings).
 
 Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this
 machine with the Rust core (chunks sealed with the platform's AES-GCM): 1 GB push 83 MB/s, pull 151 MB/s, peak

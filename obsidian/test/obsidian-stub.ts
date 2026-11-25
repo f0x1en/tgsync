@@ -13,6 +13,7 @@ class El {
   onClickEvent(_f: () => void) {}
   empty() {}
   createEl() { return new El(); }
+  createDiv() { return new El(); }
 }
 export class Plugin {
   bars: El[] = []; commands: { id: string; callback: () => unknown }[] = [];
@@ -29,5 +30,7 @@ export class Plugin {
   async saveData(d: unknown) { this.data = d; }
 }
 export class PluginSettingTab { containerEl = new El(); constructor(public app: any, public plugin: any) {} }
-export class Setting { constructor(_el: unknown) {} setName() { return this; } setDesc() { return this; } addText() { return this; } addToggle() { return this; } }
+export class Setting { constructor(_el: unknown) {} setName() { return this; } setDesc() { return this; } addText() { return this; } addToggle() { return this; } addButton() { return this; } }
+export class Modal { titleEl = new El(); contentEl = new El(); constructor(public app: any) {} open() {} close() {} onClose() {} }
+export type ButtonComponent = any;
 export type App = any;

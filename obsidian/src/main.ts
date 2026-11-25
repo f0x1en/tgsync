@@ -3,29 +3,37 @@
 // Obsidian Sync. The sync engine runs inside the plugin (no separate program). It uploads your
 // changes a few seconds after you stop typing, and downloads others' changes every minute, when
 // Obsidian opens and when you come back to it. Notes that two people edit merge; other files keep both.
-import { App, FileSystemAdapter, MarkdownView, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
 import { VaultHost } from "../../ts/src/node/host.ts";
 import { LockBusy } from "../../ts/src/node/lock.ts";
+import type { JoinRequest } from "../../ts/src/protocol.ts";
 import { OfflineError } from "../../ts/src/transport.ts";
 import type { Report } from "../../ts/src/vault.ts";
+import { VaultSetup, type Advanced } from "./setup.ts";
+import { AcceptModal, TgsyncSettingTab } from "./ui.ts";
 
-interface Settings {
+interface Settings extends Advanced {
   auto: boolean; // sync automatically
 }
 
-const DEFAULTS: Settings = { auto: true };
+const DEFAULTS: Settings = { auto: true, apiId: "", apiHash: "", proxy: "" };
 
 /** What the status bar shows. */
-type State = "synced" | "syncing" | "offline" | "paused" | "not set up" | "error";
+type State = "synced" | "syncing" | "offline" | "paused" | "not set up" | "waiting" | "error";
 
 export default class TgsyncPlugin extends Plugin {
   settings: Settings = { ...DEFAULTS };
   host: VaultHost | null = null;
+  setup!: VaultSetup;
   state: State = "synced";
   lastError = "";
   /** ms to wait after the last edit before uploading, and between downloads. */
   editDelay = 5_000;
   pollEvery = 60_000;
+  /** ms between looks for people asking to join (each look reads the group's join messages). */
+  askEvery = 10 * 60_000;
+  private lastAsk = 0;
+  private asked = new Set<string>(); // requests already shown this session
   private bar!: HTMLElement;
   private running: Promise<void> | null = null;
   private again = false;
@@ -41,11 +49,25 @@ export default class TgsyncPlugin extends Plugin {
     this.addCommand({ id: "sync", name: "Sync now", callback: () => this.sync(true) });
     this.addSettingTab(new TgsyncSettingTab(this.app, this));
     this.host = new VaultHost(this.folder());
+    this.setup = new VaultSetup(this.folder(), this.host);
     for (const ev of ["modify", "create", "delete", "rename"] as const) {
       this.registerEvent(this.app.vault.on(ev as "modify", () => this.edited()));
     }
     this.registerDomEvent(window, "focus", () => this.autoSync());
-    this.app.workspace.onLayoutReady(() => { this.schedule(); this.autoSync(); });
+    this.app.workspace.onLayoutReady(() => { this.schedule(); this.autoSync(); void this.firstRun(); });
+  }
+
+  /** Not set up yet: say how, once per start. */
+  private async firstRun(): Promise<void> {
+    if (this.host?.cfg() || await this.setup.waiting()) return;
+    const n: any = new Notice("tgsync: click here to set up syncing for this vault.", 15_000);
+    n.noticeEl?.addEventListener("click", () => this.openSettings());
+  }
+
+  openSettings(): void {
+    const s = (this.app as any).setting;
+    s?.open();
+    s?.openTabById(this.manifest?.id ?? "tgsync");
   }
 
   async onunload(): Promise<void> {
@@ -85,6 +107,7 @@ export default class TgsyncPlugin extends Plugin {
   }
 
   private clickBar(): void {
+    if (this.state === "not set up" || this.state === "waiting") { this.openSettings(); return; }
     if (this.state === "error" || this.state === "offline") new Notice(`tgsync: ${this.lastError}`, 10_000);
     void this.sync(true);
   }
@@ -93,7 +116,7 @@ export default class TgsyncPlugin extends Plugin {
     this.state = state;
     const text: Record<State, string> = {
       synced: "✓ Synced", syncing: "↻ Syncing…", offline: "Offline", paused: "Sync paused",
-      "not set up": "tgsync: not set up", error: "⚠ Sync problem",
+      "not set up": "tgsync: not set up", waiting: "tgsync: waiting to be let in", error: "⚠ Sync problem",
     };
     this.bar.setText(text[state]);
     this.bar.setAttr?.("aria-label", state === "error" || state === "offline" ? this.lastError : "tgsync: click to sync now");
@@ -112,23 +135,64 @@ export default class TgsyncPlugin extends Plugin {
   }
 
   private async syncOnce(loud: boolean): Promise<void> {
-    if (!this.host?.cfg()) {
-      this.show("not set up");
-      if (loud) new Notice("tgsync: this vault is not set up for syncing yet (see the tgsync settings)");
-      return;
-    }
+    if (!this.host?.cfg() && !(await this.finishJoin(loud))) return;
     this.show("syncing");
     try {
       await this.saveEditors();
-      const [pushed, pulled] = await this.host.use(async (v) => [await v.pushChanges(), await v.pullChanges()] as const);
+      const [pushed, pulled] = await this.host!.use(async (v) => [await v.pushChanges(), await v.pullChanges()] as const);
       this.tell(pushed, pulled, loud);
       this.show(this.settings.auto ? "synced" : "paused");
+      await this.lookForRequests();
     } catch (e) {
       if (e instanceof LockBusy) { this.show(this.settings.auto ? "synced" : "paused"); this.again = false; return; } // a terminal run is busy: next time
       this.lastError = (e as Error).message || String(e);
       this.show(e instanceof OfflineError || /reach Telegram/i.test(this.lastError) ? "offline" : "error");
       if (loud) new Notice(`tgsync: ${this.lastError}`, 10_000);
     }
+  }
+
+  /** Not set up: if this vault asked to join, see whether we were let in (then download). -> set up now? */
+  async finishJoin(loud: boolean): Promise<boolean> {
+    if (this.host?.cfg()) return true;
+    const w = await this.setup.waiting();
+    if (!w) {
+      this.show("not set up");
+      if (loud) new Notice("tgsync: this vault is not set up for syncing yet (see the tgsync settings)");
+      return false;
+    }
+    this.show("syncing");
+    try {
+      if (await this.setup.join()) {
+        this.show("waiting");
+        if (loud) new Notice(`tgsync: not let in yet. Tell the person who invited you this code: ${w.code}`);
+        return false;
+      }
+    } catch (e) {
+      if (e instanceof LockBusy) { this.show("waiting"); return false; }
+      this.lastError = (e as Error).message || String(e);
+      this.show(e instanceof OfflineError || /reach Telegram/i.test(this.lastError) ? "offline" : "error");
+      if (loud) new Notice(`tgsync: ${this.lastError}`, 10_000);
+      return false;
+    }
+    new Notice("tgsync: you were let in. This vault is now in sync.");
+    return true;
+  }
+
+  /** Admins: someone asks to join? Ask for their code (each request once per session). */
+  private async lookForRequests(): Promise<void> {
+    if (Date.now() - this.lastAsk < this.askEvery) return;
+    this.lastAsk = Date.now();
+    let reqs: JoinRequest[];
+    try { reqs = await this.host!.use(async (v) => (v.isAdmin ? v.pendingRequests() : [])); } catch { return; } // next time
+    for (const r of reqs) {
+      if (this.asked.has(r.recipient)) continue;
+      this.asked.add(r.recipient);
+      this.askAccept(r);
+    }
+  }
+
+  askAccept(r: JoinRequest): void {
+    new AcceptModal(this.app, this, r).open();
   }
 
   /** Only what needs the user's attention; quiet otherwise (like Obsidian Sync). */
@@ -152,27 +216,5 @@ export default class TgsyncPlugin extends Plugin {
 
   async save(): Promise<void> {
     await this.saveData(this.settings);
-  }
-}
-
-class TgsyncSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: TgsyncPlugin) {
-    super(app, plugin);
-  }
-
-  display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
-    if (!this.plugin.host?.cfg()) {
-      containerEl.createEl("p", { text: "This vault is not set up for syncing yet. For now, set it up with `tgsync new` or `tgsync join` in a terminal." });
-    }
-    new Setting(containerEl)
-      .setName("Sync automatically")
-      .setDesc("Uploads your changes a few seconds after you stop typing, and downloads others' changes every minute and when you come back to Obsidian.")
-      .addToggle((t) => t.setValue(this.plugin.settings.auto).onChange(async (v) => {
-        this.plugin.settings.auto = v;
-        await this.plugin.save();
-        this.plugin.schedule();
-      }));
   }
 }

@@ -63,6 +63,9 @@ export function parseProxy(url: string | null | undefined) {
 // ------------------------------------------------------------------ client and login
 const sessionPath = (profile: string) => join(appDir(profile), "mtcute.session");
 
+/** Has this profile an API key and a saved Telegram login? (The login may still have been revoked.) */
+export const hasLogin = (profile: string) => existsSync(sessionPath(profile)) && existsSync(credsPath(profile));
+
 /** mtcute's crypto, with its wasm inside our bundle instead of looked up in node_modules (one-file CLI). */
 class Crypto extends NodeCryptoProvider {
   override async initialize(): Promise<void> {

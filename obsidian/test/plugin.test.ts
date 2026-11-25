@@ -121,3 +121,51 @@ test("not a vault, and sync switched off", async () => {
   assert.equal(q.bars[0].text, "Sync paused");
   await q.onunload();
 });
+
+test("start a vault in Obsidian; a friend joins and is let in only with their code", async () => {
+  const C = mkdtempSync(join(tmpdir(), "tgsync-carol-")), D = join(tmp, "dave");
+  writeFileSync(join(C, "welcome.md"), "hi from carol\n");
+  const p = await start(C);
+  await p.setup.create();
+  assert.ok(p.host.cfg(), "the vault is set up");
+  await p.sync(false);
+  const invite = await p.setup.invite();
+  const code = cli("dave", "join", invite, D).code;
+  const asked: any[] = [];
+  p.askAccept = (r: any) => asked.push(r);
+  p.lastAsk = 0;
+  await p.sync(false);
+  assert.equal(asked.length, 1, "the owner is asked about the request");
+  await assert.rejects(p.setup.accept(asked[0], "zz99-zz99"), /not .* code/);
+  assert.equal(cli("dave", "join").state, "waiting", "a wrong code lets nobody in");
+  await p.setup.accept(asked[0], code);
+  assert.equal(cli("dave", "join").state, "joined");
+  assert.equal(readFileSync(join(D, "welcome.md"), "utf8"), "hi from carol\n");
+  p.lastAsk = 0;
+  asked.length = 0;
+  await p.sync(false);
+  assert.equal(asked.length, 0, "nobody left waiting");
+  await p.onunload();
+});
+
+test("join from Obsidian: shows the code, then joins by itself once let in", async () => {
+  const E = mkdtempSync(join(tmpdir(), "tgsync-erin-"));
+  writeFileSync(join(A, "for-erin.md"), "hello erin\n");
+  cli("alice", "push", "-C", A);
+  const p = await start(E);
+  const w = await p.setup.join(cli("alice", "invite", "-C", A).invite);
+  assert.ok(w?.code, "waiting, with a code to tell the owner");
+  await p.sync(false);
+  assert.equal(p.state, "waiting");
+  assert.deepEqual(await p.setup.waiting(), w);
+  cli("alice", "accept", w!.code, "-C", A);
+  await p.sync(false);
+  assert.equal(p.state, "synced");
+  assert.equal(readFileSync(join(E, "for-erin.md"), "utf8"), "hello erin\n");
+  assert.equal(await p.setup.waiting(), null);
+  writeFileSync(join(E, "from-erin.md"), "hi\n");
+  await p.sync(false);
+  cli("alice", "pull", "-C", A);
+  assert.equal(readFileSync(join(A, "from-erin.md"), "utf8"), "hi\n");
+  await p.onunload();
+});
