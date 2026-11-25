@@ -131,6 +131,15 @@ export class TgsyncSettingTab extends PluginSettingTab {
         p.settings[key] = v.trim();
         await p.save();
       }));
+    if (!p.host?.cfg()) {
+      new Setting(el).setName("Account")
+        .setDesc("Which tgsync account this vault uses on this computer. Leave empty for the usual one; " +
+                 "give another name (for example b) to use a second Telegram account. Set it before you log in and start or join.")
+        .addText((t) => {
+          t.setPlaceholder(s.profile()).setValue(p.settings.account).onChange(async (v) => { p.settings.account = v.trim(); await p.save(); });
+          t.inputEl.addEventListener("change", again); // shows that account's login state
+        });
+    }
     field("Own Telegram API id", "Optional: use your own API key from my.telegram.org → API development tools. Used at the next log in.", "apiId", "1234567");
     field("Own Telegram API hash", "Goes with the API id.", "apiHash", "0123456789abcdef…");
     field("Proxy", "If Telegram is blocked where you are. Used at the next log in.", "proxy", "socks5://127.0.0.1:1080");

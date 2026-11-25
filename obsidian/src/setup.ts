@@ -4,7 +4,7 @@
 import { resolve } from "node:path";
 import { memberId, shortCode } from "../../ts/src/crypto.ts";
 import { NodeFiles } from "../../ts/src/node/files.ts";
-import { currentProfile, mem, newSandboxGroup, sandboxRoot } from "../../ts/src/node/home.ts";
+import { checkProfileName, currentProfile, mem, newSandboxGroup, sandboxRoot } from "../../ts/src/node/home.ts";
 import type { VaultHost } from "../../ts/src/node/host.ts";
 import { takeLock } from "../../ts/src/node/lock.ts";
 import {
@@ -22,18 +22,20 @@ declare const TGSYNC_API: [number, string] | null | undefined; // set by esbuild
 export const SHARED_API: [number, string] | null = typeof TGSYNC_API !== "undefined" ? TGSYNC_API : null;
 
 /** "Use my own" values from the plugin's Advanced settings (empty: use the shared key / no proxy). */
-export interface Advanced { apiId: string; apiHash: string; proxy: string }
+export interface Advanced { apiId: string; apiHash: string; proxy: string; account: string }
 
 export interface Waiting { code: string; id: string }
 
 export class VaultSetup {
-  constructor(readonly dir: string, private host: VaultHost) {}
+  /** `account`: the tgsync account named in this vault's settings ("" = the usual one). */
+  constructor(readonly dir: string, private host: VaultHost, private account: () => string = () => "") {}
 
   private get sandbox(): boolean { return sandboxRoot() !== null; }
 
   /** The tgsync account this vault uses (or will use). */
   profile(): string {
-    return this.host.cfg()?.profile ?? this.joinEntry()?.profile ?? currentProfile();
+    const named = this.account().trim();
+    return this.host.cfg()?.profile ?? this.joinEntry()?.profile ?? (named ? checkProfileName(named) : currentProfile());
   }
 
   loggedIn(): boolean { return this.sandbox || hasLogin(this.profile()); }

@@ -16,7 +16,7 @@ interface Settings extends Advanced {
   auto: boolean; // sync automatically
 }
 
-const DEFAULTS: Settings = { auto: true, apiId: "", apiHash: "", proxy: "" };
+const DEFAULTS: Settings = { auto: true, apiId: "", apiHash: "", proxy: "", account: "" };
 
 /** What the status bar shows. */
 type State = "synced" | "syncing" | "offline" | "paused" | "not set up" | "waiting" | "error";
@@ -49,7 +49,7 @@ export default class TgsyncPlugin extends Plugin {
     this.addCommand({ id: "sync", name: "Sync now", callback: () => this.sync(true) });
     this.addSettingTab(new TgsyncSettingTab(this.app, this));
     this.host = new VaultHost(this.folder());
-    this.setup = new VaultSetup(this.folder(), this.host);
+    this.setup = new VaultSetup(this.folder(), this.host, () => this.settings.account);
     for (const ev of ["modify", "create", "delete", "rename"] as const) {
       this.registerEvent(this.app.vault.on(ev as "modify", () => this.edited()));
     }

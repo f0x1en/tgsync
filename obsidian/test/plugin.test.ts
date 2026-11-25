@@ -169,3 +169,12 @@ test("join from Obsidian: shows the code, then joins by itself once let in", asy
   assert.equal(readFileSync(join(A, "from-erin.md"), "utf8"), "hi\n");
   await p.onunload();
 });
+
+test("an account named in the vault's settings is used for setup", async () => {
+  const F = mkdtempSync(join(tmpdir(), "tgsync-frank-"));
+  const p = await start(F, { account: "frank" });
+  assert.equal(p.setup.profile(), "frank");
+  await p.setup.create();
+  assert.equal(p.host.cfg().profile, "frank");
+  await p.onunload();
+});
