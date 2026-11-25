@@ -231,12 +231,12 @@ export class Vault {
       throw new VaultError(v.removed ? "you were removed from that vault"
         : "you are not a member of that vault (ask a member to approve you)");
     }
-    await v.initFiles();
+    await v.initFiles(false); // the vault's own .tgsyncignore comes down with the files
     return v;
   }
 
-  private async initFiles(): Promise<void> {
-    if (!await this.files.stat(".tgsyncignore")) {
+  private async initFiles(template = true): Promise<void> {
+    if (template && !await this.files.stat(".tgsyncignore")) {
       await this.files.write(".tgsyncignore", enc.encode("# extra ignore patterns for this vault (gitignore syntax)\n"), Date.now());
     }
     await this.saveEngine();

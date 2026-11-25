@@ -65,11 +65,14 @@ test("sync downloads others' changes and uploads yours; quiet unless asked", asy
 
 test("an edit is uploaded by itself a moment later", async () => {
   const p = await start(B);
+  const started: Promise<void>[] = [];
+  const sync = p.sync.bind(p);
+  p.sync = (loud: boolean) => { const r = sync(loud); started.push(r); return r; };
   writeFileSync(join(B, "typed.md"), "typed in Obsidian\n");
   for (const h of handlers) h(); // Obsidian reports the change
   await new Promise((r) => setTimeout(r, 150));
-  assert.ok(p.running, "the edit started a sync by itself");
-  await p.running;
+  assert.ok(started.length > 0, "the edit started a sync by itself");
+  await Promise.all(started);
   cli("alice", "pull", "-C", A);
   assert.equal(readFileSync(join(A, "typed.md"), "utf8"), "typed in Obsidian\n");
   await p.onunload();

@@ -62,6 +62,24 @@ test("ignore rules match Python's", () => {
   for (const c of V.ignore.cases) assert.equal(ig(c.path), c.ignored, c.path);
 });
 
+test("joining a vault whose .tgsyncignore was edited: no false conflict", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "tgsync-ts-"));
+  const ch = new FakeChannel();
+  const a = new Peer(join(tmp, "alice")), b = new Peer(join(tmp, "bob"));
+  const ib = await newIdentity();
+  await mkdir(a.root); await mkdir(b.root);
+  a.vault = await Vault.create(new NodeFiles(a.root), await newIdentity(), ch.transport(), "alice");
+  await a.write(".tgsyncignore", "private/\n");
+  await a.vault.pushChanges();
+  await a.vault.addMember(ib.recipient, "bob", w.signerOf(ib.signing));
+  b.vault = await Vault.join(new NodeFiles(b.root), ib, ch.transport(), a.vault.vaultId!);
+  const r = await b.vault.pullChanges();
+  assert.deepEqual(r.conflicts, []);
+  assert.deepEqual(r.skipped, []);
+  assert.equal(await readFile(join(b.root, ".tgsyncignore"), "utf8"), "private/\n");
+  await rm(tmp, { recursive: true, force: true });
+});
+
 test("roundtrip, small files batched into one message, big file in chunks", async () => {
   const { a, b, ch, cleanup } = await pair();
   for (let i = 0; i < 50; i++) await a.write(`n/${i}.md`, `note ${i}`);
@@ -520,7 +538,6 @@ test("pushing with nothing changed reads no file; nor do files the last pull wro
   const na = count(a);
   await a.vault.pushChanges();
   assert.equal(na.reads, 0, "an idle push read files");
-  await utimes(join(b.root, ".tgsyncignore"), past, past); // made at join, same as alice's: not rewritten
   await b.vault.pullChanges();
   const nb = count(b);
   await b.vault.pushChanges();
