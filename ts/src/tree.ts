@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Deterministic replay of log entries into the file tree (PROTOCOL.md section 9).
-// Same rules as src/tgsync/tree.py: every client reaches the same tree and conflict names.
+// Every client reaches the same tree and conflict names.
 import { conflictName, normalize } from "./paths.ts";
 
 export const DIR = "dir"; // sha of a folder node

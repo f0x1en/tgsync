@@ -56,8 +56,6 @@ jobs:
         with: { name: tgsync-wasm, path: core }
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
       - run: npm ci
         working-directory: ts
       - run: npm run typecheck && npm test
@@ -77,11 +75,6 @@ jobs:
           path: |
             obsidian/main.js
             obsidian/manifest.json
-      - name: sandbox tests (two Node CLI processes)
-        shell: bash
-        run: |
-          python -m pip install pytest
-          pytest -q tests/test_sandbox.py
 
   lint:
     runs-on: ubuntu-latest

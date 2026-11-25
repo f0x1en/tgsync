@@ -46,7 +46,7 @@ export function conflictName(path: string, author: string, ts: number): string {
   return dir ? `${dir}/${name}` : name;
 }
 
-/** Built-in ignore rules; must equal DEFAULT_IGNORE in src/tgsync/paths.py (checked by the vector tests). */
+/** Built-in ignore rules; checked against spec/vectors.json. */
 export const DEFAULT_IGNORE = "\n# tgsync ignore rules (gitignore syntax)\n.tgsync/\n.git/\n*.tgsync-tmp\n.DS_Store\nThumbs.db\ndesktop.ini\n# editor scratch files (vim/nvim swap + backup, emacs locks/autosaves, nvim's write probe)\n*.swp\n*.swo\n*.swx\n*~\n.#*\n\\#*#\n4913\n.netrwhist\n# Obsidian: per-device UI state churns constantly and conflicts for no reason\n.obsidian/workspace.json\n.obsidian/workspaces.json\n.obsidian/cache\n.trash/\n# the tgsync plugin's own settings are per device (program path)\n.obsidian/plugins/tgsync/data.json\n";
 
 /** gitignore matcher for the built-in rules plus a vault's .tgsyncignore text. Folders end with "/". */

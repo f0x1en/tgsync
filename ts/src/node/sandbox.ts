@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Sandbox group: a folder plays the Telegram group (same format as src/tgsync/sandbox.py, so the
-// Python and TypeScript CLIs can share one). Each message is a file `<id, 8 digits>.<kind>`.
+// Sandbox group: a folder plays the Telegram group (same format the old
+// Python CLI used). Each message is a file `<id, 8 digits>.<kind>`.
 import { randomBytes } from "node:crypto";
 import { link, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";

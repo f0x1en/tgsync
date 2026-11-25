@@ -1,9 +1,9 @@
 # tgsync protocol, versions 1 and 2
 
-What two tgsync programs must agree on to share a vault. Sections 1-10 are version 1 (the Python
-CLI in `src/tgsync/` writes it). Sections 11-13 add version 2: admins, signed records, notes merged
+What two tgsync programs must agree on to share a vault. Sections 1-10 are version 1 (the original
+Python CLI wrote it). Sections 11-13 add version 2: admins, signed records, notes merged
 with Loro; the Rust core (`core/`) is its reference and also reads and writes version 1 vaults
-(section 14). `spec/vectors.json` holds fixed examples; the Python, TypeScript and Rust code all
+(section 14). `spec/vectors.json` holds fixed examples; the TypeScript and Rust code
 test against them. `spec/vectors_v2.json` is a fixed v2 log with the state each
 person must reach from it (regenerate with `cargo run -p tgsync-sim --bin make_vectors_v2`).
 
@@ -170,7 +170,7 @@ Windows; Python and the TypeScript engine compare them exactly.)
 `.xxx` of the file name (none if no dot, and a leading dot does not count, as Python `splitext`).
 If that name is taken (lowercase comparison, section 9), use `author[:5] + "2"`, then `"3"`, ... in place of `author[:6]`.
 
-**Ignore rules** (gitignore syntax, not synced): the built-in list in `src/tgsync/paths.py`
+**Ignore rules** (gitignore syntax, not synced): the built-in list in `ts/src/paths.ts`
 (`DEFAULT_IGNORE`) plus the vault's `.tgsyncignore` file. `.tgsyncignore` itself is synced.
 
 ## 9. Replay: turning the log into the file tree

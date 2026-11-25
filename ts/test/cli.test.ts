@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Node CLI (dist/tgsync.mjs, built by `npm test`) on a sandbox group: restore from the group,
-// log, bare `tgsync`. The full two-person story is tests/test_sandbox.py with TGSYNC_CLI (`make ts`).
+// log, bare `tgsync`. The full two-person story is sandbox.test.ts.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

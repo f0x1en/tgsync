@@ -62,7 +62,7 @@ note at the same time:
   removed and added back stuck with old keys.
 * Fixed test vectors (`spec/vectors.json`, from the original Python version) checked by the TypeScript and Rust code; unit
   tests for the core; the Node CLI's tests; two-process sandbox tests through `--json`; a live
-  two-account test on real Telegram (`scripts/live_e2e.py`); CI on Linux, Windows and macOS, plus
+  two-account test on real Telegram (`make live`); CI on Linux, Windows and macOS, plus
   a WebAssembly build smoke test.
 
 Measured on one laptop core (`cargo run --release -p tgsync-sim --bin bench`): sealing/opening
@@ -174,8 +174,7 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 
 ## Development
 
-`make check` runs everything CI runs except the long simulation (needs Rust, Node, and Python with
-pytest for the two-process sandbox tests).
+`make check` runs everything CI runs except the long simulation (needs Rust and Node).
 
 Try the new CLI without building anything: every CI run on branch `rust-core` uploads `tgsync-cli`
 (one file, the core embedded; needs Node 20+) and `tgsync-obsidian` (the plugin's `main.js` +

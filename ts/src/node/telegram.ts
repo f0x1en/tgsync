@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Telegram through mtcute (MTProto, your own user account). Same behaviour as src/tgsync/telegram.py:
-// files are documents with a `tgs1:<kind>` caption, sends are paced, flood waits slow us down.
+// Telegram through mtcute (MTProto, your own user account). Files are documents with a `tgs1:<kind>` caption, sends are paced, flood waits slow us down.
 // The login is a session string in the profile folder (`mtcute.session`); nothing native.
 import { BaseTelegramClient, TelegramClient } from "@mtcute/core/client.js";
 import { InputMedia, Long, MemoryStorage, MtArgumentError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";

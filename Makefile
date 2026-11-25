@@ -1,5 +1,4 @@
-# Dev shortcuts. Once: `npm install` in ts/ and obsidian/; Python with pytest for the sandbox and live tests.
-PY ?= python3
+# Dev shortcuts. Once: `npm install` in ts/ and obsidian/.
 
 .PHONY: check live ts plugin rust sim wasm
 
@@ -7,11 +6,10 @@ check: rust ts plugin ## everything CI runs except the long simulation
 
 live:   ## two-person test on REAL Telegram (needs profiles default + b); KEEP=dir keeps folders
 	mkdir -p ts/live && cp ts/dist/tgsync.mjs ts/live/tgsync.mjs
-	$(PY) scripts/live_e2e.py $(if $(KEEP),--keep $(KEEP))
+	cd ts && npm run -s live -- $(if $(KEEP),--keep $(abspath $(KEEP)))
 
-ts: wasm ## TypeScript host + Node CLI on the Rust core: type check, tests, and two-process sandbox tests (pytest)
+ts: wasm ## TypeScript host + Node CLI on the Rust core: type check and tests (incl. two-process sandbox tests)
 	cd ts && npm run typecheck && npm test
-	$(PY) -m pytest -q tests/test_sandbox.py
 
 plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm install` in obsidian/ once
 	cd obsidian && npm run build && npm test

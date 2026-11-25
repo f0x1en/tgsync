@@ -3,7 +3,7 @@
 ## Setup and checks
 
 ```bash
-(cd ts && npm install); (cd obsidian && npm install)   # once; plus Rust (cargo) and Python with pytest
+(cd ts && npm install); (cd obsidian && npm install)   # once; plus Rust (cargo)
 make check          # Rust core tests, WebAssembly build (or CI's), Node CLI tests, sandbox tests, plugin tests
 make sim            # 10 000 simulated seeds
 make live           # two-person test on REAL Telegram (profiles `default` and `b`); KEEP=~/dir keeps folders
@@ -48,8 +48,7 @@ connection), then stops with a message; a lock left by a process that is gone is
 taken over. A folder of the old TypeScript engine (`.tgsync/state.json`) is replayed from the group
 with its vault id. `.tgsync/config.json` `chat` is the group's invite link (the group is found by it); `restore`
 downloads old versions from the group (notes: from the merged history), so REV is a version id like `812.0` (record
-message, entry). `make ts` also runs `tests/test_sandbox.py` against it, and
-`make live` runs the live test with it (a copy in `ts/live/`, since `npm test` rebuilds `dist/`). Obsidian plugin, a thin layer over the CLI's `--json` that adds nothing
+message, entry). `make live` runs the live test with it (a copy in `ts/live/`, since `npm test` rebuilds `dist/`). Obsidian plugin, a thin layer over the CLI's `--json` that adds nothing
 the CLI lacks: `obsidian/` (`make plugin`; tests run it against a fake `tgsync`). Run `npm install` once in each.
 
 Big-file benchmark (sandbox, no network): `cd ts && npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this
@@ -137,10 +136,9 @@ records as needed -> `pull()`. `status`: `fetchChanges()` -> `status()` + `incom
 | Where | Covers |
 |---|---|
 | `core/` (`make rust`, `make sim`) | Vectors, replay, membership, signed records, notes, plans; the deterministic simulator |
-| `ts/test/` (`make ts`) | The host with two people, the CLI, WebAssembly conformance |
-| `tests/test_sandbox.py` | Two real `tgsync` processes on a sandbox group, via `--json` |
+| `ts/test/` (`make ts`) | The host with two people, the CLI, two real `tgsync` processes on a sandbox group (`sandbox.test.ts`), WebAssembly conformance |
 | `obsidian/test/` | The plugin against a fake `tgsync` |
-| `scripts/live_e2e.py` | The whole story on real Telegram (not in CI) |
+| `ts/scripts/live-e2e.ts` (`make live`) | The whole story on real Telegram (not in CI) |
 
 ## Known limits (not fixed yet)
 
