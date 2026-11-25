@@ -9,7 +9,7 @@
 //   tgsync new DIR      start a vault        tgsync join CODE   join one
 //   tgsync invite / members / accept CODE / remove NAME
 //   tgsync --json ...   one JSON object on stdout, for scripts and plugins
-import { existsSync, readFileSync, readdirSync, renameSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -158,7 +158,8 @@ async function lockedFiles(folder: string): Promise<NodeFiles> {
       try { holder = readFileSync(p, "utf8"); } catch { continue; } // just released
       const pid = Number(holder);
       const alive = (() => {
-        if (!Number.isInteger(pid) || pid <= 0) return true; // being written right now
+        // no number: being written right now, unless it is old (the Python CLI left an empty lock in every vault)
+        if (!Number.isInteger(pid) || pid <= 0) { try { return Date.now() - statSync(p).mtimeMs < 5000; } catch { return true; } }
         try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
       })();
       if (!alive) {

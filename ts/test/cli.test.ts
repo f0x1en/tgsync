@@ -3,7 +3,7 @@
 // log, bare `tgsync`. The full two-person story is sandbox.test.ts.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -74,6 +74,12 @@ test("restore brings back versions from the group; log and bare tgsync", async (
     await writeFile(lock, "999999999"); // no such process
     assert.ok(json("push", "-C", A).ok);
     assert.equal(await readFile(lock, "utf8").catch(() => "released"), "released");
+    // an old empty lock (the Python CLI left one in every vault) is taken over, not waited on
+    await writeFile(lock, "");
+    await utimes(lock, new Date(0), new Date(0));
+    const t1 = Date.now();
+    assert.ok(json("push", "-C", A).ok);
+    assert.ok(Date.now() - t1 < 2000, "did not wait for an empty old lock");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
