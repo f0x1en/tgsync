@@ -168,6 +168,8 @@ more than one, `new` and `join` ask which to use (or pass `--profile NAME`). Acc
 * Automating a user account is a grey area under Telegram's ToS; keep traffic modest. The limiter
   caps sends at 18/min with >=1.2 s gaps, spaces downloads, honours FloodWait and slows itself
   down after one. Telegram does not publish exact limits.
+  Every flood wait is logged to `flood-waits.log` in the tgsync config folder; to measure the
+  limits, run `npm run -s flood-probe -- --profile SPARE --spare` in `ts/` (a spare account only).
 * One tgsync command per Telegram account at a time (the session file is single-process); if you
   start two at once the second one says so and you just retry.
 * Speed is bounded by Telegram and your network: ~100 MB took ~4 minutes each way through a proxy.

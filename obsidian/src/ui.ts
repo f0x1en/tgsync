@@ -147,7 +147,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
     const p = this.plugin;
     new Setting(el)
       .setName("Sync automatically")
-      .setDesc("Uploads your changes a few seconds after you stop typing, and downloads others' changes every minute and when you come back to Obsidian.")
+      .setDesc("Uploads your changes a few seconds after you stop typing, and downloads others' changes every 10 seconds and when you come back to Obsidian.")
       .addToggle((t) => t.setValue(p.settings.auto).onChange(async (v) => {
         p.settings.auto = v;
         await p.save();

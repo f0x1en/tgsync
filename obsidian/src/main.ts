@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // tgsync for Obsidian (desktop): keeps this vault in sync through its private Telegram group, like
 // Obsidian Sync. The sync engine runs inside the plugin (no separate program). It uploads your
-// changes a few seconds after you stop typing, and downloads others' changes every minute, when
+// changes a few seconds after you stop typing, and downloads others' changes every 10 seconds, when
 // Obsidian opens and when you come back to it. Notes that two people edit merge; other files keep both.
 import { FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
 import { VaultHost } from "../../ts/src/node/host.ts";
@@ -29,7 +29,10 @@ export default class TgsyncPlugin extends Plugin {
   lastError = "";
   /** ms to wait after the last edit before uploading, and between downloads. */
   editDelay = 5_000;
-  pollEvery = 60_000;
+  pollEvery = 10_000; // idle, one look costs one Telegram call (read the group's newest messages)
+  /** ms between looks while waiting to be let in (each reads the whole group: fewer). */
+  joinEvery = 30_000;
+  private lastJoinTry = 0;
   /** ms between full looks for people asking to join (each reads all the group's join messages);
    *  a new join message seen while syncing triggers a look at once. */
   askEvery = 10 * 60_000;
@@ -164,6 +167,8 @@ export default class TgsyncPlugin extends Plugin {
       if (loud) new Notice("tgsync: this vault is not set up for syncing yet (see the tgsync settings)");
       return false;
     }
+    if (!loud && Date.now() - this.lastJoinTry < this.joinEvery) return false;
+    this.lastJoinTry = Date.now();
     this.show("syncing");
     try {
       if (await this.setup.join()) {

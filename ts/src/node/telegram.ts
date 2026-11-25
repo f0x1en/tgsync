@@ -2,18 +2,18 @@
 // Telegram through mtcute (MTProto, your own user account). Files are documents with a `tgs1:<kind>` caption, sends are paced, flood waits slow us down.
 // The login is a session string in the profile folder (`mtcute.session`); nothing native.
 import { BaseTelegramClient, TelegramClient } from "@mtcute/core/client.js";
-import { InputMedia, Long, MemoryStorage, MtArgumentError, MtPeerNotFoundError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
+import { InputMedia, Long, MemoryStorage, MtArgumentError, MtPeerNotFoundError, networkMiddlewares, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
 import { HttpProxyTcpTransport, NodePlatform, SocksProxyTcpTransport, TcpTransport } from "@mtcute/node";
 import { NodeCryptoProvider } from "@mtcute/node/utils.js";
 import { SIMD_AVAILABLE, initSync } from "@mtcute/wasm";
 import wasmSimd from "@mtcute/wasm/mtcute-simd.wasm";
 import wasmPlain from "@mtcute/wasm/mtcute.wasm";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { caption, parseCaption } from "../protocol.ts";
 import { TransportError, type Message, type Transport } from "../transport.ts";
 import { watchConnection, whileReachable } from "./reachable.ts";
-import { appDir } from "./home.ts";
+import { appDir, rootDir } from "./home.ts";
 
 // Telegram does not publish exact limits. Folklore: ~20 messages/minute and ~1/second per chat.
 // Defaults sit just under that; every flood wait slows this session down further.
@@ -21,6 +21,12 @@ const SEND_PER_MINUTE = 18;
 const SEND_MIN_GAP = 1.2; // seconds between sends
 const FETCH_MIN_GAP = 0.3; // seconds between downloads
 const MAX_FLOOD_RETRIES = 6;
+
+/** Every flood wait Telegram gives us, one line each (time, call, seconds): to learn its real limits. */
+export const floodLogPath = () => join(rootDir(), "flood-waits.log");
+function logFlood(method: string, seconds: number): void {
+  try { appendFileSync(floodLogPath(), `${new Date().toISOString()} ${method} ${seconds}\n`); } catch { /* best effort */ }
+}
 
 export class NotLoggedIn extends TransportError {}
 
@@ -83,6 +89,8 @@ function makeClient(creds: Creds): TelegramClient {
     // tgsync reports one clear error instead of mtcute's connection chatter; TGSYNC_DEBUG=1 shows every call
     logLevel: process.env.TGSYNC_DEBUG ? 4 : 0,
     updates: false,
+    // the default middlewares, plus a log line for each flood wait (also the short ones mtcute waits out itself)
+    network: { middlewares: networkMiddlewares.basic({ floodWaiter: { onBeforeWait: (ctx, s) => logFlood(ctx.request._, s) } }) },
   });
   const tg = new TelegramClient({ client: base });
   watchConnection(tg);
@@ -262,6 +270,7 @@ export class TelegramTransport implements Transport {
           this.sendRl.slowDown();
           this.fetchRl.slowDown();
           this.log(`Telegram flood-wait: sleeping ${e.seconds}s, then slowing down`);
+          logFlood("(gave up waiting inside mtcute)", e.seconds);
           await sleep((e.seconds + 1) * 1000);
           continue;
         }
