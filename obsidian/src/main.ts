@@ -14,9 +14,10 @@ import { AcceptModal, TgsyncSettingTab } from "./ui.ts";
 
 interface Settings extends Advanced {
   auto: boolean; // sync automatically
+  refused: string[]; // join requests refused (their keys): not asked again
 }
 
-const DEFAULTS: Settings = { auto: true, apiId: "", apiHash: "", proxy: "", account: "" };
+const DEFAULTS: Settings = { auto: true, apiId: "", apiHash: "", proxy: "", account: "", refused: [] };
 
 /** What the status bar shows. */
 type State = "synced" | "syncing" | "offline" | "paused" | "not set up" | "waiting" | "error";
@@ -164,7 +165,7 @@ export default class TgsyncPlugin extends Plugin {
     try {
       if (await this.setup.join()) {
         this.show("waiting");
-        if (loud) new Notice(`tgsync: not let in yet. Tell the person who invited you this code: ${w.code}`);
+        if (loud) new Notice("tgsync: not let in yet. The vault's owner is asked to let you in.");
         return false;
       }
     } catch (e) {
@@ -178,14 +179,14 @@ export default class TgsyncPlugin extends Plugin {
     return true;
   }
 
-  /** Admins: someone asks to join? Ask for their code (each request once per session). */
+  /** Admins: someone asks to join? Ask whether to let them in (once per session; never again if refused). */
   private async lookForRequests(): Promise<void> {
     if (Date.now() - this.lastAsk < this.askEvery) return;
     this.lastAsk = Date.now();
     let reqs: JoinRequest[];
     try { reqs = await this.host!.use(async (v) => (v.isAdmin ? v.pendingRequests() : [])); } catch { return; } // next time
     for (const r of reqs) {
-      if (this.asked.has(r.recipient)) continue;
+      if (this.asked.has(r.recipient) || this.settings.refused.includes(r.recipient)) continue;
       this.asked.add(r.recipient);
       this.askAccept(r);
     }
@@ -193,6 +194,11 @@ export default class TgsyncPlugin extends Plugin {
 
   askAccept(r: JoinRequest): void {
     new AcceptModal(this.app, this, r).open();
+  }
+
+  async refuse(r: JoinRequest): Promise<void> {
+    this.settings.refused.push(r.recipient);
+    await this.save();
   }
 
   /** Only what needs the user's attention; quiet otherwise (like Obsidian Sync). */

@@ -41,23 +41,22 @@ async function busy(b: ButtonComponent, fn: () => Promise<void>): Promise<void> 
   } finally { b.setDisabled(false); }
 }
 
-/** "Someone asks to join": the owner types the code that person's tgsync shows them. */
+/** "Someone asks to join": let in, or refuse (not asked again). */
 export class AcceptModal extends Modal {
   constructor(app: App, private plugin: TgsyncPlugin, private req: JoinRequest) { super(app); }
 
   onOpen(): void {
     const who = this.req.name || "Someone";
     this.titleEl.setText(`${who} asks to join this vault`);
-    this.contentEl.createEl("p", { text: "Ask them for the code their tgsync shows, and type it here. This makes sure it really is them, " +
-      "not someone else who got hold of the invite." });
-    let typed = "";
+    this.contentEl.createEl("p", { text: "They used an invite to this vault. Let them in only if you know who this is: " +
+      "members can read and change everything in the vault." });
     new Setting(this.contentEl)
-      .addText((t) => { t.setPlaceholder("ab12-cd34").onChange((v) => { typed = v; }); window.setTimeout(() => t.inputEl.focus(), 0); })
       .addButton((b) => b.setButtonText("Let in").setCta().onClick(() => busy(b, async () => {
-        await this.plugin.setup.accept(this.req, typed);
+        await this.plugin.setup.accept(this.req);
         new Notice(`tgsync: ${who} is in. Their tgsync finishes joining by itself.`);
         this.close();
       })))
+      .addButton((b) => b.setButtonText("Refuse").onClick(async () => { await this.plugin.refuse(this.req); this.close(); }))
       .addButton((b) => b.setButtonText("Not now").onClick(() => this.close()));
   }
 }
@@ -97,8 +96,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
       if (p.host?.cfg()) this.vaultSettings(el);
       else if (waiting) {
         new Setting(el).setName("Waiting to be let in")
-          .setDesc(`Tell the person who invited you this code: ${waiting.code}. They type it in their tgsync. ` +
-                   "This vault joins by itself as soon as they have; you can close this.")
+          .setDesc("The vault's owner is asked to let you in. This vault joins by itself as soon as they have; you can close this.")
           .addButton((b) => b.setButtonText("Check now").onClick(() => busy(b, async () => {
             if (await p.finishJoin(true)) again();
           })));
@@ -117,7 +115,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
           .addText((t) => t.setPlaceholder("tgsync1-…").onChange((v) => { line = v; }))
           .addButton((b) => b.setButtonText("Join").setCta().onClick(() => busy(b, async () => {
             const w = await s.join(line);
-            if (w) new Notice(`tgsync: asked to join. Tell the person who invited you this code: ${w.code}`, 0);
+            if (w) new Notice("tgsync: asked to join. You are in as soon as the vault's owner lets you in.");
             else { new Notice("tgsync: joined. Your vault is in sync."); p.schedule(); }
             again();
           })));
@@ -166,7 +164,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
     p.setup.members().then(({ admin, members, waiting }) => {
       list.empty();
       new Setting(list).setName("Members").setDesc(members.map((m) => m.name + (m.admin ? " (admin)" : "") + (m.you ? " (you)" : "")).join(", "));
-      for (const r of waiting) {
+      for (const r of waiting.filter((r) => !p.settings.refused.includes(r.recipient))) {
         new Setting(list).setName(`${r.name || "Someone"} asks to join`)
           .addButton((b) => b.setButtonText("Let in…").setCta().onClick(() => new AcceptModal(this.app, p, r).open()));
       }

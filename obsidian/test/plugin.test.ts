@@ -122,7 +122,7 @@ test("not a vault, and sync switched off", async () => {
   await q.onunload();
 });
 
-test("start a vault in Obsidian; a friend joins and is let in only with their code", async () => {
+test("start a vault in Obsidian; a friend asks to join and is let in with one click", async () => {
   const C = mkdtempSync(join(tmpdir(), "tgsync-carol-")), D = join(tmp, "dave");
   writeFileSync(join(C, "welcome.md"), "hi from carol\n");
   const p = await start(C);
@@ -130,15 +130,15 @@ test("start a vault in Obsidian; a friend joins and is let in only with their co
   assert.ok(p.host.cfg(), "the vault is set up");
   await p.sync(false);
   const invite = await p.setup.invite();
-  const code = cli("dave", "join", invite, D).code;
+  cli("dave", "join", invite, D);
   const asked: any[] = [];
   p.askAccept = (r: any) => asked.push(r);
   p.lastAsk = 0;
   await p.sync(false);
   assert.equal(asked.length, 1, "the owner is asked about the request");
-  await assert.rejects(p.setup.accept(asked[0], "zz99-zz99"), /not .* code/);
-  assert.equal(cli("dave", "join").state, "waiting", "a wrong code lets nobody in");
-  await p.setup.accept(asked[0], code);
+  assert.equal(cli("dave", "join").state, "waiting", "nobody is in before the owner says so");
+  await p.setup.accept(asked[0]);
+  await assert.rejects(p.setup.accept(asked[0]), /no longer waiting/);
   assert.equal(cli("dave", "join").state, "joined");
   assert.equal(readFileSync(join(D, "welcome.md"), "utf8"), "hi from carol\n");
   p.lastAsk = 0;
@@ -177,4 +177,22 @@ test("an account named in the vault's settings is used for setup", async () => {
   await p.setup.create();
   assert.equal(p.host.cfg().profile, "frank");
   await p.onunload();
+});
+
+test("a refused request is not asked about again", async () => {
+  const G = join(tmp, "gus");
+  const asked: any[] = [];
+  const q = await start(A); // alice, the admin, in Obsidian
+  q.askAccept = (r: any) => asked.push(r);
+  cli("gus", "join", cli("alice", "invite", "-C", A).invite, G);
+  q.lastAsk = 0;
+  await q.sync(false);
+  assert.equal(asked.length, 1);
+  await q.refuse(asked[0]);
+  q.asked.clear();
+  q.lastAsk = 0;
+  await q.sync(false);
+  assert.equal(asked.length, 1, "not asked again");
+  assert.equal(cli("gus", "join").state, "waiting");
+  await q.onunload();
 });

@@ -2,13 +2,13 @@
 // Setting this vault up from inside Obsidian: log in to Telegram, start a vault or join one, invite,
 // let people in. No questions or windows here (ui.ts does those), so the tests can drive it.
 import { resolve } from "node:path";
-import { memberId, shortCode } from "../../ts/src/crypto.ts";
+import { shortCode } from "../../ts/src/crypto.ts";
 import { NodeFiles } from "../../ts/src/node/files.ts";
 import { checkProfileName, currentProfile, mem, newSandboxGroup, sandboxRoot } from "../../ts/src/node/home.ts";
 import type { VaultHost } from "../../ts/src/node/host.ts";
 import { takeLock } from "../../ts/src/node/lock.ts";
 import {
-  SetupError, checkJoinFolder, createVault, ensureIdentity, findRequest, inviteLine, joinStep, openGroup,
+  SetupError, checkJoinFolder, createVault, ensureIdentity, inviteLine, joinStep, openGroup,
 } from "../../ts/src/node/setup.ts";
 import {
   connect, createGroup, hasLogin, interactiveLogin, loadCreds, parseProxy, saveCreds, type LoginPrompts,
@@ -93,7 +93,7 @@ export class VaultSetup {
     return Object.values(mem().joins ?? {}).find((j) => j.folder === here) ?? null;
   }
 
-  /** Waiting to be let in: the code to tell the owner. null if not waiting. */
+  /** Waiting to be let in? null if not. */
   async waiting(): Promise<Waiting | null> {
     const j = this.joinEntry();
     if (!j || this.host.cfg()) return null;
@@ -101,8 +101,8 @@ export class VaultSetup {
     return { code: await shortCode(ident.recipient), id: ident.id };
   }
 
-  /** Join with an invite line (pasted, or the saved one). -> the code to tell the owner while
-   *  waiting; null once joined (files downloaded). */
+  /** Join with an invite line (pasted, or the saved one). -> Waiting until let in; null once joined
+   *  (files downloaded). */
   async join(line?: string): Promise<Waiting | null> {
     const code = (line ?? this.joinEntry()?.code ?? "").trim().replace(/^tgsync join\s+/, "");
     if (!code) throw new SetupError("Paste the invite your friend sent you.");
@@ -138,15 +138,12 @@ export class VaultSetup {
     }));
   }
 
-  /** Let `req` in if `typed` is the code (or full id) their tgsync shows them. */
-  async accept(req: JoinRequest, typed: string): Promise<void> {
-    const want = typed.trim().toLowerCase();
-    if (want !== await shortCode(req.recipient) && want !== await memberId(req.recipient)) {
-      throw new SetupError(`That is not ${req.name || "their"} code. Ask them to read you the code their tgsync shows.`);
-    }
+  /** Let `req` in (read again first: it may be gone, or found to be posted with two signing keys). */
+  async accept(req: JoinRequest): Promise<void> {
     await this.host.use(async (v) => {
-      const hit = await findRequest(v, want); // refuses when someone else posted a request with the same code
-      await v.acceptRequest(hit);
+      const now = (await v.pendingRequests()).find((r) => r.recipient === req.recipient);
+      if (!now) throw new SetupError(`${req.name || "This person"} is no longer waiting (already let in?).`);
+      await v.acceptRequest(now);
     });
   }
 }
