@@ -2,7 +2,7 @@
 // Telegram through mtcute (MTProto, your own user account). Files are documents with a `tgs1:<kind>` caption, sends are paced, flood waits slow us down.
 // The login is a session string in the profile folder (`mtcute.session`); nothing native.
 import { BaseTelegramClient, TelegramClient } from "@mtcute/core/client.js";
-import { InputMedia, Long, MemoryStorage, MtArgumentError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
+import { InputMedia, Long, MemoryStorage, MtArgumentError, MtPeerNotFoundError, tl, type Chat, type Message as TgMessage } from "@mtcute/core";
 import { HttpProxyTcpTransport, NodePlatform, SocksProxyTcpTransport, TcpTransport } from "@mtcute/node";
 import { NodeCryptoProvider } from "@mtcute/node/utils.js";
 import { SIMD_AVAILABLE, initSync } from "@mtcute/wasm";
@@ -162,7 +162,14 @@ async function resolveChatNow(tg: TelegramClient, ref: string, peer?: string): P
     throw new TransportError("Joined, but Telegram did not return the chat (the group may require admin approval " +
       "to join). Ask an admin to approve you, then run the command again.");
   }
-  return tg.getChat(/^-?\d+$/.test(ref) ? Number(ref) : ref);
+  if (!/^-?\d+$/.test(ref)) return tg.getChat(ref);
+  try { return await tg.getChat(Number(ref)); } catch (e) {
+    // A login that never saw the group (say, the old Python CLI's folder) cannot look it up by number:
+    // find it in the account's chat list.
+    for await (const d of tg.iterDialogs()) if (d.peer.type === "chat" && d.peer.id === Number(ref)) return d.peer;
+    if (!(e instanceof MtPeerNotFoundError)) throw e;
+    throw new TransportError("this account is not in the vault's Telegram group (it was deleted, or the account left it)");
+  }
 }
 
 /** "channelId:accessHash" for a supergroup, to pass to `resolveChat` later. */

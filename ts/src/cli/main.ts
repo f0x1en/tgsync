@@ -15,6 +15,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { memberId, shortCode } from "../crypto.ts";
+import { createRequire } from "node:module";
 import { INTERNAL_DIR, normalize } from "../paths.ts";
 import { decodeInvite, encodeInvite, type Identity } from "../protocol.ts";
 import type { Transport } from "../transport.ts";
@@ -124,8 +125,36 @@ function rememberVault(vault: string): void {
 
 const knownVaults = () => (mem().vaults ?? []).filter((v) => existsSync(cfgPath(v)));
 
+/** A folder of the old Python CLI keeps its state in `.tgsync/state.db` (SQLite). Write what the
+ *  engine needs from it (vault id, what was synced, our last record number) as `.tgsync/state.json`,
+ *  the format `Vault.open` already takes over; otherwise every file looks changed on both sides. */
+function fromPythonState(folder: string): void {
+  const db = join(folder, INTERNAL_DIR, "state.db");
+  if (!existsSync(db) || existsSync(join(folder, ENGINE_FILE)) || existsSync(join(folder, OLD_STATE))) return;
+  let sqlite: any;
+  try { sqlite = createRequire(import.meta.url)("node:sqlite"); } catch {
+    throw new CliError(`${short(folder)} was made by the old tgsync; reading it needs Node 22.13 or newer (you have ${process.version})`);
+  }
+  const d = new sqlite.DatabaseSync(db, { readOnly: true });
+  try {
+    const kv = (k: string) => (d.prepare("SELECT v FROM kv WHERE k=?").get(k) as any)?.v ?? null;
+    const cols = (d.prepare("PRAGMA table_info(synced)").all() as any[]).map((c) => c.name);
+    const obs = cols.includes("observed_ns") ? "observed_ns" : "0";
+    const synced: { [p: string]: [string, number, number, number] } = {};
+    // times in ms (nanoseconds do not fit a JavaScript number)
+    for (const r of d.prepare(`SELECT path, sha, size, mtime_ns / 1e6 AS m, ${obs} / 1e6 AS o FROM synced`).all() as any[]) {
+      synced[r.path] = [r.sha, r.size, r.m, r.o];
+    }
+    const authors = Object.fromEntries((d.prepare("SELECT author, seq FROM authors").all() as any[]).map((r) => [r.author, Number(r.seq)]));
+    writeFileSync(join(folder, OLD_STATE), JSON.stringify({ v: 1, vault_id: kv("vault_id"), synced, authors }));
+  } finally {
+    d.close();
+  }
+}
+
 /** -> [vault id, were we removed from it] for a vault folder; [null, false] if none. */
 async function vaultAt(folder: string): Promise<[string | null, boolean]> {
+  fromPythonState(folder);
   for (const [file, pick] of [[ENGINE_FILE, (d: any) => d.replica], [OLD_STATE, (d: any) => d]] as const) {
     if (!existsSync(join(folder, file))) continue;
     try {
@@ -173,6 +202,7 @@ async function lockedFiles(folder: string): Promise<NodeFiles> {
       await new Promise((ok) => setTimeout(ok, 200));
     }
     locked.add(dir);
+    fromPythonState(dir);
     process.on("exit", () => {
       try { if (readFileSync(p, "utf8") === String(process.pid)) unlinkSync(p); } catch { /* gone */ }
     });

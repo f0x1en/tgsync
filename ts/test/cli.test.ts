@@ -3,7 +3,8 @@
 // log, bare `tgsync`. The full two-person story is sandbox.test.ts.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -80,6 +81,44 @@ test("restore brings back versions from the group; log and bare tgsync", async (
     const t1 = Date.now();
     assert.ok(json("push", "-C", A).ok);
     assert.ok(Date.now() - t1 < 2000, "did not wait for an empty old lock");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a folder of the old Python CLI (.tgsync/state.db) is taken over: nothing looks changed", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "tgsync-cli-"));
+  const A = join(tmp, "alice");
+  const json = (...args: string[]) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, TGSYNC_SANDBOX: join(tmp, "sb"), TGSYNC_PROFILE: "alice" };
+    delete env.TGSYNC_HOME;
+    return JSON.parse(spawnSync("node", [BIN, "--json", ...args], { env, cwd: tmp, encoding: "utf8" }).stdout);
+  };
+  try {
+    assert.ok(json("new", A).ok);
+    await mkdir(join(A, "hi"));
+    await writeFile(join(A, "hello.md"), "hello\n");
+    await writeFile(join(A, "hi", "x.bin"), "data");
+    assert.ok(json("push", "-C", A).ok);
+    const vaultId = JSON.parse(await readFile(join(A, ".tgsync", "engine.json"), "utf8")).replica.vault_id;
+    // what the Python CLI left: state.db (kv, synced, authors), no engine.json / local.json
+    await rm(join(A, ".tgsync", "engine.json"));
+    await rm(join(A, ".tgsync", "local.json"));
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(A, ".tgsync", "state.db"));
+    db.exec("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT NOT NULL); CREATE TABLE authors (author TEXT PRIMARY KEY, seq INTEGER NOT NULL);" +
+      "CREATE TABLE synced (path TEXT PRIMARY KEY, sha TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, observed_ns INTEGER NOT NULL DEFAULT 0)");
+    db.prepare("INSERT INTO kv VALUES ('vault_id', ?)").run(vaultId);
+    for (const p of [".tgsyncignore", "hello.md", "hi/x.bin"]) {
+      const body = await readFile(join(A, p));
+      const st = await stat(join(A, p), { bigint: true });
+      db.prepare("INSERT INTO synced VALUES (?, ?, ?, ?, ?)").run(p, createHash("sha256").update(body).digest("hex"), body.length, st.mtimeNs, st.mtimeNs + 10_000_000_000n);
+    }
+    db.close();
+    const st = json("status", "-C", A);
+    assert.deepEqual(st.pending, [], JSON.stringify(st));
+    assert.deepEqual(st.incoming, [], JSON.stringify(st));
+    assert.deepEqual(json("push", "-C", A).report.pushed_paths, []);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
