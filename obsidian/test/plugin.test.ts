@@ -136,8 +136,15 @@ test("start a vault in Obsidian; a friend asks to join and is let in with one cl
   p.lastAsk = 0;
   await p.sync(false);
   assert.equal(asked.length, 1, "the owner is asked about the request");
+  assert.match(asked[0].code, /^[0-9a-f]{4}-[0-9a-f]{4}$/, "with the asker's code");
+  assert.match(p.bars[0].text, /1 waiting to join/, "the request waits in the status bar");
+  await p.sync(false);
+  assert.equal(asked.length, 1, "asked once; then it waits");
+  assert.match((await p.setup.members()).members[0].name, /\([0-9a-f]{4}-[0-9a-f]{4}\)$/, "members show their code");
   assert.equal(cli("dave", "join").state, "waiting", "nobody is in before the owner says so");
   await p.setup.accept(asked[0]);
+  p.decided(asked[0]);
+  assert.doesNotMatch(p.bars[0].text, /waiting to join/);
   await assert.rejects(p.setup.accept(asked[0]), /no longer waiting/);
   assert.equal(cli("dave", "join").state, "joined");
   assert.equal(readFileSync(join(D, "welcome.md"), "utf8"), "hi from carol\n");
@@ -189,7 +196,6 @@ test("a refused request is not asked about again", async () => {
   await q.sync(false);
   assert.equal(asked.length, 1);
   await q.refuse(asked[0]);
-  q.asked.clear();
   q.lastAsk = 0;
   await q.sync(false);
   assert.equal(asked.length, 1, "not asked again");

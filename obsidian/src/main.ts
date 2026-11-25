@@ -6,10 +6,9 @@
 import { FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
 import { VaultHost } from "../../ts/src/node/host.ts";
 import { LockBusy } from "../../ts/src/node/lock.ts";
-import type { JoinRequest } from "../../ts/src/protocol.ts";
 import { OfflineError } from "../../ts/src/transport.ts";
 import type { Report } from "../../ts/src/vault.ts";
-import { VaultSetup, type Advanced } from "./setup.ts";
+import { VaultSetup, withCode, type Advanced, type Ask } from "./setup.ts";
 import { AcceptModal, TgsyncSettingTab } from "./ui.ts";
 
 interface Settings extends Advanced {
@@ -31,10 +30,12 @@ export default class TgsyncPlugin extends Plugin {
   /** ms to wait after the last edit before uploading, and between downloads. */
   editDelay = 5_000;
   pollEvery = 60_000;
-  /** ms between looks for people asking to join (each look reads the group's join messages). */
+  /** ms between full looks for people asking to join (each reads all the group's join messages);
+   *  a new join message seen while syncing triggers a look at once. */
   askEvery = 10 * 60_000;
   private lastAsk = 0;
-  private asked = new Set<string>(); // requests already shown this session
+  /** Admins: people asking to join, until let in or refused (shown in the status bar). */
+  pending: Ask[] = [];
   private bar!: HTMLElement;
   private running: Promise<void> | null = null;
   private again = false;
@@ -108,6 +109,7 @@ export default class TgsyncPlugin extends Plugin {
   }
 
   private clickBar(): void {
+    if (this.pending.length) { this.askAccept(this.pending[0]); return; }
     if (this.state === "not set up" || this.state === "waiting") { this.openSettings(); return; }
     if (this.state === "error" || this.state === "offline") new Notice(`tgsync: ${this.lastError}`, 10_000);
     void this.sync(true);
@@ -119,7 +121,8 @@ export default class TgsyncPlugin extends Plugin {
       synced: "✓ Synced", syncing: "↻ Syncing…", offline: "Offline", paused: "Sync paused",
       "not set up": "tgsync: not set up", waiting: "tgsync: waiting to be let in", error: "⚠ Sync problem",
     };
-    this.bar.setText(text[state]);
+    const n = this.pending.length;
+    this.bar.setText(text[state] + (n ? ` · ${n} waiting to join` : ""));
     this.bar.setAttr?.("aria-label", state === "error" || state === "offline" ? this.lastError : "tgsync: click to sync now");
   }
 
@@ -140,10 +143,10 @@ export default class TgsyncPlugin extends Plugin {
     this.show("syncing");
     try {
       await this.saveEditors();
-      const [pushed, pulled] = await this.host!.use(async (v) => [await v.pushChanges(), await v.pullChanges()] as const);
+      const [pushed, pulled, asks] = await this.host!.use(async (v) => [await v.pushChanges(), await v.pullChanges(), v.asks] as const);
       this.tell(pushed, pulled, loud);
       this.show(this.settings.auto ? "synced" : "paused");
-      await this.lookForRequests();
+      await this.lookForRequests(asks > 0);
     } catch (e) {
       if (e instanceof LockBusy) { this.show(this.settings.auto ? "synced" : "paused"); this.again = false; return; } // a terminal run is busy: next time
       this.lastError = (e as Error).message || String(e);
@@ -179,26 +182,35 @@ export default class TgsyncPlugin extends Plugin {
     return true;
   }
 
-  /** Admins: someone asks to join? Ask whether to let them in (once per session; never again if refused). */
-  private async lookForRequests(): Promise<void> {
-    if (Date.now() - this.lastAsk < this.askEvery) return;
+  /** Admins: someone asks to join? Ask at once whether to let them in; the request then waits in the
+   *  status bar until let in or refused (never asked again if refused). `news`: a join message just came. */
+  private async lookForRequests(news: boolean): Promise<void> {
+    if (!news && Date.now() - this.lastAsk < this.askEvery) return;
     this.lastAsk = Date.now();
-    let reqs: JoinRequest[];
-    try { reqs = await this.host!.use(async (v) => (v.isAdmin ? v.pendingRequests() : [])); } catch { return; } // next time
-    for (const r of reqs) {
-      if (this.asked.has(r.recipient) || this.settings.refused.includes(r.recipient)) continue;
-      this.asked.add(r.recipient);
-      this.askAccept(r);
-    }
+    let reqs: Ask[];
+    try {
+      reqs = await this.host!.use(async (v) => (v.isAdmin ? Promise.all((await v.pendingRequests()).map(withCode)) : []));
+    } catch { return; } // next time
+    const known = new Set(this.pending.map((r) => r.recipient));
+    this.pending = reqs.filter((r) => !this.settings.refused.includes(r.recipient));
+    this.show(this.state);
+    for (const r of this.pending) if (!known.has(r.recipient)) this.askAccept(r);
   }
 
-  askAccept(r: JoinRequest): void {
+  askAccept(r: Ask): void {
     new AcceptModal(this.app, this, r).open();
   }
 
-  async refuse(r: JoinRequest): Promise<void> {
+  /** Let in or refused: no longer waiting. */
+  decided(r: Ask): void {
+    this.pending = this.pending.filter((p) => p.recipient !== r.recipient);
+    this.show(this.state);
+  }
+
+  async refuse(r: Ask): Promise<void> {
     this.settings.refused.push(r.recipient);
     await this.save();
+    this.decided(r);
   }
 
   /** Only what needs the user's attention; quiet otherwise (like Obsidian Sync). */

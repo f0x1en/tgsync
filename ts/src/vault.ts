@@ -98,6 +98,8 @@ class LocalState {
 
 export class Vault {
   members: Member[] = [];
+  /** Join requests seen by pull() so far (new ones: someone may be waiting to be let in). */
+  asks = 0;
   notify: (msg: string) => void = () => {};
   private busy: Promise<unknown> = Promise.resolve();
   private cache = new Map<number, Uint8Array>();
@@ -258,6 +260,7 @@ export class Vault {
       for await (const m of this.transport.iterAfter(this.engine.cursor())) {
         const body = this.engine.wantsBody(m.kind, m.id) ? await this.transport.fetch(m.id) : new Uint8Array(0);
         this.engine.feed(m.id, m.kind, body);
+        if (m.kind === KIND.join) this.asks++;
         fed++;
       }
       if (!(this.engine.blocked() && this.engine.hasKeys())) break;

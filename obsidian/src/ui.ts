@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // tgsync's windows and settings tab: log in, start or join a vault, invite, let people in.
 import { App, ButtonComponent, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
-import type { JoinRequest } from "../../ts/src/protocol.ts";
 import type { LoginPrompts } from "../../ts/src/node/telegram.ts";
 import type TgsyncPlugin from "./main.ts";
+import { named, type Ask } from "./setup.ts";
 
 /** Ask one thing in a window. Closing it without an answer cancels. */
 export function ask(app: App, title: string, desc: string, secret = false): Promise<string> {
@@ -41,18 +41,20 @@ async function busy(b: ButtonComponent, fn: () => Promise<void>): Promise<void> 
   } finally { b.setDisabled(false); }
 }
 
-/** "Someone asks to join": let in, or refuse (not asked again). */
+/** "Someone asks to join": let in, or refuse (not asked again). Not now: it waits in the status bar. */
 export class AcceptModal extends Modal {
-  constructor(app: App, private plugin: TgsyncPlugin, private req: JoinRequest) { super(app); }
+  constructor(app: App, private plugin: TgsyncPlugin, private req: Ask) { super(app); }
 
   onOpen(): void {
-    const who = this.req.name || "Someone";
+    const who = named(this.req.name, this.req.code);
     this.titleEl.setText(`${who} asks to join this vault`);
     this.contentEl.createEl("p", { text: "They used an invite to this vault. Let them in only if you know who this is: " +
-      "members can read and change everything in the vault." });
+      `members can read and change everything in the vault. Their tgsync shows them the code ${this.req.code}; ` +
+      "if two people have the same name, ask which code they see." });
     new Setting(this.contentEl)
       .addButton((b) => b.setButtonText("Let in").setCta().onClick(() => busy(b, async () => {
         await this.plugin.setup.accept(this.req);
+        this.plugin.decided(this.req);
         new Notice(`tgsync: ${who} is in. Their tgsync finishes joining by itself.`);
         this.close();
       })))
@@ -96,10 +98,8 @@ export class TgsyncSettingTab extends PluginSettingTab {
       if (p.host?.cfg()) this.vaultSettings(el);
       else if (waiting) {
         new Setting(el).setName("Waiting to be let in")
-          .setDesc("The vault's owner is asked to let you in. This vault joins by itself as soon as they have; you can close this.")
-          .addButton((b) => b.setButtonText("Check now").onClick(() => busy(b, async () => {
-            if (await p.finishJoin(true)) again();
-          })));
+          .setDesc(`The vault's owner is asked to let you in; they see your name with the code ${waiting.code}. ` +
+                   "This vault joins by itself as soon as they have; you can close this.");
       } else {
         new Setting(el).setName("Start syncing this vault")
           .setDesc("Makes a private Telegram group for this vault and uploads its files there, encrypted. Then invite your other devices or friends.")
@@ -115,7 +115,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
           .addText((t) => t.setPlaceholder("tgsync1-…").onChange((v) => { line = v; }))
           .addButton((b) => b.setButtonText("Join").setCta().onClick(() => busy(b, async () => {
             const w = await s.join(line);
-            if (w) new Notice("tgsync: asked to join. You are in as soon as the vault's owner lets you in.");
+            if (w) new Notice(`tgsync: asked to join (your code: ${w.code}). You are in as soon as the vault's owner lets you in.`);
             else { new Notice("tgsync: joined. Your vault is in sync."); p.schedule(); }
             again();
           })));
@@ -165,7 +165,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
       list.empty();
       new Setting(list).setName("Members").setDesc(members.map((m) => m.name + (m.admin ? " (admin)" : "") + (m.you ? " (you)" : "")).join(", "));
       for (const r of waiting.filter((r) => !p.settings.refused.includes(r.recipient))) {
-        new Setting(list).setName(`${r.name || "Someone"} asks to join`)
+        new Setting(list).setName(`${named(r.name, r.code)} asks to join`)
           .addButton((b) => b.setButtonText("Let in…").setCta().onClick(() => new AcceptModal(this.app, p, r).open()));
       }
       if (!admin) list.createEl("p", { text: "Only admins can let people in." });

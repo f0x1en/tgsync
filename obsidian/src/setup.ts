@@ -26,6 +26,12 @@ export interface Advanced { apiId: string; apiHash: string; proxy: string; accou
 
 export interface Waiting { code: string; id: string }
 
+/** A join request with the asker's short code, shown beside their name (two people can share a name). */
+export type Ask = JoinRequest & { code: string };
+export const withCode = async (r: JoinRequest): Promise<Ask> => ({ ...r, code: await shortCode(r.recipient) });
+/** "Name (abcd-1234)". */
+export const named = (name: string, code: string) => `${name || "Someone"} (${code})`;
+
 export class VaultSetup {
   /** `account`: the tgsync account named in this vault's settings ("" = the usual one). */
   constructor(readonly dir: string, private host: VaultHost, private account: () => string = () => "") {}
@@ -133,8 +139,10 @@ export class VaultSetup {
   members() {
     return this.host.use(async (v) => ({
       admin: v.isAdmin,
-      members: v.members.map((m) => ({ name: m.name || m.recipient.slice(0, 12), admin: !!m.admin, you: m.recipient === v.me.recipient })),
-      waiting: v.isAdmin ? await v.pendingRequests() : [],
+      members: await Promise.all(v.members.map(async (m) => ({
+        name: named(m.name, await shortCode(m.recipient)), admin: !!m.admin, you: m.recipient === v.me.recipient,
+      }))),
+      waiting: v.isAdmin ? await Promise.all((await v.pendingRequests()).map(withCode)) : [],
     }));
   }
 
