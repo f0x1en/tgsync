@@ -51,7 +51,12 @@ interface Local {
   /** "msg.index" -> [doc, text sha] for note versions (restore). */
   versions: { [rev: string]: [string, string] };
   problems: [number | null, string][];
+  /** Big-file uploads not yet in a posted record, to resume after an interruption. */
+  uploads?: { [path: string]: Upload };
 }
+
+/** What a big-file upload has posted so far. `parts`: sha256 (hex) of each posted chunk's plain bytes. */
+interface Upload { size: number; mtime: number; chunkSize: number; epoch: number | null; fileId: string; ids: number[]; parts: string[] }
 
 const REMOVED_MSG = "you were removed from this vault; local files are left untouched; to ask to come back, run `tgsync join` in this folder";
 const enc = new TextEncoder();
@@ -339,22 +344,40 @@ export class Vault {
 
   // ------------------------------------------------------------------- push
   /** Upload a big file as sealed chunks; returns its blob for the record. */
-  private async uploadChunks(rel: string, raw: string, size: number, chunkSize: number): Promise<{ sha: string; blob: object }> {
-    if (size >= BIG_FILE) this.notify(`uploading ${rel} (${humanSize(size)}); big files take a while`);
-    const fileId = hexOf(globalThis.crypto.getRandomValues(new Uint8Array(8)));
+  /** Upload a big file as sealed chunks; returns its blob for the record. An upload cut off earlier
+   *  (same size, mtime, chunk size and key) continues: posted chunks whose bytes are unchanged are kept. */
+  private async uploadChunks(rel: string, raw: string, size: number, mtime: number, chunkSize: number): Promise<{ sha: string; blob: object }> {
     const count = Math.max(1, Math.ceil(size / chunkSize));
+    const uploads = (this.state.d.uploads ??= {});
+    const prev = uploads[rel];
+    const same = prev && prev.size === size && prev.mtime === mtime && prev.chunkSize === chunkSize && prev.epoch === this.epoch;
+    const up: Upload = same ? prev : { size, mtime, chunkSize, epoch: this.epoch, fileId: hexOf(globalThis.crypto.getRandomValues(new Uint8Array(8))), ids: [], parts: [] };
+    uploads[rel] = up;
+    if (size >= BIG_FILE) {
+      this.notify(up.ids.length ? `resuming the upload of ${rel} (${up.ids.length} of ${count} parts were sent before)`
+        : `uploading ${rel} (${humanSize(size)}); big files take a while`);
+    }
     const h = nobleSha256.create();
-    const ids: number[] = [];
-    let total = 0;
+    let total = 0, i = 0;
     const ring = this.chunkKeys();
     for await (const part of this.files.readChunks(raw, chunkSize)) {
-      if (ids.length >= count) break;
+      if (i >= count) break;
       h.update(part);
       total += part.length;
-      ids.push(await this.transport.send(KIND.chunk, await sealChunk(ring, fileId, ids.length, count, part)));
+      const digest = hexOf(new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", part as Uint8Array<ArrayBuffer>)));
+      if (up.parts[i] !== digest) { // not sent yet, or the bytes changed since: send (again) from here
+        up.ids.length = up.parts.length = i;
+        up.ids.push(await this.transport.send(KIND.chunk, await sealChunk(ring, up.fileId, i, count, part)));
+        up.parts.push(digest);
+        await this.state.save(); // a cut-off upload continues from here
+      }
+      i++;
     }
-    if (ids.length !== count || total !== size) throw new Error("changed while uploading; run `tgsync push` again");
-    return { sha: hexOf(h.digest()), blob: { file_id: fileId, chunks: ids, chunk_size: chunkSize, inline: null } };
+    if (i !== count || total !== size) {
+      delete uploads[rel];
+      throw new Error("changed while uploading; run `tgsync push` again");
+    }
+    return { sha: hexOf(h.digest()), blob: { file_id: up.fileId, chunks: up.ids.slice(0, count), chunk_size: chunkSize, inline: null } };
   }
 
   /** Upload every local change: as many records as needed (500 entries / 4 MiB each). */
@@ -388,7 +411,7 @@ export class Vault {
         } else if (known.has(sha)) {
           disk[rel] = { ...base, bytes: "" }; // the group has this content: the core re-uses its blob
         } else {
-          const up = await this.uploadChunks(rel, raw, st!.size, chunkSize);
+          const up = await this.uploadChunks(rel, raw, st!.size, st!.mtime, chunkSize);
           if (up.sha !== sha) { keepAsIs(rel, "changed while uploading; run `tgsync push` again"); continue; }
           disk[rel] = { ...base, blob: up.blob };
         }
@@ -413,6 +436,7 @@ export class Vault {
       rep.pushed += p.done.length;
       rep.pushed_paths.push(...p.done.map((d: [string, string | null]) => d[0]));
     }
+    delete this.state.d.uploads; // all posted: nothing to resume
     await this.state.save();
   }
 
