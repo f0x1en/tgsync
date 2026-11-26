@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The plugin (engine inside) on a sandbox group, with a stub `obsidian` module. Alice uses the CLI
-// (../ts/dist/tgsync.mjs, built by `npm test` in ts/); Bob uses Obsidian with the plugin.
+// The plugin (engine inside) on a sandbox group, with a stub `obsidian` module. Alice and Bob each
+// use Obsidian with the plugin, each with their own tgsync account (the Account setting).
 // `npm test` bundles this file with `obsidian` aliased to ./obsidian-stub.ts.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,21 +11,10 @@ import { FileSystemAdapter, MarkdownView, notices } from "obsidian";
 import TgsyncPlugin from "../src/main.ts";
 
 (globalThis as any).window = globalThis; // timers, as in the app
-const CLI = join(__dirname, "..", "..", "ts", "dist", "tgsync.mjs");
 const tmp = mkdtempSync(join(tmpdir(), "tgsync-plugin-"));
-process.env.TGSYNC_SANDBOX = join(tmp, "sb"); // the plugin's engine finds bob's keys in the sandbox
+process.env.TGSYNC_SANDBOX = join(tmp, "sb"); // keys and the "Telegram group" live in the sandbox
 delete process.env.TGSYNC_HOME;
 const A = join(tmp, "alice"), B = join(tmp, "bob");
-
-function cli(profile: string, ...args: string[]): any {
-  const r = spawnSync("node", [CLI, "--json", ...args], { env: { ...process.env, TGSYNC_PROFILE: profile }, encoding: "utf8" });
-  return JSON.parse(r.stdout);
-}
-
-// alice makes the vault; bob asks to join and is let in (as he will from the plugin later)
-const inv = cli("alice", "new", A).invite;
-cli("alice", "accept", cli("bob", "join", inv, B).code, "-C", A);
-assert.equal(cli("bob", "join").state, "joined");
 
 const editor = new MarkdownView();
 const handlers: (() => void)[] = [];
@@ -34,7 +22,7 @@ const handlers: (() => void)[] = [];
 async function start(folder: string, settings: object = {}) {
   const app: any = {
     vault: { adapter: new FileSystemAdapter(folder), on: (_ev: string, f: () => void) => { handlers.push(f); return {}; } },
-    workspace: { onLayoutReady: () => {}, getLeavesOfType: () => [{ view: editor }] },
+    workspace: { onLayoutReady: () => {}, getLeavesOfType: () => [{ view: editor }], getActiveFile: () => null },
   };
   const p: any = new TgsyncPlugin(app);
   await p.saveData(settings);
@@ -44,71 +32,134 @@ async function start(folder: string, settings: object = {}) {
   return p;
 }
 
-test("sync downloads others' changes and uploads yours; quiet unless asked", async () => {
-  const p = await start(B);
-  writeFileSync(join(A, "from-alice.md"), "hello bob\n");
-  cli("alice", "push", "-C", A);
-  notices.length = 0;
-  await p.sync(false);
-  assert.equal(readFileSync(join(B, "from-alice.md"), "utf8"), "hello bob\n");
-  assert.equal(p.state, "synced");
-  assert.equal(p.bars[0].text, "✓ Synced");
-  assert.deepEqual(notices, []); // automatic syncs say nothing
-  assert.ok(editor.saved > 0, "open notes are saved before syncing");
+/** Two plugins (alice's, bob's); `fn` runs with both; both are closed after. */
+async function both(fn: (a: any, b: any) => Promise<void>) {
+  const a = await start(A, { account: "alice" }), b = await start(B, { account: "bob" });
+  try { await fn(a, b); } finally { await a.onunload(); await b.onunload(); }
+}
 
-  writeFileSync(join(B, "from-bob.md"), "hi alice\n");
-  await p.sync(true);
-  assert.ok(notices.some((n) => n.includes("1 uploaded")), notices.join("\n"));
-  cli("alice", "pull", "-C", A);
-  assert.equal(readFileSync(join(A, "from-bob.md"), "utf8"), "hi alice\n");
-  await p.onunload();
+/** `admin` asks about requests now (not in 10 minutes). -> the requests it showed. */
+async function requests(admin: any): Promise<any[]> {
+  const asked: any[] = [];
+  admin.askAccept = (r: any) => asked.push(r);
+  admin.lastAsk = 0;
+  await admin.sync(false);
+  return asked;
+}
+
+test("alice starts a vault in Obsidian; bob asks to join, is let in with one click, and joins by himself", async () => {
+  await both(async (a, b) => {
+    mkdirSync(A, { recursive: true });
+    writeFileSync(join(A, "welcome.md"), "hi from alice\n");
+    await a.setup.create();
+    assert.ok(a.host.cfg(), "the vault is set up");
+    await a.sync(false);
+    const w = await b.setup.join(await a.setup.invite());
+    assert.match(w?.code ?? "", /^[0-9a-f]{4}-[0-9a-f]{4}$/, "waiting, with the code alice sees beside his name");
+    await b.sync(false);
+    assert.equal(b.state, "waiting");
+    assert.deepEqual(await b.setup.waiting(), w);
+
+    const asked = await requests(a);
+    assert.equal(asked.length, 1, "alice is asked about the request");
+    assert.equal(asked[0].code, w!.code, "with bob's code");
+    assert.match(a.bars[0].text, /1 waiting to join/, "the request waits in the status bar");
+    await a.sync(false);
+    assert.equal(asked.length, 1, "asked once; then it waits");
+    await b.sync(false);
+    assert.equal(b.state, "waiting", "nobody is in before alice says so");
+
+    await a.setup.accept(asked[0]);
+    a.decided(asked[0]);
+    assert.doesNotMatch(a.bars[0].text, /waiting to join/);
+    await assert.rejects(a.setup.accept(asked[0]), /no longer waiting/);
+    await b.sync(false);
+    assert.equal(b.state, "synced", "joined by himself");
+    assert.equal(readFileSync(join(B, "welcome.md"), "utf8"), "hi from alice\n");
+    assert.equal(await b.setup.waiting(), null);
+    assert.equal((await requests(a)).length, 0, "nobody left waiting");
+    const names = (await a.setup.members()).members.map((m: any) => m.name);
+    assert.ok(names.every((n: string) => /\([0-9a-f]{4}-[0-9a-f]{4}\)$/.test(n)), `members show their code: ${names}`);
+  });
+});
+
+test("sync downloads others' changes and uploads yours; quiet unless asked", async () => {
+  await both(async (a, b) => {
+    writeFileSync(join(A, "from-alice.md"), "hello bob\n");
+    await a.sync(false);
+    notices.length = 0;
+    await b.sync(false);
+    assert.equal(readFileSync(join(B, "from-alice.md"), "utf8"), "hello bob\n");
+    assert.equal(b.state, "synced");
+    assert.equal(b.bars[0].text, "✓ Synced");
+    assert.deepEqual(notices, []); // automatic syncs say nothing
+    assert.ok(editor.saved > 0, "open notes are saved before syncing");
+
+    writeFileSync(join(B, "from-bob.md"), "hi alice\n");
+    await b.sync(true);
+    assert.ok(notices.some((n) => n.includes("1 uploaded")), notices.join("\n"));
+    await a.sync(false);
+    assert.equal(readFileSync(join(A, "from-bob.md"), "utf8"), "hi alice\n");
+  });
 });
 
 test("an edit is uploaded by itself a moment later", async () => {
-  const p = await start(B);
-  const started: Promise<void>[] = [];
-  const sync = p.sync.bind(p);
-  p.sync = (loud: boolean) => { const r = sync(loud); started.push(r); return r; };
-  writeFileSync(join(B, "typed.md"), "typed in Obsidian\n");
-  for (const h of handlers) h(); // Obsidian reports the change
-  await new Promise((r) => setTimeout(r, 150));
-  assert.ok(started.length > 0, "the edit started a sync by itself");
-  await Promise.all(started);
-  cli("alice", "pull", "-C", A);
-  assert.equal(readFileSync(join(A, "typed.md"), "utf8"), "typed in Obsidian\n");
-  await p.onunload();
+  await both(async (a, b) => {
+    const started: Promise<void>[] = [];
+    const sync = b.sync.bind(b);
+    b.sync = (loud: boolean) => { const r = sync(loud); started.push(r); return r; };
+    writeFileSync(join(B, "typed.md"), "typed in Obsidian\n");
+    for (const h of handlers) h(); // Obsidian reports the change
+    await new Promise((r) => setTimeout(r, 150));
+    assert.ok(started.length > 0, "the edit started a sync by itself");
+    await Promise.all(started);
+    await a.sync(false);
+    assert.equal(readFileSync(join(A, "typed.md"), "utf8"), "typed in Obsidian\n");
+  });
 });
 
 test("both changed one file: both versions kept and the user is told; notes merge", async () => {
-  const p = await start(B);
-  writeFileSync(join(A, "pic.bin"), "v1");
-  writeFileSync(join(A, "plan.md"), "plan\n");
-  cli("alice", "push", "-C", A);
-  await p.sync(false);
-  writeFileSync(join(A, "pic.bin"), "alice");
-  writeFileSync(join(B, "pic.bin"), "bob");
-  writeFileSync(join(A, "plan.md"), "plan\nalice's line\n");
-  writeFileSync(join(B, "plan.md"), "bob's line\nplan\n");
-  cli("alice", "push", "-C", A);
-  notices.length = 0;
-  await p.sync(false);
-  assert.ok(notices.some((n) => n.includes("pic.bin was changed on two devices")), notices.join("\n"));
-  const note = readFileSync(join(B, "plan.md"), "utf8");
-  assert.ok(note.includes("alice's line") && note.includes("bob's line"), note);
-  await p.onunload();
+  await both(async (a, b) => {
+    writeFileSync(join(A, "plan.md"), "plan\n");
+    await a.sync(false);
+    await b.sync(false);
+    writeFileSync(join(A, "pic.bin"), "alice");
+    writeFileSync(join(B, "pic.bin"), "bob");
+    writeFileSync(join(A, "plan.md"), "plan\nalice's line\n");
+    writeFileSync(join(B, "plan.md"), "bob's line\nplan\n");
+    await a.sync(false);
+    notices.length = 0;
+    await b.sync(false);
+    assert.ok(notices.some((n) => n.includes("pic.bin was changed on two devices")), notices.join("\n"));
+    const note = readFileSync(join(B, "plan.md"), "utf8");
+    assert.ok(note.includes("alice's line") && note.includes("bob's line"), note);
+  });
 });
 
-test("a terminal run holding the folder: skipped quietly, no error", async () => {
-  const p = await start(B);
-  writeFileSync(join(B, ".tgsync", "lock"), String(process.pid)); // held by "someone" alive
-  notices.length = 0;
-  await p.sync(false);
-  assert.equal(p.state, "synced");
-  assert.deepEqual(notices, []);
-  writeFileSync(join(B, ".tgsync", "lock"), "999999999"); // gone: taken over
-  await p.sync(false);
-  assert.ok(!existsSync(join(B, ".tgsync", "lock")), "lock released after the sync");
-  await p.onunload();
+test("older versions of a file come back", async () => {
+  await both(async (a) => {
+    writeFileSync(join(A, "draft.md"), "first\n");
+    await a.sync(false);
+    writeFileSync(join(A, "draft.md"), "second\n");
+    await a.sync(false);
+    const rows = await a.setup.versions("draft.md");
+    assert.ok(rows.length >= 2, JSON.stringify(rows));
+    await a.setup.restore("draft.md", rows[rows.length - 1].rev);
+    assert.equal(readFileSync(join(A, "draft.md"), "utf8"), "first\n");
+  });
+});
+
+test("another program holding the folder: skipped quietly, no error", async () => {
+  await both(async (_a, b) => {
+    writeFileSync(join(B, ".tgsync", "lock"), String(process.pid)); // held by "someone" alive
+    notices.length = 0;
+    await b.sync(false);
+    assert.equal(b.state, "synced");
+    assert.deepEqual(notices, []);
+    writeFileSync(join(B, ".tgsync", "lock"), "999999999"); // gone: taken over
+    await b.sync(false);
+    assert.ok(!existsSync(join(B, ".tgsync", "lock")), "lock released after the sync");
+  });
 });
 
 test("not a vault, and sync switched off", async () => {
@@ -117,65 +168,10 @@ test("not a vault, and sync switched off", async () => {
   await p.sync(false);
   assert.equal(p.state, "not set up");
   await p.onunload();
-  const q = await start(B, { auto: false });
+  const q = await start(B, { account: "bob", auto: false });
   q.schedule();
   assert.equal(q.bars[0].text, "Sync paused");
   await q.onunload();
-});
-
-test("start a vault in Obsidian; a friend asks to join and is let in with one click", async () => {
-  const C = mkdtempSync(join(tmpdir(), "tgsync-carol-")), D = join(tmp, "dave");
-  writeFileSync(join(C, "welcome.md"), "hi from carol\n");
-  const p = await start(C);
-  await p.setup.create();
-  assert.ok(p.host.cfg(), "the vault is set up");
-  await p.sync(false);
-  const invite = await p.setup.invite();
-  cli("dave", "join", invite, D);
-  const asked: any[] = [];
-  p.askAccept = (r: any) => asked.push(r);
-  p.lastAsk = 0;
-  await p.sync(false);
-  assert.equal(asked.length, 1, "the owner is asked about the request");
-  assert.match(asked[0].code, /^[0-9a-f]{4}-[0-9a-f]{4}$/, "with the asker's code");
-  assert.match(p.bars[0].text, /1 waiting to join/, "the request waits in the status bar");
-  await p.sync(false);
-  assert.equal(asked.length, 1, "asked once; then it waits");
-  assert.match((await p.setup.members()).members[0].name, /\([0-9a-f]{4}-[0-9a-f]{4}\)$/, "members show their code");
-  assert.equal(cli("dave", "join").state, "waiting", "nobody is in before the owner says so");
-  await p.setup.accept(asked[0]);
-  p.decided(asked[0]);
-  assert.doesNotMatch(p.bars[0].text, /waiting to join/);
-  await assert.rejects(p.setup.accept(asked[0]), /no longer waiting/);
-  assert.equal(cli("dave", "join").state, "joined");
-  assert.equal(readFileSync(join(D, "welcome.md"), "utf8"), "hi from carol\n");
-  p.lastAsk = 0;
-  asked.length = 0;
-  await p.sync(false);
-  assert.equal(asked.length, 0, "nobody left waiting");
-  await p.onunload();
-});
-
-test("join from Obsidian: shows the code, then joins by itself once let in", async () => {
-  const E = mkdtempSync(join(tmpdir(), "tgsync-erin-"));
-  writeFileSync(join(A, "for-erin.md"), "hello erin\n");
-  cli("alice", "push", "-C", A);
-  const p = await start(E);
-  const w = await p.setup.join(cli("alice", "invite", "-C", A).invite);
-  assert.ok(w?.code, "waiting, with a code to tell the owner");
-  await p.sync(false);
-  assert.equal(p.state, "waiting");
-  assert.deepEqual(await p.setup.waiting(), w);
-  cli("alice", "accept", w!.code, "-C", A);
-  await p.sync(false);
-  assert.equal(p.state, "synced");
-  assert.equal(readFileSync(join(E, "for-erin.md"), "utf8"), "hello erin\n");
-  assert.equal(await p.setup.waiting(), null);
-  writeFileSync(join(E, "from-erin.md"), "hi\n");
-  await p.sync(false);
-  cli("alice", "pull", "-C", A);
-  assert.equal(readFileSync(join(A, "from-erin.md"), "utf8"), "hi\n");
-  await p.onunload();
 });
 
 test("an account named in the vault's settings is used for setup", async () => {
@@ -188,18 +184,31 @@ test("an account named in the vault's settings is used for setup", async () => {
 });
 
 test("a refused request is not asked about again", async () => {
-  const G = join(tmp, "gus");
-  const asked: any[] = [];
-  const q = await start(A); // alice, the admin, in Obsidian
-  q.askAccept = (r: any) => asked.push(r);
-  cli("gus", "join", cli("alice", "invite", "-C", A).invite, G);
-  q.lastAsk = 0;
-  await q.sync(false);
-  assert.equal(asked.length, 1);
-  await q.refuse(asked[0]);
-  q.lastAsk = 0;
-  await q.sync(false);
-  assert.equal(asked.length, 1, "not asked again");
-  assert.equal(cli("gus", "join").state, "waiting");
-  await q.onunload();
+  const G = mkdtempSync(join(tmpdir(), "tgsync-gus-"));
+  await both(async (a) => {
+    const g = await start(G, { account: "gus" });
+    await g.setup.join(await a.setup.invite());
+    const asked = await requests(a);
+    assert.equal(asked.length, 1);
+    await a.refuse(asked[0]);
+    assert.equal((await requests(a)).length, 0, "not asked again");
+    await g.sync(false);
+    assert.equal(g.state, "waiting");
+    await g.onunload();
+  });
+});
+
+test("admins make others admin and remove members", async () => {
+  await both(async (a, b) => {
+    const bob = (await a.setup.members()).members.find((m: any) => !m.you);
+    await a.setup.giveAdmin(bob.id);
+    assert.ok((await b.setup.members()).admin, "bob is an admin now");
+    await b.setup.dropAdmin();
+    assert.ok(!(await b.setup.members()).admin, "bob stopped being one");
+    await a.setup.remove(bob.id);
+    assert.equal((await a.setup.members()).members.length, 1);
+    await b.sync(false);
+    assert.equal(b.state, "error");
+    assert.match(b.lastError, /removed/);
+  });
 });

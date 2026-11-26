@@ -10,7 +10,7 @@ import { Pace } from "../../ts/src/node/pace.ts";
 import { OfflineError } from "../../ts/src/transport.ts";
 import type { Report } from "../../ts/src/vault.ts";
 import { VaultSetup, withCode, type Advanced, type Ask } from "./setup.ts";
-import { AcceptModal, TgsyncSettingTab } from "./ui.ts";
+import { AcceptModal, TgsyncSettingTab, VersionsModal } from "./ui.ts";
 
 interface Settings extends Advanced {
   auto: boolean; // sync automatically
@@ -57,6 +57,15 @@ export default class TgsyncPlugin extends Plugin {
     this.bar.onClickEvent(() => this.clickBar());
     this.addRibbonIcon("refresh-cw", "Sync now (tgsync)", () => this.sync(true));
     this.addCommand({ id: "sync", name: "Sync now", callback: () => this.sync(true) });
+    this.addCommand({
+      id: "versions", name: "Older versions of this file",
+      checkCallback: (checking) => {
+        const f = this.app.workspace.getActiveFile();
+        if (!f || !this.host?.cfg()) return false;
+        if (!checking) new VersionsModal(this.app, this, f.path).open();
+        return true;
+      },
+    });
     this.addSettingTab(new TgsyncSettingTab(this.app, this));
     this.host = new VaultHost(this.folder());
     this.setup = new VaultSetup(this.folder(), this.host, () => this.settings.account);

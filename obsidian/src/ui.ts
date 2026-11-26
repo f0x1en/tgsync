@@ -41,6 +41,46 @@ async function busy(b: ButtonComponent, fn: () => Promise<void>): Promise<void> 
   } finally { b.setDisabled(false); }
 }
 
+/** Ask yes or no in a window. -> true for `yes`. */
+export function confirm(app: App, title: string, desc: string, yes: string): Promise<boolean> {
+  return new Promise((ok) => {
+    let said = false;
+    const m = new Modal(app);
+    m.titleEl.setText(title);
+    m.contentEl.createEl("p", { text: desc });
+    new Setting(m.contentEl)
+      .addButton((b) => b.setButtonText(yes).setWarning().onClick(() => { said = true; m.close(); }))
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => m.close()));
+    m.onClose = () => ok(said);
+    m.open();
+  });
+}
+
+/** Older versions of one file, from the vault's history: pick one to bring back. */
+export class VersionsModal extends Modal {
+  constructor(app: App, private plugin: TgsyncPlugin, private path: string) { super(app); }
+
+  onOpen(): void {
+    this.titleEl.setText(`Versions of ${this.path}`);
+    const el = this.contentEl;
+    el.createEl("p", { text: "Loading…" });
+    this.plugin.setup.versions(this.path).then((rows) => {
+      el.empty();
+      if (!rows.length) { el.createEl("p", { text: "No versions yet: the file's history starts at its first upload." }); return; }
+      el.createEl("p", { text: "Restoring puts that version in place of the current one. The current one stays in the history." });
+      for (const r of rows) {
+        new Setting(el).setName(new Date(r.ts * 1000).toLocaleString()).setDesc(r.who)
+          .addButton((b) => b.setButtonText("Restore").onClick(() => busy(b, async () => {
+            await this.plugin.setup.restore(this.path, r.rev);
+            new Notice(`tgsync: ${this.path} is back as of ${new Date(r.ts * 1000).toLocaleString()}.`);
+            this.close();
+            void this.plugin.sync(false);
+          })));
+      }
+    }).catch((e) => { el.empty(); el.createEl("p", { text: `Could not load the history: ${(e as Error).message}` }); });
+  }
+}
+
 /** "Someone asks to join": let in, or refuse (not asked again). Not now: it waits in the status bar. */
 export class AcceptModal extends Modal {
   constructor(app: App, private plugin: TgsyncPlugin, private req: Ask) { super(app); }
@@ -175,7 +215,33 @@ export class TgsyncSettingTab extends PluginSettingTab {
     list.createEl("p", { text: "Loading members…" });
     p.setup.members().then(({ admin, members, waiting }) => {
       list.empty();
-      new Setting(list).setName("Members").setDesc(members.map((m) => m.name + (m.admin ? " (admin)" : "") + (m.you ? " (you)" : "")).join(", "));
+      list.createEl("h4", { text: "Members" });
+      for (const m of members) {
+        const row = new Setting(list).setName(m.name + (m.you ? " (you)" : "")).setDesc(m.admin ? "Admin: can let people in and remove them." : "");
+        if (admin && !m.you && !m.admin) {
+          row.addButton((b) => b.setButtonText("Make admin").onClick(() => busy(b, async () => {
+            await p.setup.giveAdmin(m.id);
+            new Notice(`tgsync: ${m.name} is now an admin.`);
+            this.display();
+          })));
+        }
+        if (admin && !m.you) {
+          row.addButton((b) => b.setButtonText("Remove…").setWarning().onClick(() => busy(b, async () => {
+            if (!await confirm(this.app, `Remove ${m.name}?`, "They keep what they already have, but cannot read anything new: " +
+              "the vault gets a new key.", "Remove")) return;
+            await p.setup.remove(m.id);
+            new Notice(`tgsync: ${m.name} was removed.`);
+            this.display();
+          })));
+        }
+        if (m.you && m.admin) {
+          row.addButton((b) => b.setButtonText("Stop being admin").onClick(() => busy(b, async () => {
+            if (!await confirm(this.app, "Stop being an admin?", "You can no longer let people in or remove them. Another admin can make you one again.", "Stop")) return;
+            await p.setup.dropAdmin();
+            this.display();
+          })));
+        }
+      }
       for (const r of waiting.filter((r) => !p.settings.refused.includes(r.recipient))) {
         new Setting(list).setName(`${named(r.name, r.code)} asks to join`)
           .addButton((b) => b.setButtonText("Let in…").setCta().onClick(() => new AcceptModal(this.app, p, r).open()));

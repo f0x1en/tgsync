@@ -66,7 +66,7 @@ export function appDir(profile: string): string {
 
 export async function loadIdentity(profile: string): Promise<Identity> {
   const p = join(appDir(profile), "identity.age-key");
-  if (!existsSync(p)) throw new HomeError(`no identity for profile '${profile}'; run \`tgsync new\` or \`tgsync join\``);
+  if (!existsSync(p)) throw new HomeError(`no identity for profile '${profile}'; log in from tgsync's settings in Obsidian`);
   const secret = readFileSync(p, "utf8").trim().split("\n").at(-1)!.trim();
   const recipient = await identityToRecipient(secret);
   return { secret, recipient, id: await memberId(recipient), signing: signingKey(profile), seqs: seqStore(profile) };
@@ -126,9 +126,9 @@ export async function initIdentity(profile: string): Promise<Identity> {
   return { ...ident, signing: signingKey(profile), seqs: seqStore(profile) };
 }
 
-// Things this computer remembers so you don't retype them: your vault folders, and join
-// requests you sent (invite line, account, folder) so a later `tgsync join` needs no arguments.
-export interface Remembered { vaults?: string[]; joins?: { [vaultId: string]: { code: string; profile: string; folder: string } } }
+// Join requests this computer sent (invite line, account, folder): the folder finishes joining by
+// itself once let in.
+export interface Remembered { joins?: { [vaultId: string]: { code: string; profile: string; folder: string } } }
 
 const memPath = () => join(rootDir(), "remembered.json");
 

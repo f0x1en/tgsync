@@ -4,11 +4,10 @@
 
 check: rust ts plugin ## everything CI runs except the long simulation
 
-live:   ## two-person test on REAL Telegram (needs profiles default + b); KEEP=dir keeps folders
-	mkdir -p ts/live && cp ts/dist/tgsync.mjs ts/live/tgsync.mjs
-	cd ts && npm run -s live -- $(if $(KEEP),--keep $(abspath $(KEEP)))
+live:   ## two-person test on REAL Telegram (needs accounts default + b logged in); KEEP=1 keeps folders
+	cd obsidian && npm run -s live -- $(if $(KEEP),--keep)
 
-ts: wasm ## TypeScript host + Node CLI on the Rust core: type check and tests (incl. two-process sandbox tests)
+ts: wasm ## TypeScript host on the Rust core (vault, Telegram, setup): type check and tests
 	cd ts && npm run typecheck && npm test
 
 plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm install` in obsidian/ once

@@ -70,7 +70,7 @@ const sessionPath = (profile: string) => join(appDir(profile), "mtcute.session")
 /** Has this profile an API key and a saved Telegram login? (The login may still have been revoked.) */
 export const hasLogin = (profile: string) => existsSync(sessionPath(profile)) && existsSync(credsPath(profile));
 
-/** mtcute's crypto, with its wasm inside our bundle instead of looked up in node_modules (one-file CLI). */
+/** mtcute's crypto, with its wasm inside our bundle instead of looked up in node_modules (one-file plugin). */
 class Crypto extends NodeCryptoProvider {
   override async initialize(): Promise<void> {
     initSync(SIMD_AVAILABLE ? wasmSimd : wasmPlain);
@@ -104,7 +104,7 @@ function unreachable(profile: string, creds: Creds, e: unknown): TransportError 
       `Is the proxy running? Start it and run the same command again.\n(The proxy is saved in ${credsPath(profile)}.)`);
   }
   return new TransportError(`Can't reach Telegram (${why}). Check your internet, or use a proxy: ` +
-    "add --proxy socks5://127.0.0.1:PORT to `tgsync new` / `tgsync join`.");
+    "set a Proxy in tgsync's settings (Advanced), then log in again.");
 }
 
 /** `code(where)`: `where` says where Telegram sent the login code (codeWhere). */
@@ -156,8 +156,8 @@ function wrapConnect(profile: string, creds: Creds, e: unknown): Error {
 /** Connect with the saved session; NotLoggedIn when there is none or Telegram revoked it. */
 export async function connect(profile: string): Promise<TelegramClient> {
   const creds = loadCreds(profile);
-  if (!creds) throw new TransportError("no Telegram API credentials; run `tgsync new` or `tgsync join` to set up");
-  if (!existsSync(sessionPath(profile))) throw new NotLoggedIn("not logged in to Telegram yet; run the command in a terminal to log in");
+  if (!creds) throw new NotLoggedIn("not logged in to Telegram yet; log in from tgsync's settings");
+  if (!existsSync(sessionPath(profile))) throw new NotLoggedIn("not logged in to Telegram yet; log in from tgsync's settings");
   const tg = makeClient(creds, profile);
   try {
     await tg.importSession(readFileSync(sessionPath(profile), "utf8").trim());
@@ -165,7 +165,7 @@ export async function connect(profile: string): Promise<TelegramClient> {
   } catch (e) {
     await tg.destroy();
     if (tl.RpcError.is(e) && (e.code === 401 || /AUTH_KEY|SESSION_REVOKED|USER_DEACTIVATED/.test(e.text))) {
-      throw new NotLoggedIn("Telegram session missing or revoked; run `tgsync` in a terminal to log in again");
+      throw new NotLoggedIn("Telegram logged tgsync out; log in again from tgsync's settings");
     }
     throw wrapConnect(profile, creds, e);
   }
@@ -194,7 +194,7 @@ async function resolveChatNow(tg: TelegramClient, ref: string, peer?: string): P
     const res = await tg.joinChat(ref);
     if (res.status === "ok") return res.chat;
     throw new TransportError("Joined, but Telegram did not return the chat (the group may require admin approval " +
-      "to join). Ask an admin to approve you, then run the command again.");
+      "to join). Ask an admin to approve you, then try again.");
   }
   if (!/^-?\d+$/.test(ref)) return tg.getChat(ref);
   try { return await tg.getChat(Number(ref)); } catch (e) {
@@ -272,7 +272,7 @@ export class TelegramTransport implements Transport {
           continue;
         }
         if (tl.RpcError.is(e) && (e.code === 401 || /AUTH_KEY|SESSION_REVOKED|USER_DEACTIVATED/.test(e.text))) {
-          throw new TransportError("Telegram session revoked; run `tgsync` in a terminal to log in again");
+          throw new TransportError("Telegram logged tgsync out; log in again from tgsync's settings");
         }
         if (e instanceof TransportError) throw e;
         throw new TransportError(`Telegram error: ${(e as Error)?.message ?? e}`);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The vault folder, as the engine sees it. Paths are vault-relative with "/". Node `fs` (CLI)
-// and Obsidian's vault adapter (plugin) implement this.
+// The vault folder, as the engine sees it. Paths are vault-relative with "/". Node `fs`
+// (node/files.ts) implements this.
 
 export interface Stat { type: "file" | "dir" | "other"; size: number; mtime: number /* ms since epoch */ }
 

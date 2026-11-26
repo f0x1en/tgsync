@@ -87,7 +87,7 @@ export class VaultSetup {
       const link = tg ? (await createGroup(tg, title))[1] : newSandboxGroup();
       const tr = await openGroup(link, tg);
       try {
-        const { v } = await createVault({ folder: this.dir, files: new NodeFiles(this.dir), ident, tr, profile, chat: link, link, name: await this.name(tg) });
+        const v = await createVault({ folder: this.dir, files: new NodeFiles(this.dir), ident, tr, profile, chat: link, link, name: await this.name(tg) });
         v.engine.free(); // syncing opens the vault afresh each time
       } finally { if (!tg) await tr.close(); }
     });
@@ -110,7 +110,7 @@ export class VaultSetup {
   /** Join with an invite line (pasted, or the saved one). -> Waiting until let in; null once joined
    *  (files downloaded). */
   async join(line?: string): Promise<Waiting | null> {
-    const code = (line ?? this.joinEntry()?.code ?? "").trim().replace(/^tgsync join\s+/, "");
+    const code = (line ?? this.joinEntry()?.code ?? "").trim();
     if (!code) throw new SetupError("Paste the invite your friend sent you.");
     let inv;
     try { inv = decodeInvite(code); } catch (e) { throw new SetupError((e as Error).message); }
@@ -135,15 +135,32 @@ export class VaultSetup {
     return this.host.use((v) => inviteLine(v, this.dir, this.host.cfg()! as any));
   }
 
-  /** Members, and people waiting to be let in (only admins can let them in). */
+  /** Members (as the group says now), and people waiting to be let in (only admins can let them in). */
   members() {
-    return this.host.use(async (v) => ({
+    return this.host.use(async (v) => (await v.pull(), {
       admin: v.isAdmin,
       members: await Promise.all(v.members.map(async (m) => ({
-        name: named(m.name, await shortCode(m.recipient)), admin: !!m.admin, you: m.recipient === v.me.recipient,
+        id: m.id!, name: named(m.name, await shortCode(m.recipient)), admin: !!m.admin, you: m.recipient === v.me.recipient,
       }))),
       waiting: v.isAdmin ? await Promise.all((await v.pendingRequests()).map(withCode)) : [],
     }));
+  }
+
+  /** Remove a member (by member id): the vault key changes, so they cannot read anything new. */
+  remove(id: string): Promise<void> { return this.host.use((v) => v.removeMember(id)); }
+  /** Make a member an admin (by member id). */
+  giveAdmin(id: string): Promise<void> { return this.host.use((v) => v.giveAdmin(id)); }
+  /** Stop being an admin yourself. */
+  dropAdmin(): Promise<void> { return this.host.use((v) => v.dropAdmin()); }
+
+  /** Uploaded versions of a file, newest first (rev, when, who). */
+  versions(path: string) {
+    return this.host.use(async (v) => { await v.fetchChanges(); return v.versions(path); });
+  }
+
+  /** Bring back version `rev` of `path`; what is there now is uploaded first, so it stays in the history. */
+  restore(path: string, rev: string): Promise<void> {
+    return this.host.use(async (v) => { await v.pushChanges(); await v.restoreVersion(path, rev); });
   }
 
   /** Let `req` in (read again first: it may be gone, or found to be posted with two signing keys). */

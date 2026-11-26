@@ -58,7 +58,7 @@ interface Local {
 /** What a big-file upload has posted so far. `parts`: sha256 (hex) of each posted chunk's plain bytes. */
 interface Upload { size: number; mtime: number; chunkSize: number; epoch: number | null; fileId: string; ids: number[]; parts: string[] }
 
-const REMOVED_MSG = "you were removed from this vault; local files are left untouched; to ask to come back, run `tgsync join` in this folder";
+const REMOVED_MSG = "you were removed from this vault; local files are left untouched; to ask to come back, join again with an invite";
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const seed = () => globalThis.crypto.getRandomValues(new Uint8Array(32));
@@ -129,7 +129,7 @@ export class Vault {
   }
 
   private static signing(me: Identity): string {
-    if (!me.signing) throw new VaultError("this profile has no signing key; run `tgsync login` once to create it");
+    if (!me.signing) throw new VaultError("this profile has no signing key; log in from tgsync's settings once to create it");
     return me.signing;
   }
 
@@ -378,7 +378,7 @@ export class Vault {
     }
     if (i !== count || total !== size) {
       delete uploads[rel];
-      throw new Error("changed while uploading; run `tgsync push` again");
+      throw new Error("changed while uploading; it is uploaded at the next sync");
     }
     return { sha: hexOf(h.digest()), blob: { file_id: up.fileId, chunks: up.ids.slice(0, count), chunk_size: chunkSize, inline: null } };
   }
@@ -404,7 +404,7 @@ export class Vault {
       try {
         if (st!.size <= INLINE_MAX) {
           const data = await this.files.read(raw);
-          if (hexOf(nobleSha256(data)) !== sha) { keepAsIs(rel, "changed while reading; run `tgsync push` again"); continue; }
+          if (hexOf(nobleSha256(data)) !== sha) { keepAsIs(rel, "changed while reading; it is uploaded at the next sync"); continue; }
           let text: string | null = null;
           if (isTextPath(rel)) {
             // ignoreBOM: keep a byte-order mark, so the text hashes to the file's sha everywhere.
@@ -415,7 +415,7 @@ export class Vault {
           disk[rel] = { ...base, bytes: "" }; // the group has this content: the core re-uses its blob
         } else {
           const up = await this.uploadChunks(rel, raw, st!.size, st!.mtime, chunkSize);
-          if (up.sha !== sha) { keepAsIs(rel, "changed while uploading; run `tgsync push` again"); continue; }
+          if (up.sha !== sha) { keepAsIs(rel, "changed while uploading; it is uploaded at the next sync"); continue; }
           disk[rel] = { ...base, blob: up.blob };
         }
       } catch (e) {
@@ -545,12 +545,12 @@ export class Vault {
     for (const [p, n] of Object.entries(tree)) {
       const mine = shas[p];
       if (n.sha !== "dir" && mine !== undefined && mine !== n.sha && mine !== before[p] && before[p] !== n.sha) {
-        rep.skipped.push(`${p}: you changed it and so did someone else; run \`tgsync push\`, then \`tgsync pull\` to get both versions`);
+        rep.skipped.push(`${p}: you changed it and so did someone else; the next sync keeps both versions`);
       }
     }
     for (const [p, last] of Object.entries(before)) {
       if (!tree[p] && last !== "dir" && shas[p] !== undefined && shas[p] !== last) {
-        rep.skipped.push(`${p}: deleted by someone else, but you changed it; kept (\`tgsync push\` shares it again)`);
+        rep.skipped.push(`${p}: deleted by someone else, but you changed it; kept (the next sync shares it again)`);
       }
     }
     this.engine.materialized(JSON.stringify(synced));
@@ -565,7 +565,7 @@ export class Vault {
     if (!this.hasKeys) throw new VaultError("no vault keys; are you a member?");
   }
 
-  /** `tgsync pull`: download and apply others' changes; uploads nothing. */
+  /** Download and apply others' changes; uploads nothing. */
   pullChanges(): Promise<Report> {
     return this.exclusive(async () => {
       const rep = await this.pull();
@@ -575,7 +575,7 @@ export class Vault {
     });
   }
 
-  /** `tgsync push`: upload your changes; never touches your files. */
+  /** Upload your changes; never touches your files. */
   pushChanges(chunkSize = DEFAULT_CHUNK): Promise<Report> {
     return this.exclusive(async () => {
       const rep = await this.pull(); // log only: needed to know the vault state
@@ -658,17 +658,17 @@ export class Vault {
       .map(([msg, i, ts, a]) => ({ rev: `${msg}.${i}`, ts, who: names.get(a) ?? a.slice(0, 8) }));
   }
 
-  /** Put an older version of `path` into the folder (`tgsync push` shares it). */
+  /** Put an older version of `path` into the folder (the next push shares it). */
   restoreVersion(path: string, rev: string): Promise<void> {
     return this.exclusive(async () => {
       this.checkMember();
       const m = /^(\d+)\.(\d+)$/.exec(rev);
       const row = m && this.state.d.log.find((r) => r[0] === +m[1] && r[1] === +m[2] && r[5] === path && r[4] === "put");
-      if (!row) throw new VaultError(`${rev} is not a version of ${path} (see \`tgsync restore ${path}\`)`);
+      if (!row) throw new VaultError(`${rev} is not a version of ${path}`);
       const st = await this.files.stat(path);
       const synced: { [p: string]: string } = JSON.parse(this.engine.synced());
       if (st?.type === "file" && await this.hashFile(path) !== synced[path]) {
-        throw new VaultError(`${path} has changes you did not upload; run \`tgsync push\` first so they stay in the history`);
+        throw new VaultError(`${path} has changes not uploaded yet; sync first so they stay in the history`);
       }
       const ver = this.state.d.versions[rev];
       if (ver) {

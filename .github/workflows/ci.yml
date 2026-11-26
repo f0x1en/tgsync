@@ -60,11 +60,6 @@ jobs:
         working-directory: ts
       - run: npm run typecheck && npm test
         working-directory: ts
-      - uses: actions/upload-artifact@v4
-        if: runner.os == 'Linux'
-        with:
-          name: tgsync-cli
-          path: ts/dist/tgsync.mjs
       - name: Obsidian plugin (build + tests against a fake tgsync)
         working-directory: obsidian
         run: npm ci && npm run build && npm test

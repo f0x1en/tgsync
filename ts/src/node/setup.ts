@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Setting a vault folder up: start a vault, ask to join one and finish joining, invite, accept.
-// Shared by the CLI and the Obsidian plugin; nothing here asks questions or prints, callers do.
+// Used by the Obsidian plugin (obsidian/src/setup.ts); nothing here asks questions or prints.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-import { memberId, shortCode } from "../crypto.ts";
+import { shortCode } from "../crypto.ts";
 import { INTERNAL_DIR } from "../paths.ts";
-import { encodeInvite, type Identity, type Invite, type JoinRequest } from "../protocol.ts";
+import { encodeInvite, type Identity, type Invite } from "../protocol.ts";
 import type { Transport } from "../transport.ts";
 import { ENGINE_FILE, LOCAL_FILE, OLD_STATE, Vault, type Report } from "../vault.ts";
 import type { NodeFiles } from "./files.ts";
@@ -34,14 +34,6 @@ export function saveCfg(vault: string, cfg: Cfg): void {
   mkdirSync(join(vault, INTERNAL_DIR), { recursive: true });
   writeFileSync(cfgPath(vault), JSON.stringify(cfg, null, 2));
 }
-
-export function rememberVault(vault: string): void {
-  const m = mem(), path = resolve(vault), old = m.vaults ?? [];
-  m.vaults = [...old.filter((v) => v !== path && existsSync(cfgPath(v))), path];
-  if (JSON.stringify(m.vaults) !== JSON.stringify(old)) memSave(m);
-}
-
-export const knownVaults = () => (mem().vaults ?? []).filter((v) => existsSync(cfgPath(v)));
 
 /** A folder of the old Python CLI keeps its state in `.tgsync/state.db` (SQLite). Write what the
  *  engine needs from it (vault id, what was synced, our last record number) as `.tgsync/state.json`,
@@ -79,7 +71,7 @@ export async function vaultAt(folder: string): Promise<[string | null, boolean]>
       const d = pick(JSON.parse(readFileSync(join(folder, file), "utf8")));
       return [d.vault_id ?? null, !!d.removed];
     } catch {
-      if (file === ENGINE_FILE) throw new SetupError(`${short(folder)}/${ENGINE_FILE} is damaged; move it away and run \`tgsync join\` there again`);
+      if (file === ENGINE_FILE) throw new SetupError(`${short(folder)}/${ENGINE_FILE} is damaged; move it away and join the vault there again`);
       continue;
     }
   }
@@ -109,50 +101,32 @@ export async function openGroup(ref: string, tg: TelegramClient | null, peer?: s
 }
 
 /** The invite line for a vault we are a member of (never one without a key fingerprint). */
-export function inviteFor(v: Vault, link: string, api: [number, string] | null): string {
+function inviteFor(v: Vault, link: string): string {
   const fp = v.fingerprint();
   if (v.removed || !v.hasKeys || !v.vaultId || !fp) throw new SetupError("This folder has no vault keys (were you removed?), so it cannot invite anyone.");
-  return encodeInvite({ link, vaultId: v.vaultId, fingerprint: fp, api });
+  return encodeInvite({ link, vaultId: v.vaultId, fingerprint: fp, api: null });
 }
 
-// ------------------------------------------------------------------ start, invite, accept
+// ------------------------------------------------------------------ start, invite
 /** Start a vault in `folder` on the group `chat` (link, if it can be shared). Saves the folder's config. */
 export async function createVault(a: {
   folder: string; files: NodeFiles; ident: Identity; tr: Transport; profile: string; chat: string; link: string | null; name: string;
-}): Promise<{ v: Vault; invite: string | null }> {
+}): Promise<Vault> {
   const v = await Vault.create(a.files, a.ident, a.tr, a.name);
   const cfg: Cfg = { chat: a.chat, profile: a.profile };
   if (a.link) cfg.invite = a.link;
   if (a.tr instanceof TelegramTransport) cfg.chat_peer = savedPeer(a.tr.chat);
   saveCfg(a.folder, cfg);
-  rememberVault(a.folder);
-  return { v, invite: a.link ? inviteFor(v, a.link, null) : null };
+  return v;
 }
 
-/** The invite line for an open vault: `link` if given, else the saved one, else a new group link. */
-export async function inviteLine(v: Vault, folder: string, cfg: Cfg, link?: string, api: [number, string] | null = null): Promise<string> {
+/** The invite line for an open vault: its saved group link, else a new one. */
+export async function inviteLine(v: Vault, folder: string, cfg: Cfg): Promise<string> {
   await v.pull();
   const tr = v.transport;
-  const use = link ?? cfg.invite ?? (tr instanceof TelegramTransport ? await exportInvite(tr.tg, tr.chat) : String(cfg.chat));
+  const use = cfg.invite ?? (tr instanceof TelegramTransport ? await exportInvite(tr.tg, tr.chat) : String(cfg.chat));
   if (cfg.invite !== use) { cfg.invite = use; saveCfg(folder, cfg); }
-  return inviteFor(v, use, api);
-}
-
-/** The one waiting request whose short code or full id is `code`. Codes are short: someone watching
- *  the group could make a key with the same code as a real request, so two hits accept neither. */
-export async function findRequest(v: Vault, code: string): Promise<JoinRequest> {
-  const want = code.trim().toLowerCase();
-  const hits = [];
-  for (const r of await v.pendingRequests()) {
-    if (await shortCode(r.recipient) === want || await memberId(r.recipient) === want) hits.push(r);
-  }
-  if (!hits.length) throw new SetupError(`nobody is waiting with code '${code}' (see \`tgsync members\`)`);
-  if (hits.length > 1) {
-    const ids = await Promise.all(hits.map(async (r) => `${r.name || "no name"}: ${await memberId(r.recipient)}`));
-    throw new SetupError(`${hits.length} people are waiting with code '${code}' (${ids.join("; ")}). ` +
-      "One of them may be an impostor, so none was accepted. Ask your friend for the full id that `tgsync join` printed, then run:  tgsync accept <id>");
-  }
-  return hits[0];
+  return inviteFor(v, use);
 }
 
 // ------------------------------------------------------------------ join
@@ -161,8 +135,7 @@ export async function checkJoinFolder(folder: string, vaultId: string): Promise<
   const [vid] = await vaultAt(folder);
   const same = existsSync(cfgPath(folder)) && vid === vaultId;
   if (existsSync(cfgPath(folder)) && !same) {
-    throw new SetupError(`${short(folder)} already holds a different tgsync vault. Pick an empty or new folder, e.g.:\n` +
-      `  tgsync join <invite line> ~/vaults/${vaultId.slice(0, 6)}`);
+    throw new SetupError(`${short(folder)} already syncs a different vault. Open an empty vault in Obsidian and join from there.`);
   }
   return same;
 }
@@ -175,7 +148,7 @@ export type JoinResult =
  *  and download the files. `same`: from checkJoinFolder. `files` takes the folder's lock. */
 export async function joinStep(a: {
   folder: string; files: () => Promise<NodeFiles>; ident: Identity; tr: Transport; profile: string;
-  inv: Invite; code: string; same: boolean; who: () => Promise<string>; notify?: (s: string) => void;
+  inv: Invite; code: string; same: boolean; who: () => Promise<string>;
 }): Promise<JoinResult> {
   const { folder, ident, tr, inv } = a;
   let rejoin = false;
@@ -184,7 +157,7 @@ export async function joinStep(a: {
     await old.pull();
     rejoin = old.removed;
     old.engine.free(); // its state files are moved aside below; this object must not save them again
-    if (!rejoin) throw new SetupError(`You already joined this vault in ${short(folder)}. To use it:  cd ${short(folder)} && tgsync`);
+    if (!rejoin) throw new SetupError(`You already joined this vault in ${short(folder)}.`);
   }
   const found = await Vault.discover(tr, ident);
   if (!found.has(inv.vaultId)) {
@@ -193,7 +166,6 @@ export async function joinStep(a: {
     const m = mem();
     (m.joins ??= {})[inv.vaultId] = { code: a.code, profile: a.profile, folder: resolve(folder) };
     memSave(m);
-    mkdirSync(folder, { recursive: true }); // so the next step's `cd` works
     return { state: "waiting", who, code: await shortCode(ident.recipient), id: ident.id };
   }
   if (found.get(inv.vaultId)!.replace(/ /g, "") !== inv.fingerprint.replace(/ /g, "")) {
@@ -208,10 +180,8 @@ export async function joinStep(a: {
   }
   mkdirSync(folder, { recursive: true });
   const v = await Vault.join(await a.files(), ident, tr, inv.vaultId);
-  if (a.notify) v.notify = a.notify;
   saveCfg(folder, { chat: inv.link, chat_peer: tr instanceof TelegramTransport ? savedPeer(tr.chat) : undefined,
                     profile: a.profile, invite: inv.link, code: a.code });
-  rememberVault(folder);
   const m = mem();
   if (m.joins?.[inv.vaultId]) { delete m.joins[inv.vaultId]; memSave(m); }
   return { state: "joined", v, report: await v.pullChanges() };

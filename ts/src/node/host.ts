@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A vault folder kept open by a long-running program (the Obsidian plugin): one Telegram
 // connection for its whole life; the vault itself is opened fresh, under the folder lock, for each
-// operation, so a CLI run in between is never overwritten by stale state.
+// operation, so another window's run in between is never overwritten by stale state.
 import type { TelegramClient } from "@mtcute/core/client.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

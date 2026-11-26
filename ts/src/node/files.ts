@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Files on disk through Node `fs` (CLI and tests). The plugin uses Obsidian's adapter instead.
+// Files on disk through Node `fs` (the plugin on desktop, and tests).
 import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Files, Stat, Writer } from "../files.ts";
