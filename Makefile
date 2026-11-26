@@ -1,17 +1,18 @@
-# Dev shortcuts. Once: `npm install` in ts/ and obsidian/.
+# Dev shortcuts. Once: `npm install`.
 
-.PHONY: check live ts plugin rust sim wasm
+.PHONY: check plugin live rust sim wasm install
 
-check: rust ts plugin ## everything CI runs except the long simulation
+check: rust plugin ## everything CI runs except the long simulation
 
-live:   ## two-person test on REAL Telegram (needs accounts default + b logged in); KEEP=1 keeps folders
-	cd obsidian && npm run -s live -- $(if $(KEEP),--keep)
+plugin: wasm ## type check, tests (host + plugin), build main.js
+	npm run build && npm test
 
-ts: wasm ## TypeScript host on the Rust core (vault, Telegram, setup): type check and tests
-	cd ts && npm run typecheck && npm test
+install: ## build and copy the plugin into VAULT=~/path/to/vault
+	@test -n "$(VAULT)" || { echo "usage: make install VAULT=~/path/to/vault"; exit 1; }
+	npm run -s build && mkdir -p "$(VAULT)/.obsidian/plugins/tgsync" && cp main.js manifest.json "$(VAULT)/.obsidian/plugins/tgsync/"
 
-plugin: ts ## Obsidian plugin (thin layer over ts/): type check + build. `npm install` in obsidian/ once
-	cd obsidian && npm run build && npm test
+live:   ## two-person test on REAL Telegram (accounts default + b logged in); KEEP=1 keeps folders
+	npm run -s live -- $(if $(KEEP),--keep)
 
 rust:   ## Rust core (core/): tests, incl. spec/vectors.json
 	cd core && cargo test
@@ -19,7 +20,7 @@ rust:   ## Rust core (core/): tests, incl. spec/vectors.json
 sim:    ## deterministic simulation: many clients, faults, convergence check. SEEDS=n (default 10000)
 	cd core && cargo run --release -q -p tgsync-sim -- --seeds $(or $(SEEDS),10000)
 
-wasm:   ## Rust core -> WebAssembly (core/pkg-web, used by ts/). Without the wasm32 target, fetches CI's build
+wasm:   ## Rust core -> WebAssembly (core/pkg-web). Without the wasm32 target, fetches CI's build
 	@if rustc --print target-libdir --target wasm32-unknown-unknown >/dev/null 2>&1 && command -v wasm-bindgen >/dev/null; then \
 	  cd core && cargo build --profile wasm -p tgsync-wasm --target wasm32-unknown-unknown && \
 	  wasm-bindgen --target web --out-dir pkg-web target/wasm32-unknown-unknown/wasm/tgsync_wasm.wasm && \

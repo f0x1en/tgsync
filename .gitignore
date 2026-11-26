@@ -1,2 +1,4 @@
 *.session
-dist/
+node_modules/
+.test-out/
+main.js

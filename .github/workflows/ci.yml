@@ -40,7 +40,7 @@ jobs:
             core/pkg
             core/pkg-web
 
-  ts:
+  plugin:
     needs: wasm
     strategy:
       fail-fast: false
@@ -56,20 +56,14 @@ jobs:
         with: { name: tgsync-wasm, path: core }
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - run: npm ci
-        working-directory: ts
-      - run: npm run typecheck && npm test
-        working-directory: ts
-      - name: Obsidian plugin (build + tests against a fake tgsync)
-        working-directory: obsidian
-        run: npm ci && npm run build && npm test
+      - run: npm ci && npm run build && npm test
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
           name: tgsync-obsidian
           path: |
-            obsidian/main.js
-            obsidian/manifest.json
+            main.js
+            manifest.json
 
   lint:
     runs-on: ubuntu-latest

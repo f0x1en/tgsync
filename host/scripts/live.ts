@@ -12,9 +12,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { VaultHost } from "../../ts/src/node/host.ts";
-import { connect, resolveChat } from "../../ts/src/node/telegram.ts";
-import { VaultSetup } from "../src/setup.ts";
+import { VaultHost } from "../src/node/host.ts";
+import { connect, resolveChat } from "../src/node/telegram.ts";
+import { VaultSetup } from "../../src/setup.ts";
 
 const { values: a } = parseArgs({ options: { owner: { type: "string", default: "default" }, friend: { type: "string", default: "b" }, keep: { type: "boolean" } } });
 const tmp = mkdtempSync(join(tmpdir(), "tgsync-live-"));

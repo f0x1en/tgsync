@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // tgsync's windows and settings tab: log in, start or join a vault, invite, let people in.
 import { App, ButtonComponent, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
-import type { LoginPrompts } from "../../ts/src/node/telegram.ts";
+import type { LoginPrompts } from "../host/src/node/telegram.ts";
 import type TgsyncPlugin from "./main.ts";
 import { named, type Ask } from "./setup.ts";
 

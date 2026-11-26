@@ -2,18 +2,18 @@
 // Setting this vault up from inside Obsidian: log in to Telegram, start a vault or join one, invite,
 // let people in. No questions or windows here (ui.ts does those), so the tests can drive it.
 import { resolve } from "node:path";
-import { w } from "../../ts/src/core.ts";
-import { NodeFiles } from "../../ts/src/node/files.ts";
-import { checkProfileName, currentProfile, mem, newSandboxGroup, sandboxRoot } from "../../ts/src/node/home.ts";
-import type { VaultHost } from "../../ts/src/node/host.ts";
-import { takeLock } from "../../ts/src/node/lock.ts";
+import { w } from "../host/src/core.ts";
+import { NodeFiles } from "../host/src/node/files.ts";
+import { checkProfileName, currentProfile, mem, newSandboxGroup, sandboxRoot } from "../host/src/node/home.ts";
+import type { VaultHost } from "../host/src/node/host.ts";
+import { takeLock } from "../host/src/node/lock.ts";
 import {
   SetupError, checkJoinFolder, createVault, ensureIdentity, inviteLine, joinStep, openGroup,
-} from "../../ts/src/node/setup.ts";
+} from "../host/src/node/setup.ts";
 import {
   connect, createGroup, hasLogin, interactiveLogin, loadCreds, parseProxy, saveCreds, type LoginPrompts,
-} from "../../ts/src/node/telegram.ts";
-import { decodeInvite, type JoinRequest } from "../../ts/src/protocol.ts";
+} from "../host/src/node/telegram.ts";
+import { decodeInvite, type JoinRequest } from "../host/src/protocol.ts";
 
 type TelegramClient = Awaited<ReturnType<typeof connect>>;
 

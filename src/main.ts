@@ -4,11 +4,11 @@
 // changes a few seconds after you stop typing, and downloads others' changes every few seconds (as set; slower when Telegram asks), when
 // Obsidian opens and when you come back to it. Notes that two people edit merge; other files keep both.
 import { FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
-import { VaultHost } from "../../ts/src/node/host.ts";
-import { LockBusy } from "../../ts/src/node/lock.ts";
-import { Pace } from "../../ts/src/node/pace.ts";
-import { OfflineError } from "../../ts/src/transport.ts";
-import type { Report } from "../../ts/src/vault.ts";
+import { VaultHost } from "../host/src/node/host.ts";
+import { LockBusy } from "../host/src/node/lock.ts";
+import { Pace } from "../host/src/node/pace.ts";
+import { OfflineError } from "../host/src/transport.ts";
+import type { Report } from "../host/src/vault.ts";
 import { VaultSetup, withCode, type Advanced, type Ask } from "./setup.ts";
 import { AcceptModal, TgsyncSettingTab, VersionsModal } from "./ui.ts";
 

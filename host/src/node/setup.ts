@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Setting a vault folder up: start a vault, ask to join one and finish joining, invite, accept.
-// Used by the Obsidian plugin (obsidian/src/setup.ts); nothing here asks questions or prints.
+// Used by the Obsidian plugin (src/setup.ts); nothing here asks questions or prints.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
