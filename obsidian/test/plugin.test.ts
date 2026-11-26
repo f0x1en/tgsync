@@ -40,7 +40,7 @@ async function start(folder: string, settings: object = {}) {
   await p.saveData(settings);
   await p.onload();
   p.editDelay = 50;
-  p.joinEvery = 0;
+  p.joinEvery = () => 0;
   return p;
 }
 

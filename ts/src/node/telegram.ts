@@ -8,25 +8,23 @@ import { NodeCryptoProvider } from "@mtcute/node/utils.js";
 import { SIMD_AVAILABLE, initSync } from "@mtcute/wasm";
 import wasmSimd from "@mtcute/wasm/mtcute-simd.wasm";
 import wasmPlain from "@mtcute/wasm/mtcute.wasm";
-import { appendFileSync, chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { caption, parseCaption } from "../protocol.ts";
 import { TransportError, type Message, type Transport } from "../transport.ts";
 import { watchConnection, whileReachable } from "./reachable.ts";
-import { appDir, rootDir } from "./home.ts";
+import { appDir } from "./home.ts";
+import { Pace } from "./pace.ts";
 
 // Telegram does not publish exact limits. Folklore: ~20 messages/minute and ~1/second per chat.
-// Defaults sit just under that; every flood wait slows this session down further.
+// Defaults sit just under that; when Telegram says "flood wait", the account's Pace (pace.ts) slows everything down.
 const SEND_PER_MINUTE = 18;
 const SEND_MIN_GAP = 1.2; // seconds between sends
 const FETCH_MIN_GAP = 0.3; // seconds between downloads
 const MAX_FLOOD_RETRIES = 6;
-
-/** Every flood wait Telegram gives us, one line each (time, call, seconds): to learn its real limits. */
-export const floodLogPath = () => join(rootDir(), "flood-waits.log");
-function logFlood(method: string, seconds: number): void {
-  try { appendFileSync(floodLogPath(), `${new Date().toISOString()} ${method} ${seconds}\n`); } catch { /* best effort */ }
-}
+const paces = new WeakMap<TelegramClient, Pace>();
+/** The Pace of the account this client is logged in to. */
+export const paceOf = (tg: TelegramClient): Pace => paces.get(tg) ?? Pace.memory();
 
 export class NotLoggedIn extends TransportError {}
 
@@ -79,7 +77,8 @@ class Crypto extends NodeCryptoProvider {
   }
 }
 
-function makeClient(creds: Creds): TelegramClient {
+function makeClient(creds: Creds, profile: string): TelegramClient {
+  const pace = Pace.of(profile);
   const base = new BaseTelegramClient({
     apiId: creds.api_id, apiHash: creds.api_hash,
     storage: new MemoryStorage(),
@@ -89,10 +88,11 @@ function makeClient(creds: Creds): TelegramClient {
     // tgsync reports one clear error instead of mtcute's connection chatter; TGSYNC_DEBUG=1 shows every call
     logLevel: process.env.TGSYNC_DEBUG ? 4 : 0,
     updates: false,
-    // the default middlewares, plus a log line for each flood wait (also the short ones mtcute waits out itself)
-    network: { middlewares: networkMiddlewares.basic({ floodWaiter: { onBeforeWait: (ctx, s) => logFlood(ctx.request._, s) } }) },
+    // the default middlewares; a flood wait (also a short one mtcute waits out itself) slows the account down
+    network: { middlewares: networkMiddlewares.basic({ floodWaiter: { onBeforeWait: (_ctx, s) => pace.flood(s) } }) },
   });
   const tg = new TelegramClient({ client: base });
+  paces.set(tg, pace);
   watchConnection(tg);
   return tg;
 }
@@ -125,7 +125,7 @@ export function codeWhere(type: string): string {
 
 /** Log in on the terminal (phone, code, 2FA password) and save the session. Returns "Name (@user)". */
 export async function interactiveLogin(profile: string, creds: Creds, ask: LoginPrompts): Promise<string> {
-  const tg = makeClient(creds);
+  const tg = makeClient(creds, profile);
   try {
     let where = "";
     const me = await tg.start({
@@ -158,7 +158,7 @@ export async function connect(profile: string): Promise<TelegramClient> {
   const creds = loadCreds(profile);
   if (!creds) throw new TransportError("no Telegram API credentials; run `tgsync new` or `tgsync join` to set up");
   if (!existsSync(sessionPath(profile))) throw new NotLoggedIn("not logged in to Telegram yet; run the command in a terminal to log in");
-  const tg = makeClient(creds);
+  const tg = makeClient(creds, profile);
   try {
     await tg.importSession(readFileSync(sessionPath(profile), "utf8").trim());
     await whileReachable(tg, (async () => { await tg.connect(); await tg.getMe(); })());
@@ -229,22 +229,18 @@ export async function exportInvite(tg: TelegramClient, chat: Chat): Promise<stri
 }
 
 // ------------------------------------------------------------------ the transport
+/** At most `perMinute` calls a minute, `minGap` s apart, both divided by the account's current Pace. */
 class RateLimiter {
   private stamps: number[] = [];
-  constructor(private perMinute: number, private minGap = 0) {}
-
-  slowDown(): void {
-    this.perMinute = Math.max(2, Math.floor(this.perMinute / 2));
-    this.minGap = Math.max(this.minGap * 2, 2);
-  }
+  constructor(private pace: Pace, private perMinute: number, private minGap = 0) {}
 
   async wait(): Promise<void> {
     for (;;) {
-      const now = performance.now() / 1000;
+      const now = performance.now() / 1000, f = this.pace.now();
       while (this.stamps.length && now - this.stamps[0] > 60) this.stamps.shift();
-      const gap = this.stamps.length ? this.minGap - (now - this.stamps.at(-1)!) : 0;
-      const window = this.stamps.length >= this.perMinute ? 60 - (now - this.stamps[0]) : 0;
-      const delay = Math.max(gap, window);
+      const gap = this.stamps.length ? this.minGap * f - (now - this.stamps.at(-1)!) : 0;
+      const window = this.stamps.length >= Math.max(1, Math.floor(this.perMinute / f)) ? 60 - (now - this.stamps[0]) : 0;
+      const delay = Math.max(gap, window, (this.pace.until - Date.now()) / 1000);
       if (delay <= 0) { this.stamps.push(performance.now() / 1000); return; }
       await sleep((delay + 0.05) * 1000);
     }
@@ -254,12 +250,15 @@ class RateLimiter {
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 
 export class TelegramTransport implements Transport {
-  private sendRl = new RateLimiter(SEND_PER_MINUTE, SEND_MIN_GAP);
-  private fetchRl = new RateLimiter(120, FETCH_MIN_GAP);
+  private sendRl: RateLimiter;
+  private fetchRl: RateLimiter;
   private seen = new Map<number, TgMessage>();
   log: (s: string) => void = () => {};
 
-  constructor(public tg: TelegramClient, public chat: Chat) {}
+  constructor(public tg: TelegramClient, public chat: Chat) {
+    this.sendRl = new RateLimiter(paceOf(tg), SEND_PER_MINUTE, SEND_MIN_GAP);
+    this.fetchRl = new RateLimiter(paceOf(tg), 120, FETCH_MIN_GAP);
+  }
 
   private async retry<T>(fn: () => Promise<T>): Promise<T> {
     for (let i = 0; i < MAX_FLOOD_RETRIES; i++) {
@@ -267,10 +266,8 @@ export class TelegramTransport implements Transport {
         return await whileReachable(this.tg, fn());
       } catch (e) {
         if (tl.RpcError.is(e, "FLOOD_WAIT_%d")) {
-          this.sendRl.slowDown();
-          this.fetchRl.slowDown();
+          paceOf(this.tg).flood(e.seconds);
           this.log(`Telegram flood-wait: sleeping ${e.seconds}s, then slowing down`);
-          logFlood("(gave up waiting inside mtcute)", e.seconds);
           await sleep((e.seconds + 1) * 1000);
           continue;
         }

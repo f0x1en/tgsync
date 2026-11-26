@@ -147,9 +147,21 @@ export class TgsyncSettingTab extends PluginSettingTab {
     const p = this.plugin;
     new Setting(el)
       .setName("Sync automatically")
-      .setDesc("Uploads your changes a few seconds after you stop typing, and downloads others' changes every 10 seconds and when you come back to Obsidian.")
+      .setDesc("Uploads your changes a few seconds after you stop typing, and downloads others' changes regularly (see below) and when you come back to Obsidian.")
       .addToggle((t) => t.setValue(p.settings.auto).onChange(async (v) => {
         p.settings.auto = v;
+        await p.save();
+        p.schedule();
+      }));
+    const f = p.pace().now();
+    new Setting(el)
+      .setName("Look for changes every")
+      .setDesc(`${p.settings.every} seconds. ` + (f > 1
+        ? `Telegram asked tgsync to slow down, so for now it is every ${Math.round(p.settings.every * f)} seconds; ` +
+          "it goes back by itself once Telegram is calm."
+        : "If Telegram asks tgsync to slow down, it waits longer by itself, then goes back to this."))
+      .addSlider((sl) => sl.setLimits(5, 120, 5).setValue(p.settings.every).setDynamicTooltip().onChange(async (v) => {
+        p.settings.every = v;
         await p.save();
         p.schedule();
       }));

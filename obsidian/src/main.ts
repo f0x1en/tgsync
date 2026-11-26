@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // tgsync for Obsidian (desktop): keeps this vault in sync through its private Telegram group, like
 // Obsidian Sync. The sync engine runs inside the plugin (no separate program). It uploads your
-// changes a few seconds after you stop typing, and downloads others' changes every 10 seconds, when
+// changes a few seconds after you stop typing, and downloads others' changes every few seconds (as set; slower when Telegram asks), when
 // Obsidian opens and when you come back to it. Notes that two people edit merge; other files keep both.
 import { FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
 import { VaultHost } from "../../ts/src/node/host.ts";
 import { LockBusy } from "../../ts/src/node/lock.ts";
+import { Pace } from "../../ts/src/node/pace.ts";
 import { OfflineError } from "../../ts/src/transport.ts";
 import type { Report } from "../../ts/src/vault.ts";
 import { VaultSetup, withCode, type Advanced, type Ask } from "./setup.ts";
@@ -13,10 +14,11 @@ import { AcceptModal, TgsyncSettingTab } from "./ui.ts";
 
 interface Settings extends Advanced {
   auto: boolean; // sync automatically
+  every: number; // seconds between looks for others' changes, as set; Telegram's Pace may stretch it
   refused: string[]; // join requests refused (their keys): not asked again
 }
 
-const DEFAULTS: Settings = { auto: true, apiId: "", apiHash: "", proxy: "", account: "", refused: [] };
+const DEFAULTS: Settings = { auto: true, every: 10, apiId: "", apiHash: "", proxy: "", account: "", refused: [] };
 
 /** What the status bar shows. */
 type State = "synced" | "syncing" | "offline" | "paused" | "not set up" | "waiting" | "error";
@@ -27,15 +29,18 @@ export default class TgsyncPlugin extends Plugin {
   setup!: VaultSetup;
   state: State = "synced";
   lastError = "";
-  /** ms to wait after the last edit before uploading, and between downloads. */
+  /** ms to wait after the last edit before uploading. */
   editDelay = 5_000;
-  pollEvery = 10_000; // idle, one look costs one Telegram call (read the group's newest messages)
+  /** This account's Pace: how much Telegram wants us to slow down now (1 = not at all). */
+  pace(): Pace { return Pace.of(this.setup.profile()); }
+  /** ms between looks for others' changes (idle, one look is one Telegram call): as set, times the Pace. */
+  pollEvery(): number { return this.settings.every * 1000 * this.pace().now(); }
   /** ms between looks while waiting to be let in (each reads the whole group: fewer). */
-  joinEvery = 30_000;
+  joinEvery(): number { return 3 * this.pollEvery(); }
   private lastJoinTry = 0;
   /** ms between full looks for people asking to join (each reads all the group's join messages);
    *  a new join message seen while syncing triggers a look at once. */
-  askEvery = 10 * 60_000;
+  askEvery(): number { return 10 * 60_000 * this.pace().now(); }
   private lastAsk = 0;
   /** Admins: people asking to join, until let in or refused (shown in the status bar). */
   pending: Ask[] = [];
@@ -87,7 +92,7 @@ export default class TgsyncPlugin extends Plugin {
   }
 
   private stopTimers(): void {
-    if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
+    if (this.pollTimer !== null) window.clearTimeout(this.pollTimer);
     if (this.editTimer !== null) window.clearTimeout(this.editTimer);
     this.pollTimer = this.editTimer = null;
   }
@@ -96,8 +101,10 @@ export default class TgsyncPlugin extends Plugin {
   schedule(): void {
     this.stopTimers();
     if (!this.settings.auto) { this.show("paused"); return; }
-    this.pollTimer = window.setInterval(() => this.autoSync(), this.pollEvery);
-    this.registerInterval(this.pollTimer);
+    const next = () => { // a timeout each time: the gap follows the Pace
+      this.pollTimer = window.setTimeout(() => { this.autoSync(); next(); }, this.pollEvery());
+    };
+    next();
     if (this.state === "paused") this.show("synced");
   }
 
@@ -167,7 +174,7 @@ export default class TgsyncPlugin extends Plugin {
       if (loud) new Notice("tgsync: this vault is not set up for syncing yet (see the tgsync settings)");
       return false;
     }
-    if (!loud && Date.now() - this.lastJoinTry < this.joinEvery) return false;
+    if (!loud && Date.now() - this.lastJoinTry < this.joinEvery()) return false;
     this.lastJoinTry = Date.now();
     this.show("syncing");
     try {
@@ -190,7 +197,7 @@ export default class TgsyncPlugin extends Plugin {
   /** Admins: someone asks to join? Ask at once whether to let them in; the request then waits in the
    *  status bar until let in or refused (never asked again if refused). `news`: a join message just came. */
   private async lookForRequests(news: boolean): Promise<void> {
-    if (!news && Date.now() - this.lastAsk < this.askEvery) return;
+    if (!news && Date.now() - this.lastAsk < this.askEvery()) return;
     this.lastAsk = Date.now();
     let reqs: Ask[];
     try {
