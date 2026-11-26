@@ -46,13 +46,16 @@ export class VaultSetup {
 
   loggedIn(): boolean { return this.sandbox || hasLogin(this.profile()); }
 
+  /** No Telegram API key yet (none built in, none saved): the person makes their own first. */
+  needsApiKey(): boolean { return !SHARED_API && !loadCreds(this.profile()); }
+
   /** Log in to Telegram: the window asks for phone, code and 2FA password. -> "Name (@user)". */
   async login(adv: Advanced, ask: LoginPrompts): Promise<string> {
     const profile = this.profile(), saved = loadCreds(profile);
     const own: [number, string] | null = adv.apiId.trim() && adv.apiHash.trim() ? [Number(adv.apiId), adv.apiHash.trim()] : null;
     if (own && (!Number.isInteger(own[0]) || own[0] <= 0)) throw new SetupError("The API id is a number (from my.telegram.org → API development tools).");
     const api = own ?? SHARED_API ?? (saved ? [saved.api_id, saved.api_hash] as [number, string] : null);
-    if (!api) throw new SetupError("This build has no Telegram API key. Enter your own under Advanced (my.telegram.org → API development tools).");
+    if (!api) throw new SetupError("First fill in your Telegram API id and hash (step 1: my.telegram.org → API development tools).");
     const proxy = adv.proxy.trim() || saved?.proxy || null;
     try { parseProxy(proxy); } catch (e) { throw new SetupError(`Proxy: ${(e as Error).message}`); }
     const creds = { api_id: api[0], api_hash: api[1], proxy };

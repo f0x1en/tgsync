@@ -27,11 +27,13 @@ BRAT keeps it updated. No BRAT? Download `main.js` and `manifest.json` from the
 
 Settings → tgsync:
 
-1. **Log in to Telegram**: phone number, then the code Telegram sends you.
-2. **Start** (you, the owner): makes the private group and uploads the vault.
-3. **Copy invite** and send it to a friend (or to yourself, for another computer).
-4. Friend: paste it under **Join a vault** → Join.
-5. You get a window: *"Sam (f17d-13fd) asks to join"* → **Let in**. Their vault fills up by itself.
+1. **Get your Telegram API key** (once, 1 minute): my.telegram.org → API development tools →
+   create an app (any name) → paste its api_id and api_hash into tgsync. Everyone uses their own.
+2. **Log in to Telegram**: phone number, then the code Telegram sends you.
+3. **Start** (you, the owner): makes the private group and uploads the vault.
+4. **Copy invite** and send it to a friend (or to yourself, for another computer).
+5. Friend (after steps 1-2): paste it under **Join a vault** → Join.
+6. You get a window: *"Sam (f17d-13fd) asks to join"* → **Let in**. Their vault fills up by itself.
 
 The code next to a name tells two Sams apart: ask your friend which code they see.
 
@@ -88,8 +90,8 @@ npm install
 make plugin                       # Rust core -> WebAssembly, tests, main.js
 make install VAULT=~/my-vault     # copy it into a vault
 ```
-`TGSYNC_API_ID`/`TGSYNC_API_HASH` in the environment build in a Telegram API key; without them,
-people enter their own (my.telegram.org → API development tools) under Advanced.
+`TGSYNC_API_ID`/`TGSYNC_API_HASH` in the environment build your own key into a private build;
+never publish such a build. Releases carry none.
 
 ## License
 

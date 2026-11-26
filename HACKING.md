@@ -42,7 +42,7 @@ back from the group (notes: from the merged history); a version id is like `812.
 **The plugin** (`src/`, `make plugin`) runs the engine itself through `host/src/node/host.ts` (one
 Telegram connection; the vault opened under the folder lock for each sync) and syncs automatically.
 Setup (log in, start, join, invite, let in, members) is `src/setup.ts` over `host/src/node/setup.ts`;
-the windows are `src/ui.ts`. Releases: push a tag equal to `manifest.json`'s version (bump `versions.json` too); `.github/workflows/release.yml` builds and publishes `main.js` + `manifest.json` (what BRAT installs), with the repository secrets `TGSYNC_API_ID`/`TGSYNC_API_HASH` as the built-in key. The shared Telegram API key is built in from `TGSYNC_API_ID`/`TGSYNC_API_HASH` at build time
+the windows are `src/ui.ts`. Releases: push a tag equal to `manifest.json`'s version (bump `versions.json` too); `.github/workflows/release.yml` builds and publishes `main.js` + `manifest.json` (what BRAT installs). Releases carry no Telegram API key: each person makes their own. The shared Telegram API key is built in from `TGSYNC_API_ID`/`TGSYNC_API_HASH` at build time
 and never committed: a build without them asks users for their own key (Advanced settings).
 
 Big-file benchmark (sandbox, no network): `npm run bench -- 1024 ~/.cache`. Measured 2026-11-23 on this

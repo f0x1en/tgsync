@@ -1,7 +1,7 @@
 name: release
 # Push a tag like 0.1.0 (the version in manifest.json): builds the plugin and publishes a GitHub
 # release with main.js and manifest.json, which is what BRAT and Obsidian install.
-# Repository secrets TGSYNC_API_ID / TGSYNC_API_HASH, if set, become the built-in Telegram API key.
+# Releases carry no Telegram API key: each person makes their own (the login screen says how).
 on:
   push:
     tags: ["*"]
@@ -26,9 +26,6 @@ jobs:
           cargo build --profile wasm -p tgsync-wasm --target wasm32-unknown-unknown
           wasm-bindgen --target web --out-dir pkg-web target/wasm32-unknown-unknown/wasm/tgsync_wasm.wasm
       - run: npm ci && npm run build && npm test
-        env:
-          TGSYNC_API_ID: ${{ secrets.TGSYNC_API_ID }}
-          TGSYNC_API_HASH: ${{ secrets.TGSYNC_API_HASH }}
       - run: gh release create "$GITHUB_REF_NAME" main.js manifest.json --title "tgsync $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

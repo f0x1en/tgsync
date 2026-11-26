@@ -115,13 +115,29 @@ export class TgsyncSettingTab extends PluginSettingTab {
     const p = this.plugin, s = p.setup;
     el.empty();
     const again = () => this.display();
+    const field = (name: string, desc: string, key: "apiId" | "apiHash" | "proxy", hint: string) =>
+      new Setting(el).setName(name).setDesc(desc).addText((t) => t.setPlaceholder(hint).setValue(p.settings[key]).onChange(async (v) => {
+        p.settings[key] = v.trim();
+        await p.save();
+      }));
+    const keyFields = () => {
+      field("Telegram API id", "From my.telegram.org → API development tools. Used at the next log in.", "apiId", "1234567");
+      field("Telegram API hash", "Goes with the API id.", "apiHash", "0123456789abcdef…");
+    };
 
     // ---------------------------------------------------------------- Telegram account
     el.createEl("h3", { text: "Telegram account" });
     if (s.loggedIn()) {
       new Setting(el).setName("Logged in").setDesc(`Account '${s.profile()}'. Your vault is kept, encrypted, in a private Telegram group only its members can read.`);
     } else {
-      new Setting(el).setName("Log in to Telegram")
+      if (s.needsApiKey()) {
+        new Setting(el).setName("1. Get your Telegram API key (once)")
+          .setDesc("Open my.telegram.org, log in with your phone number, go to “API development tools” and create an app " +
+                   "(any name, for example tgsync). Copy its api_id and api_hash into the two fields below.")
+          .addButton((b) => b.setButtonText("Open my.telegram.org").onClick(() => window.open("https://my.telegram.org/apps")));
+        keyFields();
+      }
+      new Setting(el).setName(s.needsApiKey() ? "2. Log in to Telegram" : "Log in to Telegram")
         .setDesc("tgsync keeps this vault, encrypted, in a private Telegram group of your own: free storage, only members can read it. " +
                  "Log in with your phone number; Telegram sends you a code.")
         .addButton((b) => b.setButtonText("Log in").setCta().onClick(() => busy(b, async () => {
@@ -164,11 +180,6 @@ export class TgsyncSettingTab extends PluginSettingTab {
 
     // ---------------------------------------------------------------- advanced
     el.createEl("h3", { text: "Advanced" });
-    const field = (name: string, desc: string, key: "apiId" | "apiHash" | "proxy", hint: string) =>
-      new Setting(el).setName(name).setDesc(desc).addText((t) => t.setPlaceholder(hint).setValue(p.settings[key]).onChange(async (v) => {
-        p.settings[key] = v.trim();
-        await p.save();
-      }));
     if (!p.host?.cfg()) {
       new Setting(el).setName("Account")
         .setDesc("Which tgsync account this vault uses on this computer. Leave empty for the usual one; " +
@@ -178,8 +189,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
           t.inputEl.addEventListener("change", again); // shows that account's login state
         });
     }
-    field("Own Telegram API id", "Optional: use your own API key from my.telegram.org → API development tools. Used at the next log in.", "apiId", "1234567");
-    field("Own Telegram API hash", "Goes with the API id.", "apiHash", "0123456789abcdef…");
+    if (s.loggedIn() || !s.needsApiKey()) keyFields();
     field("Proxy", "If Telegram is blocked where you are. Used at the next log in.", "proxy", "socks5://127.0.0.1:1080");
   }
 
