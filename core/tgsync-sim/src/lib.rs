@@ -227,6 +227,11 @@ impl Sim {
             admin.feed(id, KIND_DESCRIPTOR, &d, &mut rep);
             group.push((id, KIND_DESCRIPTOR, d));
         }
+        // c1 is a plain admin: it may let people in and remove plain members, never take over (overreach).
+        if !v1 && people.len() > 1 {
+            let d = members::give_admin(&admin, "c1", 0, &mut || rng.bytes()).unwrap();
+            group.push((group.len() as i64 + 1, KIND_DESCRIPTOR, d));
+        }
         let clients = people
             .into_iter()
             .map(|p| Client {
@@ -277,6 +282,10 @@ impl Sim {
             self.weird_record(c);
             return;
         }
+        if !self.v1 && self.faults && self.clients.len() > 1 && self.rng.chance(20) {
+            self.overreach();
+            return;
+        }
         match self.rng.below(10) {
             0..=2 => self.edit(c),
             3 => self.toggle_dir(c),
@@ -286,6 +295,41 @@ impl Sim {
                 self.pull(c, true);
             }
         }
+    }
+
+    /// c1, a plain admin (until c0 removes it), signs a take-over the builders would refuse: making
+    /// itself the owner, taking c0's admin rights, or removing c0 with a new key. Every replica must
+    /// reject it (checked after settling: c0 stays the owner).
+    fn overreach(&mut self) {
+        self.pull(1, false);
+        let r = &self.clients[1].vault.replica;
+        let me = r.me.signer().unwrap();
+        if r.removed || !r.has_keys() || !r.admins.as_ref().is_some_and(|a| a.contains(&me)) {
+            return;
+        }
+        let c0 = self.clients[0].vault.replica.me.recipient.clone();
+        let (vid, key) = ("5eed5eed5eed5eed", *r.me.signing.as_ref().unwrap());
+        let mine = [me.clone()];
+        let how = self.rng.below(3);
+        let mut ring = r.keys.clone();
+        let mut proof = None;
+        let mut people = r.members.clone();
+        let (admins, owners): (Vec<String>, Option<&[String]>) = match how {
+            0 => (r.admins.clone().unwrap(), Some(&mine)),
+            1 => (mine.to_vec(), None),
+            _ => {
+                let old = ring.current_epoch().unwrap();
+                ring.add(old + 1, &self.rng.bytes::<32>()).unwrap();
+                proof = Some(old);
+                people.retain(|m| m.recipient != c0);
+                (mine.to_vec(), Some(&mine))
+            }
+        };
+        let sg = tgsync_core::descriptor::Signing { admins: &admins, owners, key: &key };
+        let rng = &mut self.rng;
+        let d = tgsync_core::descriptor::build(&ring, vid, &people, proof, 0, Some(sg), &mut || rng.bytes()).unwrap();
+        self.trace.push(format!("c1, a plain admin, tries to take over (way {how})"));
+        self.post(KIND_DESCRIPTOR, d);
     }
 
     /// The admin (c0) removes a member (new epoch key) or adds a removed one back.
@@ -681,6 +725,15 @@ impl Sim {
                     }
                 }
                 return Err(format!("clients never settle (they keep uploading):\n  {}", why.join("\n  ")));
+            }
+        }
+        if !self.v1 {
+            let owner = self.clients[0].vault.replica.me.signer();
+            for (i, cl) in self.clients.iter().enumerate() {
+                let r = &cl.vault.replica;
+                if r.owners.as_deref() != owner.as_ref().map(std::slice::from_ref) || r.removed {
+                    return Err(format!("c{i}: c0 should be the only owner and nobody removed, got owners {:?}", r.owners));
+                }
             }
         }
         for (i, cl) in self.clients.iter().enumerate() {

@@ -26,17 +26,18 @@ fn signed(
     ring: &KeyRing,
     vault_id: &str,
     members: &[Member],
-    admins: &[String],
+    roles: (&[String], &[String]),
     me: &Identity,
     proof_epoch: Option<u32>,
     created: i64,
     nonce: &mut dyn FnMut() -> [u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
     let key = me.signing.as_ref().ok_or_else(|| err("no signing key"))?;
-    build(ring, vault_id, members, proof_epoch, created, Some(Signing { admins, key }), nonce)
+    let (admins, owners) = roles;
+    build(ring, vault_id, members, proof_epoch, created, Some(Signing { admins, owners: Some(owners), key }), nonce)
 }
 
-/// Start a vault: `me` is the only member and admin. `vault_id`: 16 random hex chars; `key`: 32 random bytes.
+/// Start a vault: `me` is the only member, admin and owner. `vault_id`: 16 random hex chars; `key`: 32 random bytes.
 pub fn create(
     me: &Identity,
     name: &str,
@@ -48,7 +49,7 @@ pub fn create(
     let mut ring = KeyRing::new();
     ring.add(1, key)?;
     let admins = [me.signer().ok_or_else(|| err("no signing key"))?];
-    signed(&ring, vault_id, &[me_as_member(me, name)?], &admins, me, None, created, nonce)
+    signed(&ring, vault_id, &[me_as_member(me, name)?], (&admins, &admins), me, None, created, nonce)
 }
 
 /// The one member `target` names (key, member id or name). Names are not unique: refuse if several match.
@@ -80,7 +81,8 @@ fn v1_state(r: &Replica) -> Result<Option<&str>> {
     Ok(Some(r.vault_id.as_deref().ok_or_else(|| err("vault id unknown"))?))
 }
 
-fn admin_state(r: &Replica) -> Result<(&str, Vec<String>)> {
+/// The vault as an admin sees it: (vault id, admins, owners, am I an owner).
+fn admin_state(r: &Replica) -> Result<(&str, Vec<String>, Vec<String>, bool)> {
     let vault_id = r.vault_id.as_deref().ok_or_else(|| err("vault id unknown"))?;
     let admins = r
         .admins
@@ -88,12 +90,18 @@ fn admin_state(r: &Replica) -> Result<(&str, Vec<String>)> {
         .ok_or_else(|| err("this vault was made by an older tgsync and has no admins (any member can add or remove people)"))?;
     let me = r.me.signer().ok_or_else(|| err("no signing key"))?;
     if !admins.contains(&me) {
-        return Err(err("only an admin can do that (run `tgsync members` to see who is)"));
+        return Err(err("only an admin can do that"));
     }
     if r.removed {
         return Err(err("you were removed from this vault"));
     }
-    Ok((vault_id, admins))
+    let owners = r.owners.clone().unwrap_or_default();
+    let owner = owners.contains(&me);
+    Ok((vault_id, admins, owners, owner))
+}
+
+fn owner_only(owner: bool) -> Result<()> {
+    if owner { Ok(()) } else { Err(err("only an owner can do that")) }
 }
 
 /// Add a member (after comparing the short code of their join request).
@@ -113,7 +121,7 @@ pub fn add(
         members.push(Member::new(recipient, name));
         return build(&r.keys, vault_id, &members, None, created, None, nonce);
     }
-    let (vault_id, admins) = admin_state(r)?;
+    let (vault_id, admins, owners, _) = admin_state(r)?;
     if r.members.iter().any(|m| m.recipient == recipient) {
         return Err(err("already a member"));
     }
@@ -146,11 +154,12 @@ pub fn add(
         name: name.into(),
         signer: signer.map(str::to_owned),
     });
-    signed(&r.keys, vault_id, &members, &admins, &r.me, None, created, nonce)
+    signed(&r.keys, vault_id, &members, (&admins, &owners), &r.me, None, created, nonce)
 }
 
 /// Remove a member by recipient, member id or name, and rotate to a new key (`new_key`: 32 random bytes).
-/// They lose admin rights too. Refused for the last member or the last admin.
+/// They lose admin and owner rights too. A plain admin may remove only plain members (or themselves).
+/// Refused for the last member, admin or owner.
 pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
     if let Some(vault_id) = v1_state(r)? {
         one_match(r, target)?;
@@ -168,8 +177,12 @@ pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce
         ring.add(old + 1, new_key)?;
         return build(&ring, vault_id, &keep, Some(old), created, None, nonce);
     }
-    let (vault_id, admins) = admin_state(r)?;
-    one_match(r, target)?;
+    let (vault_id, admins, owners, owner) = admin_state(r)?;
+    let me = r.me.signer();
+    let t = one_match(r, target)?;
+    if !owner && t.signer.as_ref().is_some_and(|s| admins.contains(s)) && t.signer != me {
+        return Err(err("an admin can only remove plain members; an owner can remove admins"));
+    }
     let (gone, keep): (Vec<Member>, Vec<Member>) = r
         .members
         .iter()
@@ -188,34 +201,89 @@ pub fn remove(r: &Replica, target: &str, new_key: &[u8; 32], created: i64, nonce
     if admins.is_empty() {
         return Err(err("refusing to remove the last admin (give admin to someone first)"));
     }
+    let owners: Vec<String> = owners.into_iter().filter(|o| admins.contains(o)).collect();
+    if owners.is_empty() {
+        return Err(err("refusing to remove the last owner (make someone else an owner first)"));
+    }
     let mut ring = r.keys.clone();
     let old = ring.current_epoch()?;
     ring.add(old + 1, new_key)?;
-    signed(&ring, vault_id, &keep, &admins, &r.me, Some(old), created, nonce)
+    signed(&ring, vault_id, &keep, (&admins, &owners), &r.me, Some(old), created, nonce)
 }
 
-/// Make a member an admin.
-pub fn give_admin(r: &Replica, target: &str, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
-    let (vault_id, mut admins) = admin_state(r)?;
-    let m = one_match(r, target)?;
-    let s = m
+fn signer_of_member(r: &Replica, target: &str) -> Result<String> {
+    one_match(r, target)?
         .signer
         .clone()
-        .ok_or_else(|| err("that member has no signing key (they must join again with a current tgsync)"))?;
+        .ok_or_else(|| err("that member has no signing key (they must join again with a current tgsync)"))
+}
+
+/// Make a member an admin (owners only).
+pub fn give_admin(r: &Replica, target: &str, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
+    let (vault_id, mut admins, owners, owner) = admin_state(r)?;
+    owner_only(owner)?;
+    let s = signer_of_member(r, target)?;
     if admins.contains(&s) {
         return Err(err("already an admin"));
     }
     admins.push(s);
-    signed(&r.keys, vault_id, &r.members, &admins, &r.me, None, created, nonce)
+    signed(&r.keys, vault_id, &r.members, (&admins, &owners), &r.me, None, created, nonce)
 }
 
-/// Stop being an admin yourself. Refused if you are the last one.
-pub fn drop_admin(r: &Replica, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
-    let (vault_id, admins) = admin_state(r)?;
-    let me = r.me.signer().unwrap();
-    let admins: Vec<String> = admins.into_iter().filter(|a| *a != me).collect();
-    if admins.is_empty() {
-        return Err(err("you are the last admin (give admin to someone first)"));
+/// Take admin (and owner) rights from a member: owners may do it to anyone, an admin only to
+/// themselves. Refused for the last admin or owner.
+pub fn take_admin(r: &Replica, target: &str, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
+    let (vault_id, admins, owners, owner) = admin_state(r)?;
+    let s = signer_of_member(r, target)?;
+    if !owner && r.me.signer().as_ref() != Some(&s) {
+        return Err(err("only an owner can take admin rights from someone else"));
     }
-    signed(&r.keys, vault_id, &r.members, &admins, &r.me, None, created, nonce)
+    if !admins.contains(&s) {
+        return Err(err("not an admin"));
+    }
+    let admins: Vec<String> = admins.into_iter().filter(|a| *a != s).collect();
+    let owners: Vec<String> = owners.into_iter().filter(|o| *o != s).collect();
+    if admins.is_empty() {
+        return Err(err("that is the last admin (make someone else an admin first)"));
+    }
+    if owners.is_empty() {
+        return Err(err("that is the last owner (make someone else an owner first)"));
+    }
+    signed(&r.keys, vault_id, &r.members, (&admins, &owners), &r.me, None, created, nonce)
+}
+
+/// Make a member an owner (owners only); they become an admin too.
+pub fn give_owner(r: &Replica, target: &str, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
+    let (vault_id, mut admins, mut owners, owner) = admin_state(r)?;
+    owner_only(owner)?;
+    let s = signer_of_member(r, target)?;
+    if owners.contains(&s) {
+        return Err(err("already an owner"));
+    }
+    if !admins.contains(&s) {
+        admins.push(s.clone());
+    }
+    owners.push(s);
+    signed(&r.keys, vault_id, &r.members, (&admins, &owners), &r.me, None, created, nonce)
+}
+
+/// Take owner rights from a member, yourself included (owners only); they stay an admin.
+/// Refused for the last owner.
+pub fn take_owner(r: &Replica, target: &str, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
+    let (vault_id, admins, owners, owner) = admin_state(r)?;
+    owner_only(owner)?;
+    let s = signer_of_member(r, target)?;
+    if !owners.contains(&s) {
+        return Err(err("not an owner"));
+    }
+    let owners: Vec<String> = owners.into_iter().filter(|o| *o != s).collect();
+    if owners.is_empty() {
+        return Err(err("that is the last owner (make someone else an owner first)"));
+    }
+    signed(&r.keys, vault_id, &r.members, (&admins, &owners), &r.me, None, created, nonce)
+}
+
+/// Stop being an admin (and owner) yourself.
+pub fn drop_admin(r: &Replica, created: i64, nonce: &mut dyn FnMut() -> [u8; NONCE_LEN]) -> Result<Vec<u8>> {
+    take_admin(r, &r.me.recipient, created, nonce)
 }

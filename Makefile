@@ -21,7 +21,7 @@ sim:    ## deterministic simulation: many clients, faults, convergence check. SE
 	cd core && cargo run --release -q -p tgsync-sim -- --seeds $(or $(SEEDS),10000)
 
 wasm:   ## Rust core -> WebAssembly (core/pkg-web). Without the wasm32 target, fetches CI's build
-	@if rustc --print target-libdir --target wasm32-unknown-unknown >/dev/null 2>&1 && command -v wasm-bindgen >/dev/null; then \
+	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown && command -v wasm-bindgen >/dev/null; then \
 	  cd core && cargo build --profile wasm -p tgsync-wasm --target wasm32-unknown-unknown && \
 	  wasm-bindgen --target web --out-dir pkg-web target/wasm32-unknown-unknown/wasm/tgsync_wasm.wasm && \
 	  wasm-bindgen --target nodejs --out-dir pkg target/wasm32-unknown-unknown/wasm/tgsync_wasm.wasm; \

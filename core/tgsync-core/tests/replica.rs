@@ -50,7 +50,7 @@ impl Group {
 
     fn descriptor_v2(&mut self, ring: &KeyRing, members: &[Member], proof_epoch: Option<u32>, admins: &[String], key: &[u8; 32]) {
         let mut n = self.n;
-        let signing = descriptor::Signing { admins, key };
+        let signing = descriptor::Signing { admins, owners: None, key };
         let data = descriptor::build(ring, "a1b2c3d4e5f60718", members, proof_epoch, 1, Some(signing), &mut || {
             n = n.wrapping_add(1);
             [n; 12]
@@ -285,15 +285,21 @@ fn non_admin_member_cannot_change_members() {
 }
 
 #[test]
-fn give_admin_then_drop_admin() {
+fn only_the_owner_unmakes_admins() {
+    // Descriptors without an owner list (as older clients wrote): the vault's creator, alice, is the owner.
     let (mut g, ring, a, b, mut ra, _) = admin_pair();
     let both = vec![a.signer().unwrap(), b.signer().unwrap()];
     let members = [smember(&a, "alice"), smember(&b, "bob")];
     g.descriptor_v2(&ring, &members, None, &both, &[1; 32]); // alice gives admin to bob
-    g.descriptor_v2(&ring, &members, None, &[b.signer().unwrap()], &[2; 32]); // bob: alice drops out
+    g.descriptor_v2(&ring, &members, None, &[b.signer().unwrap()], &[2; 32]); // bob drops alice: refused
+    let rep = g.pull(&mut ra);
+    assert_eq!(rep.problems.len(), 1, "{:?}", rep.problems);
+    assert!(rep.problems[0].1.contains("only an owner can make or unmake admins"));
+    assert_eq!(ra.admins.as_ref().map(Vec::len), Some(2));
+    g.descriptor_v2(&ring, &members, None, &[a.signer().unwrap()], &[1; 32]); // alice drops bob
     assert!(g.pull(&mut ra).problems.is_empty());
-    assert_eq!(ra.admins, Some(vec![b.signer().unwrap()]));
-    g.descriptor_v2(&ring, &members, None, &both, &[1; 32]); // alice is no longer allowed
+    assert_eq!(ra.admins, Some(vec![a.signer().unwrap()]));
+    g.descriptor_v2(&ring, &members, None, &both, &[2; 32]); // bob is no longer allowed
     assert!(g.pull(&mut ra).problems[0].1.contains("not signed by an admin"));
 }
 

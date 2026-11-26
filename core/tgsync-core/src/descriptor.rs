@@ -40,6 +40,8 @@ pub struct Descriptor {
     pub members: Vec<Member>,
     /// v2: signer keys allowed to post the next descriptor. `None` for v1.
     pub admins: Option<Vec<String>>,
+    /// v2: the admins who may also change admins and owners (PROTOCOL.md section 11). `None` for v1.
+    pub owners: Option<Vec<String>>,
     pub raw: Value,
 }
 
@@ -128,10 +130,42 @@ fn keycheck(key: &[u8], vault_id: &str, epoch: u32) -> String {
     hex::encode(mac(key, &[b"descriptor", vault_id.as_bytes(), epoch.to_string().as_bytes()]))
 }
 
-/// v2 signing: the admin list and the key that signs this descriptor.
+/// v2 signing: the admin and owner lists and the key that signs this descriptor. `owners: None`
+/// writes no owner list (as older clients did): the previous one then carries over.
 pub struct Signing<'a> {
     pub admins: &'a [String],
+    pub owners: Option<&'a [String]>,
     pub key: &'a [u8; 32],
+}
+
+/// Who held which role just before a descriptor: what its signer may change depends on it.
+#[derive(Clone, Copy)]
+pub struct Roles<'a> {
+    pub members: &'a [Member],
+    pub admins: &'a [String],
+    pub owners: &'a [String],
+}
+
+/// What [`check_v2`] found: the new admins and owners, and whether a plain admin (not an owner) signed.
+struct V2 {
+    admins: Vec<String>,
+    owners: Vec<String>,
+    plain_admin: bool,
+}
+
+fn key_list(v: &Value, what: &str) -> Result<Vec<String>> {
+    v.as_array()
+        .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect())
+        .ok_or_else(|| err(format!("malformed descriptor: {what}")))
+}
+
+fn same_set(a: &[String], b: &[String]) -> bool {
+    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+    a.sort();
+    a.dedup();
+    b.sort();
+    b.dedup();
+    a == b
 }
 
 /// Build a descriptor for `members` carrying every epoch key in `ring`.
@@ -190,6 +224,12 @@ pub fn build(
         admins.dedup();
         body["v"] = Value::from(2);
         body["admins"] = Value::from(admins);
+        if let Some(owners) = sg.owners {
+            let mut owners = owners.to_vec();
+            owners.sort();
+            owners.dedup();
+            body["owners"] = Value::from(owners);
+        }
         body["signer"] = Value::from(signer_of(sg.key));
     }
     let ctx = format!("{vault_id}:{epoch}");
@@ -228,12 +268,13 @@ fn b64d(v: &Value) -> Result<Vec<u8>> {
 }
 
 /// v2: the signature must verify, and the signer must be an admin: of the vault's last accepted
-/// v2 descriptor (`prev_admins`), or of its own list when there is none yet (trust on first use).
-fn check_v2(d: &Value, prev_admins: Option<&[String]>) -> Result<Vec<String>> {
-    let admins: Vec<String> = d["admins"]
-        .as_array()
-        .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect())
-        .ok_or_else(|| err("malformed descriptor: admins"))?;
+/// v2 descriptor (`prev`), or of its own list when there is none yet (trust on first use). Then the
+/// role rules (PROTOCOL.md section 11): an owner may change anything; a plain admin may add people,
+/// remove plain members (or themselves) and drop their own admin, nothing else. With no owner list
+/// the previous owners carry over; the vault's first v2 descriptor makes its signer the owner.
+/// `enforce: false` (stored, already checked) only works out the roles.
+fn check_v2(d: &Value, prev: Option<Roles>, enforce: bool) -> Result<V2> {
+    let admins = key_list(&d["admins"], "admins")?;
     if admins.is_empty() {
         return Err(err("descriptor has no admins"));
     }
@@ -250,24 +291,69 @@ fn check_v2(d: &Value, prev_admins: Option<&[String]>) -> Result<Vec<String>> {
     VerifyingKey::from_bytes(&pk)
         .and_then(|k| k.verify(&msg, &Signature::from_bytes(&sig)))
         .map_err(|_| err("descriptor signature is invalid"))?;
-    let allowed = prev_admins.unwrap_or(&admins);
+    let allowed = prev.map_or(&admins[..], |p| p.admins);
     if !allowed.iter().any(|a| a == signer) {
         return Err(err("descriptor not signed by an admin"));
     }
-    Ok(admins)
+    let listed = d.get("owners").map(|o| key_list(o, "owners")).transpose()?;
+    let owners = listed.unwrap_or_else(|| prev.map_or_else(|| vec![signer.to_owned()], |p| p.owners.to_vec()));
+    let plain_admin = prev.is_some_and(|p| !p.owners.iter().any(|o| o == signer));
+    if enforce {
+        if let (true, Some(p)) = (plain_admin, prev) {
+            if !same_set(&owners, p.owners) {
+                return Err(err("only an owner can change who the owners are"));
+            }
+            let without_me: Vec<String> = p.admins.iter().filter(|a| *a != signer).cloned().collect();
+            if !same_set(&admins, p.admins) && !same_set(&admins, &without_me) {
+                return Err(err("only an owner can make or unmake admins"));
+            }
+            // Members are listed by id in the clear, so even someone this leaves out can check it.
+            let ids: Vec<&str> = d["members"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|m| m.get("id").and_then(Value::as_str)).collect())
+                .unwrap_or_default();
+            for m in p.members {
+                let gone = !ids.contains(&m.id().as_str());
+                let admin = m.signer.as_ref().is_some_and(|s| p.admins.contains(s));
+                if gone && admin && m.signer.as_deref() != Some(signer) {
+                    return Err(err("an admin can only remove plain members, not other admins or owners"));
+                }
+            }
+        }
+        if owners.is_empty() {
+            return Err(err("descriptor has no owners"));
+        }
+        if !owners.iter().all(|o| admins.contains(o)) {
+            return Err(err("an owner is not an admin"));
+        }
+    }
+    Ok(V2 { admins, owners, plain_admin })
+}
+
+/// A plain admin may not change the signing key of someone who stays (that would hand their name to
+/// another key). Checked once the roster is readable.
+fn check_kept_signers(v2: &Option<V2>, prev: Option<Roles>, members: &[Member], enforce: bool) -> Result<()> {
+    if let (true, Some(V2 { plain_admin: true, .. }), Some(p)) = (enforce, v2, prev) {
+        for m in members {
+            if p.members.iter().any(|o| o.recipient == m.recipient && o.signer != m.signer) {
+                return Err(err("only an owner can change a member's signing key"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate a descriptor and merge its keys into `ring`.
 /// `Ok(None)`: valid but excludes us (we were removed, or not added yet). `Err`: forged or inconsistent.
 /// `trusted`: it was already validated when stored locally.
-/// `prev_admins`: admins of the vault's last accepted v2 descriptor, if any.
+/// `prev`: roles of the vault's last accepted v2 descriptor, if any.
 pub fn accept(
     data: &[u8],
     me: &Identity,
     ring: &mut KeyRing,
     expected_vault_id: Option<&str>,
     trusted: bool,
-    prev_admins: Option<&[String]>,
+    prev: Option<Roles>,
 ) -> Result<Option<Descriptor>> {
     let d = parse(data)?;
     let v2 = d["v"].as_i64() == Some(2);
@@ -285,10 +371,10 @@ pub fn accept(
     if !ring.is_empty() && epoch < ring.current_epoch()? {
         return Err(err("descriptor epoch is older than ours (replay?)"));
     }
-    if prev_admins.is_some() && !v2 {
+    if prev.is_some() && !v2 {
         return Err(err("v1 descriptor in a vault that has admins"));
     }
-    let admins = if v2 { Some(check_v2(&d, prev_admins)?) } else { None };
+    let roles = if v2 { Some(check_v2(&d, prev, !trusted)?) } else { None };
     let proof_epoch = d["proof_epoch"].as_u64().ok_or_else(|| err("bad proof epoch"))?;
     if proof_epoch != u64::from(epoch) && proof_epoch.checked_add(1) != Some(u64::from(epoch)) {
         return Err(err("bad proof epoch"));
@@ -366,17 +452,20 @@ pub fn accept(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Some(admins) = &admins {
-        if !admins.iter().all(|a| members.iter().any(|m| m.signer.as_ref() == Some(a))) {
+    if let Some(r) = &roles {
+        if !r.admins.iter().all(|a| members.iter().any(|m| m.signer.as_ref() == Some(a))) {
             return Err(err("an admin is not a member"));
         }
     }
+    check_kept_signers(&roles, prev, &members, !trusted)?;
     *ring = candidate;
+    let (admins, owners) = roles.map_or((None, None), |r| (Some(r.admins), Some(r.owners)));
     Ok(Some(Descriptor {
         vault_id,
         epoch,
         members,
         admins,
+        owners,
         raw: d,
     }))
 }
@@ -387,6 +476,18 @@ pub struct Snapshot {
     pub epoch: u32,
     pub members: Vec<Member>,
     pub admins: Option<Vec<String>>,
+    pub owners: Option<Vec<String>>,
+}
+
+impl Snapshot {
+    /// Its roles, for checking the next descriptor (`None` in a v1 vault).
+    pub fn roles(&self) -> Option<Roles<'_>> {
+        Some(Roles {
+            members: &self.members,
+            admins: self.admins.as_deref()?,
+            owners: self.owners.as_deref().unwrap_or(&[]),
+        })
+    }
 }
 
 /// Validate a descriptor with keys we already hold, whether or not it includes us, and read its
@@ -406,11 +507,11 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
     if prev.is_some_and(|p| epoch < p.epoch) {
         return Err(err("descriptor epoch is older than ours (replay?)"));
     }
-    let prev_admins = prev.and_then(|p| p.admins.as_deref());
-    if prev_admins.is_some() && !v2 {
+    let prev_roles = prev.and_then(Snapshot::roles);
+    if prev_roles.is_some() && !v2 {
         return Err(err("v1 descriptor in a vault that has admins"));
     }
-    let admins = if v2 { Some(check_v2(&d, prev_admins)?) } else { None };
+    let roles = if v2 { Some(check_v2(&d, prev_roles, true)?) } else { None };
     let proof_epoch = d["proof_epoch"]
         .as_u64()
         .and_then(|e| u32::try_from(e).ok())
@@ -446,10 +547,12 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Some(admins) = &admins {
-        if !admins.iter().all(|a| members.iter().any(|m| m.signer.as_ref() == Some(a))) {
+    if let Some(r) = &roles {
+        if !r.admins.iter().all(|a| members.iter().any(|m| m.signer.as_ref() == Some(a))) {
             return Err(err("an admin is not a member"));
         }
     }
-    Ok(Snapshot { epoch, members, admins })
+    check_kept_signers(&roles, prev_roles, &members, true)?;
+    let (admins, owners) = roles.map_or((None, None), |r| (Some(r.admins), Some(r.owners)));
+    Ok(Snapshot { epoch, members, admins, owners })
 }

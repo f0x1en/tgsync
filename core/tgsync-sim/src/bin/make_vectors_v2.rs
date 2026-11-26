@@ -92,7 +92,7 @@ fn main() {
 
     // 1-2: alice creates the vault (admin), adds bob.
     let d = members::create(&a, "alice", vid, &[0x11; 32], 1_762_850_000, &mut || log.nonce()).unwrap();
-    log.post('d', d, "alice creates the vault; she is its admin");
+    log.post('d', d, "alice creates the vault; she is its admin and owner");
     let mut ra = Replica::new(a.clone(), Some(vid.into()));
     log.pull(&mut ra);
     let d = members::add(&ra, &b.recipient, "bob", b.signer().as_deref(), 1_762_850_001, &mut || log.nonce()).unwrap();
@@ -108,6 +108,7 @@ fn main() {
     let admins = [b.signer().unwrap()];
     let signing = Signing {
         admins: &admins,
+        owners: None,
         key: b.signing.as_ref().unwrap(),
     };
     let d = descriptor::build(&rb.keys, vid, &people, None, 1_762_850_002, Some(signing), &mut || log.nonce()).unwrap();
@@ -140,11 +141,11 @@ fn main() {
 
     // 8-9: alice gives bob admin, then drops her own.
     log.pull(&mut ra);
-    let d = members::give_admin(&ra, "bob", 1_762_850_010, &mut || log.nonce()).unwrap();
-    log.post('d', d, "alice gives admin to bob");
+    let d = members::give_owner(&ra, "bob", 1_762_850_010, &mut || log.nonce()).unwrap();
+    log.post('d', d, "alice makes bob an owner (and so an admin)");
     log.pull(&mut ra);
     let d = members::drop_admin(&ra, 1_762_850_011, &mut || log.nonce()).unwrap();
-    log.post('d', d, "alice stops being an admin");
+    log.post('d', d, "alice stops being an admin and owner");
     log.pull(&mut ra);
     log.pull(&mut rb);
 

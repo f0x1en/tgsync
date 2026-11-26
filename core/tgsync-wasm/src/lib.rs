@@ -169,19 +169,21 @@ impl Engine {
         let e = if k.has(1) { 1 } else { k.epochs().next()? };
         Some(fingerprint(k.key(e).ok()?))
     }
-    /// JSON `{"members": [{id, name, recipient, signer, admin}], "admins": [...] | null}`.
+    /// JSON `{"members": [{id, name, recipient, signer, admin, owner}], "admins": [...] | null, "owners": [...] | null}`.
     pub fn members(&self) -> String {
         let r = &self.vault.replica;
         let admins = r.admins.clone().unwrap_or_default();
+        let owners = r.owners.clone().unwrap_or_default();
         let list: Vec<Value> = r
             .members
             .iter()
             .map(|m| {
                 json!({"id": m.id(), "name": m.name, "recipient": m.recipient, "signer": m.signer,
-                           "admin": m.signer.as_ref().is_some_and(|s| admins.contains(s))})
+                           "admin": m.signer.as_ref().is_some_and(|s| admins.contains(s)),
+                           "owner": m.signer.as_ref().is_some_and(|s| owners.contains(s))})
             })
             .collect();
-        json!({"members": list, "admins": r.admins}).to_string()
+        json!({"members": list, "admins": r.admins, "owners": r.owners}).to_string()
     }
     /// JSON of the tree: `{path: {sha, size, mtime, author, msg_id, doc}}`.
     pub fn tree(&self) -> String {
@@ -448,6 +450,21 @@ impl Engine {
     pub fn give_admin(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
         let mut s = Stream::new(seed, "give")?;
         members::give_admin(&self.vault.replica, target, whole(created, "time")?, &mut || s.nonce()).map_err(js)
+    }
+    #[wasm_bindgen(js_name = takeAdmin)]
+    pub fn take_admin(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
+        let mut s = Stream::new(seed, "take")?;
+        members::take_admin(&self.vault.replica, target, whole(created, "time")?, &mut || s.nonce()).map_err(js)
+    }
+    #[wasm_bindgen(js_name = giveOwner)]
+    pub fn give_owner(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
+        let mut s = Stream::new(seed, "owner")?;
+        members::give_owner(&self.vault.replica, target, whole(created, "time")?, &mut || s.nonce()).map_err(js)
+    }
+    #[wasm_bindgen(js_name = takeOwner)]
+    pub fn take_owner(&self, target: &str, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {
+        let mut s = Stream::new(seed, "unowner")?;
+        members::take_owner(&self.vault.replica, target, whole(created, "time")?, &mut || s.nonce()).map_err(js)
     }
     #[wasm_bindgen(js_name = dropAdmin)]
     pub fn drop_admin(&self, created: f64, seed: &[u8]) -> Result<Vec<u8>, JsError> {

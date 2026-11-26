@@ -62,7 +62,7 @@ fn create_add_give_drop_remove() {
         .to_string()
         .contains("last admin"));
 
-    let d = members::give_admin(&ra, "bob", 3, &mut g.n()).unwrap();
+    let d = members::give_owner(&ra, "bob", 3, &mut g.n()).unwrap();
     g.post(d);
     g.pull(&mut ra);
     g.pull(&mut rb);
@@ -72,7 +72,7 @@ fn create_add_give_drop_remove() {
     g.pull(&mut rb);
     assert_eq!(rb.admins, Some(vec![b.signer().unwrap()]));
 
-    // bob (now the only admin) removes alice: new key, alice is out.
+    // bob (now the only admin and owner) removes alice: new key, alice is out.
     assert!(members::remove(&rb, "bob", &[6; 32], 5, &mut g.n())
         .unwrap_err()
         .to_string()
@@ -248,4 +248,80 @@ fn a_reposted_add_does_not_undo_a_later_add() {
     g.pull(&mut ra);
     assert!(!rc.removed, "carol is still a member: {:?}", rep.problems);
     assert_eq!((ra.members.len(), rc.members.len()), (3, 3));
+}
+
+#[test]
+fn owners_admins_and_plain_members() {
+    use tgsync_core::descriptor::{build, Signing};
+    let (a, b, c, d) = (person(1), person(2), person(3), person(4));
+    let mut g = Group(vec![], 0);
+    let msg = members::create(&a, "alice", "00112233aabbccdd", &[5; 32], 1, &mut g.n()).unwrap();
+    g.post(msg);
+    let mut ra = Replica::new(a.clone(), None);
+    g.pull(&mut ra);
+    assert_eq!(ra.owners, Some(vec![a.signer().unwrap()]), "the creator is the owner");
+    for (p, n) in [(&b, "bob"), (&c, "carol"), (&d, "dave")] {
+        let msg = members::add(&ra, &p.recipient, n, p.signer().as_deref(), 2, &mut g.n()).unwrap();
+        g.post(msg);
+        g.pull(&mut ra);
+    }
+    let msg = members::give_admin(&ra, "bob", 3, &mut g.n()).unwrap();
+    g.post(msg);
+    let (mut rb, mut rd) = (Replica::new(b.clone(), None), Replica::new(d.clone(), None));
+    for r in [&mut ra, &mut rb, &mut rd] {
+        g.pull(r);
+    }
+    // bob, a plain admin: no admins made or unmade, no owners touched, only plain members removed.
+    let refuse = |e: tgsync_core::Error, what: &str| assert!(e.to_string().contains(what), "{e}");
+    refuse(members::give_admin(&rb, "carol", 4, &mut g.n()).unwrap_err(), "only an owner");
+    refuse(members::give_owner(&rb, "carol", 4, &mut g.n()).unwrap_err(), "only an owner");
+    refuse(members::take_admin(&rb, "alice", 4, &mut g.n()).unwrap_err(), "only an owner");
+    refuse(members::remove(&rb, "alice", &[6; 32], 4, &mut g.n()).unwrap_err(), "only remove plain members");
+    let msg = members::remove(&rb, "carol", &[6; 32], 4, &mut g.n()).unwrap();
+    g.post(msg);
+    for r in [&mut ra, &mut rb, &mut rd] {
+        assert!(g.pull(r).problems.is_empty());
+        assert_eq!(r.members.len(), 3, "bob removed carol, a plain member");
+    }
+
+    // A modified client signs what the builders refuse: every replica rejects it.
+    let (bs, as_) = (b.signer().unwrap(), a.signer().unwrap());
+    let both = [as_.clone(), bs.clone()];
+    let forged = |g: &mut Group, admins: &[String], owners: Option<&[String]>| {
+        let sg = Signing { admins, owners, key: b.signing.as_ref().unwrap() };
+        let msg = build(&rb.keys, "00112233aabbccdd", &rb.members, None, 5, Some(sg), &mut g.n()).unwrap();
+        g.post(msg);
+    };
+    forged(&mut g, &both, Some(&[bs.clone()])); // bob makes himself the owner instead of alice
+    forged(&mut g, &[bs.clone()], None); // bob takes alice's admin rights
+    for r in [&mut ra, &mut rd] {
+        let problems: Vec<String> = g.pull(r).problems.into_iter().map(|p| p.1).collect();
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].contains("only an owner can change who the owners are"), "{problems:?}");
+        assert!(problems[1].contains("only an owner can make or unmake admins"), "{problems:?}");
+        assert_eq!(r.owners, Some(vec![as_.clone()]));
+        assert_eq!(r.admins.as_ref().map(|x| x.len()), Some(2));
+    }
+    // Removing the owner with a new key: alice is not fooled into thinking she was removed.
+    let mut ring = rb.keys.clone();
+    ring.add(3, &[7; 32]).unwrap();
+    let keep: Vec<_> = rb.members.iter().filter(|m| m.recipient != a.recipient).cloned().collect();
+    let sg = Signing { admins: &[bs.clone()], owners: Some(&[bs.clone()]), key: b.signing.as_ref().unwrap() };
+    let msg = build(&ring, "00112233aabbccdd", &keep, Some(2), 6, Some(sg), &mut g.n()).unwrap();
+    g.post(msg);
+    g.pull(&mut ra);
+    assert!(!ra.removed && !ra.keys.has(3), "alice is still in");
+
+    // Owners can make more owners; then either may step down, but never the last one.
+    let msg = members::give_owner(&ra, "bob", 7, &mut g.n()).unwrap();
+    g.post(msg);
+    g.pull(&mut ra);
+    g.pull(&mut rb);
+    let msg = members::take_owner(&rb, "alice", 8, &mut g.n()).unwrap();
+    g.post(msg);
+    g.pull(&mut ra);
+    g.pull(&mut rb);
+    assert_eq!(ra.owners, Some(vec![bs.clone()]));
+    refuse(members::remove(&ra, "bob", &[8; 32], 9, &mut g.n()).unwrap_err(), "only remove plain members");
+    refuse(members::take_owner(&rb, "bob", 9, &mut g.n()).unwrap_err(), "last owner");
 }

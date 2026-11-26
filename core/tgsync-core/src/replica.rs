@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::crypto::{blob_epoch, KeyRing};
-use crate::descriptor::{self, Identity, Member, Snapshot};
+use crate::descriptor::{self, Identity, Member, Roles, Snapshot};
 use crate::oplog::decode_record;
 use crate::text::{sha_hex, TextEdit, Texts};
 use crate::tree::{Applied, Tree};
@@ -71,6 +71,8 @@ pub struct Replica {
     pub members: Vec<Member>,
     /// Admins of the last accepted v2 descriptor (`None` until the vault has one).
     pub admins: Option<Vec<String>>,
+    /// Owners of the last accepted v2 descriptor: admins who may also change admins and owners.
+    pub owners: Option<Vec<String>>,
     pub tree: Tree,
     /// Loro documents of text notes (PROTOCOL.md section 13).
     pub texts: Texts,
@@ -105,6 +107,7 @@ impl Replica {
             keys: KeyRing::new(),
             members: vec![],
             admins: None,
+            owners: None,
             tree: Tree::new(),
             texts: Texts::default(),
             cursor: 0,
@@ -136,18 +139,22 @@ impl Replica {
 
     /// Re-load a descriptor stored by an earlier pull (already validated then).
     pub fn load_descriptor(&mut self, data: &[u8]) {
-        if let Ok(Some(d)) = descriptor::accept(
-            data,
-            &self.me,
-            &mut self.keys,
-            self.vault_id.as_deref(),
-            true,
-            self.admins.as_deref(),
-        ) {
-            self.members = d.members;
-            if d.admins.is_some() {
-                self.admins = d.admins;
-            }
+        let prev = self.admins.as_deref().map(|admins| Roles {
+            members: &self.members,
+            admins,
+            owners: self.owners.as_deref().unwrap_or(&[]),
+        });
+        if let Ok(Some(d)) = descriptor::accept(data, &self.me, &mut self.keys, self.vault_id.as_deref(), true, prev) {
+            self.take_roles(d);
+        }
+    }
+
+    /// Members, admins and owners from a descriptor that includes us.
+    fn take_roles(&mut self, d: descriptor::Descriptor) {
+        self.members = d.members;
+        if d.admins.is_some() {
+            self.admins = d.admins;
+            self.owners = d.owners;
         }
     }
 
@@ -258,7 +265,7 @@ impl Replica {
         let history: Vec<Value> = self
             .history
             .iter()
-            .map(|(i, s)| serde_json::json!([i, s.epoch, s.members.iter().map(member).collect::<Vec<_>>(), s.admins]))
+            .map(|(i, s)| serde_json::json!([i, s.epoch, s.members.iter().map(member).collect::<Vec<_>>(), s.admins, s.owners]))
             .collect();
         Ok(serde_json::json!({
             "v": 1, "vault_id": self.vault_id, "cursor": self.cursor, "authors": self.authors,
@@ -315,10 +322,12 @@ impl Replica {
             r.load_descriptor(&d);
         }
         r.accepted = msgs("accepted")?;
+        let mut stale = false; // saved before owners existed: work the history out again
         for h in v["history"].as_array().ok_or_else(bad)? {
-            let admins = h[3]
-                .as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect());
+            let list = |x: &Value| -> Option<Vec<String>> { x.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()) };
+            let admins = list(&h[3]);
+            let owners = h.get(4).and_then(list);
+            stale |= admins.is_some() && owners.is_none();
             let members = h[2].as_array().ok_or_else(bad)?.iter().map(member).collect();
             r.history.push((
                 h[0].as_i64().ok_or_else(bad)?,
@@ -326,8 +335,14 @@ impl Replica {
                     epoch: h[1].as_u64().ok_or_else(bad)? as u32,
                     members,
                     admins,
+                    owners,
                 },
             ));
+        }
+        if stale {
+            r.history.clear();
+            r.pending = r.all_descriptors.clone();
+            r.flush_history();
         }
         for n in v["tree"].as_array().ok_or_else(bad)? {
             r.tree.set(crate::tree::Node::from_json(n).ok_or_else(bad)?);
@@ -363,19 +378,18 @@ impl Replica {
                 } else {
                     self.all_descriptors.push((id, body.to_vec()));
                     self.pending.push((id, body.to_vec()));
-                    match descriptor::accept(
-                        body,
-                        &self.me,
-                        &mut self.keys,
-                        self.vault_id.as_deref(),
-                        false,
-                        self.admins.as_deref(),
-                    ) {
+                    let prev = self.admins.as_deref().map(|admins| Roles {
+                        members: &self.members,
+                        admins,
+                        owners: self.owners.as_deref().unwrap_or(&[]),
+                    });
+                    match descriptor::accept(body, &self.me, &mut self.keys, self.vault_id.as_deref(), false, prev) {
                         Ok(None) if self.has_keys() && !self.active => {
                             // Dropped before we ever synced: a later re-add is a fresh join.
                             self.keys = KeyRing::new();
                             self.members.clear();
                             self.admins = None;
+                            self.owners = None;
                             self.history.clear();
                             self.pending = self.all_descriptors.clone();
                             self.accepted.clear();
@@ -387,11 +401,8 @@ impl Replica {
                         }
                         Ok(Some(d)) => {
                             self.accepted.push((id, body.to_vec()));
-                            self.vault_id.get_or_insert(d.vault_id);
-                            self.members = d.members;
-                            if d.admins.is_some() {
-                                self.admins = d.admins;
-                            }
+                            self.vault_id.get_or_insert(d.vault_id.clone());
+                            self.take_roles(d);
                             rep.descriptors.push((id, body.to_vec()));
                         }
                         Err(e) => rep.problems.push((id, format!("rejected descriptor: {e}"))),
