@@ -360,28 +360,6 @@ test("a file stored under a decomposed (NFD) name is read and kept, not deleted"
   await cleanup();
 });
 
-test("a folder of the old TypeScript engine upgrades without uploading everything again", async () => {
-  const { a, b, ch, cleanup } = await pair();
-  await a.write("n.md", "note\n");
-  await a.write("x.bin", "data");
-  await sync(a); await sync(b);
-  // Make bob's folder look like one the old engine wrote: only .tgsync/state.json, with its synced map.
-  const synced: { [p: string]: [string, number, number, number] } = {};
-  for (const p of ["n.md", "x.bin", ".tgsyncignore"]) {
-    const st = await stat(join(b.root, p));
-    synced[p] = [createHash("sha256").update(await readFile(join(b.root, p))).digest("hex"), st.size, st.mtimeMs, st.mtimeMs + 10_000];
-  }
-  await rm(join(b.root, ".tgsync"), { recursive: true });
-  await mkdir(join(b.root, ".tgsync"));
-  await writeFile(join(b.root, ".tgsync", "state.json"), JSON.stringify({ v: 1, vault_id: a.vault.vaultId, synced }));
-  const v = await Vault.open(new NodeFiles(b.root), (b.vault as any).me, ch.transport());
-  const before = ch.sent;
-  const rep = await v.pushChanges();
-  assert.deepEqual(rep.pushed_paths, []);
-  assert.equal(ch.sent, before);
-  await cleanup();
-});
-
 test("a re-joined folder continues the profile's record numbers (never reuses one)", async () => {
   const { a, ch, cleanup } = await pair();
   const seqs = new Map<string, number>();

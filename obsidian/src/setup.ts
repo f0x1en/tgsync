@@ -2,7 +2,7 @@
 // Setting this vault up from inside Obsidian: log in to Telegram, start a vault or join one, invite,
 // let people in. No questions or windows here (ui.ts does those), so the tests can drive it.
 import { resolve } from "node:path";
-import { shortCode } from "../../ts/src/crypto.ts";
+import { w } from "../../ts/src/core.ts";
 import { NodeFiles } from "../../ts/src/node/files.ts";
 import { checkProfileName, currentProfile, mem, newSandboxGroup, sandboxRoot } from "../../ts/src/node/home.ts";
 import type { VaultHost } from "../../ts/src/node/host.ts";
@@ -28,7 +28,7 @@ export interface Waiting { code: string; id: string }
 
 /** A join request with the asker's short code, shown beside their name (two people can share a name). */
 export type Ask = JoinRequest & { code: string };
-export const withCode = async (r: JoinRequest): Promise<Ask> => ({ ...r, code: await shortCode(r.recipient) });
+export const withCode = (r: JoinRequest): Ask => ({ ...r, code: w.shortCode(r.recipient) });
 /** "Name (abcd-1234)". */
 export const named = (name: string, code: string) => `${name || "Someone"} (${code})`;
 
@@ -104,7 +104,7 @@ export class VaultSetup {
     const j = this.joinEntry();
     if (!j || this.host.cfg()) return null;
     const [ident] = await ensureIdentity(j.profile);
-    return { code: await shortCode(ident.recipient), id: ident.id };
+    return { code: w.shortCode(ident.recipient), id: ident.id };
   }
 
   /** Join with an invite line (pasted, or the saved one). -> Waiting until let in; null once joined
@@ -139,10 +139,10 @@ export class VaultSetup {
   members() {
     return this.host.use(async (v) => (await v.pull(), {
       admin: v.isAdmin,
-      members: await Promise.all(v.members.map(async (m) => ({
-        id: m.id!, name: named(m.name, await shortCode(m.recipient)), admin: !!m.admin, you: m.recipient === v.me.recipient,
-      }))),
-      waiting: v.isAdmin ? await Promise.all((await v.pendingRequests()).map(withCode)) : [],
+      members: v.members.map((m) => ({
+        id: m.id!, name: named(m.name, w.shortCode(m.recipient)), admin: !!m.admin, you: m.recipient === v.me.recipient,
+      })),
+      waiting: v.isAdmin ? (await v.pendingRequests()).map(withCode) : [],
     }));
   }
 

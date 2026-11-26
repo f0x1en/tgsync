@@ -210,7 +210,7 @@ export default class TgsyncPlugin extends Plugin {
     this.lastAsk = Date.now();
     let reqs: Ask[];
     try {
-      reqs = await this.host!.use(async (v) => (v.isAdmin ? Promise.all((await v.pendingRequests()).map(withCode)) : []));
+      reqs = await this.host!.use(async (v) => (v.isAdmin ? (await v.pendingRequests()).map(withCode) : []));
     } catch { return; } // next time
     const known = new Set(this.pending.map((r) => r.recipient));
     this.pending = reqs.filter((r) => !this.settings.refused.includes(r.recipient));

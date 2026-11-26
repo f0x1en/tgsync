@@ -2,14 +2,13 @@
 // Setting a vault folder up: start a vault, ask to join one and finish joining, invite, accept.
 // Used by the Obsidian plugin (obsidian/src/setup.ts); nothing here asks questions or prints.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-import { shortCode } from "../crypto.ts";
+import { w } from "../core.ts";
 import { INTERNAL_DIR } from "../paths.ts";
 import { encodeInvite, type Identity, type Invite } from "../protocol.ts";
 import type { Transport } from "../transport.ts";
-import { ENGINE_FILE, LOCAL_FILE, OLD_STATE, Vault, type Report } from "../vault.ts";
+import { ENGINE_FILE, LOCAL_FILE, Vault, type Report } from "../vault.ts";
 import type { NodeFiles } from "./files.ts";
 import { initIdentity, isSandboxLink, loadIdentity, mem, memSave, sandboxRoot } from "./home.ts";
 import { DirTransport, PREFIX } from "./sandbox.ts";
@@ -35,47 +34,12 @@ export function saveCfg(vault: string, cfg: Cfg): void {
   writeFileSync(cfgPath(vault), JSON.stringify(cfg, null, 2));
 }
 
-/** A folder of the old Python CLI keeps its state in `.tgsync/state.db` (SQLite). Write what the
- *  engine needs from it (vault id, what was synced, our last record number) as `.tgsync/state.json`,
- *  the format `Vault.open` already takes over; otherwise every file looks changed on both sides. */
-export function fromPythonState(folder: string): void {
-  const db = join(folder, INTERNAL_DIR, "state.db");
-  if (!existsSync(db) || existsSync(join(folder, ENGINE_FILE)) || existsSync(join(folder, OLD_STATE))) return;
-  let sqlite: any;
-  try { sqlite = createRequire(import.meta.url)("node:sqlite"); } catch {
-    throw new SetupError(`${short(folder)} was made by the old tgsync; reading it needs Node 22.13 or newer (you have ${process.version})`);
+/** The vault id of a vault folder; null if none. */
+function vaultAt(folder: string): string | null {
+  if (!existsSync(join(folder, ENGINE_FILE))) return null;
+  try { return JSON.parse(readFileSync(join(folder, ENGINE_FILE), "utf8")).replica.vault_id ?? null; } catch {
+    throw new SetupError(`${short(folder)}/${ENGINE_FILE} is damaged; move it away and join the vault there again`);
   }
-  const d = new sqlite.DatabaseSync(db, { readOnly: true });
-  try {
-    const kv = (k: string) => (d.prepare("SELECT v FROM kv WHERE k=?").get(k) as any)?.v ?? null;
-    const cols = (d.prepare("PRAGMA table_info(synced)").all() as any[]).map((c) => c.name);
-    const obs = cols.includes("observed_ns") ? "observed_ns" : "0";
-    const synced: { [p: string]: [string, number, number, number] } = {};
-    // times in ms (nanoseconds do not fit a JavaScript number)
-    for (const r of d.prepare(`SELECT path, sha, size, mtime_ns / 1e6 AS m, ${obs} / 1e6 AS o FROM synced`).all() as any[]) {
-      synced[r.path] = [r.sha, r.size, r.m, r.o];
-    }
-    const authors = Object.fromEntries((d.prepare("SELECT author, seq FROM authors").all() as any[]).map((r) => [r.author, Number(r.seq)]));
-    writeFileSync(join(folder, OLD_STATE), JSON.stringify({ v: 1, vault_id: kv("vault_id"), synced, authors }));
-  } finally {
-    d.close();
-  }
-}
-
-/** -> [vault id, were we removed from it] for a vault folder; [null, false] if none. */
-export async function vaultAt(folder: string): Promise<[string | null, boolean]> {
-  fromPythonState(folder);
-  for (const [file, pick] of [[ENGINE_FILE, (d: any) => d.replica], [OLD_STATE, (d: any) => d]] as const) {
-    if (!existsSync(join(folder, file))) continue;
-    try {
-      const d = pick(JSON.parse(readFileSync(join(folder, file), "utf8")));
-      return [d.vault_id ?? null, !!d.removed];
-    } catch {
-      if (file === ENGINE_FILE) throw new SetupError(`${short(folder)}/${ENGINE_FILE} is damaged; move it away and join the vault there again`);
-      continue;
-    }
-  }
-  return [null, false];
 }
 
 // ------------------------------------------------------------------ keys and groups
@@ -132,7 +96,7 @@ export async function inviteLine(v: Vault, folder: string, cfg: Cfg): Promise<st
 // ------------------------------------------------------------------ join
 /** Can `folder` take vault `vaultId`? -> true if this vault is already there (back in after a removal?). */
 export async function checkJoinFolder(folder: string, vaultId: string): Promise<boolean> {
-  const [vid] = await vaultAt(folder);
+  const vid = vaultAt(folder);
   const same = existsSync(cfgPath(folder)) && vid === vaultId;
   if (existsSync(cfgPath(folder)) && !same) {
     throw new SetupError(`${short(folder)} already syncs a different vault. Open an empty vault in Obsidian and join from there.`);
@@ -166,14 +130,14 @@ export async function joinStep(a: {
     const m = mem();
     (m.joins ??= {})[inv.vaultId] = { code: a.code, profile: a.profile, folder: resolve(folder) };
     memSave(m);
-    return { state: "waiting", who, code: await shortCode(ident.recipient), id: ident.id };
+    return { state: "waiting", who, code: w.shortCode(ident.recipient), id: ident.id };
   }
   if (found.get(inv.vaultId)!.replace(/ /g, "") !== inv.fingerprint.replace(/ /g, "")) {
     throw new SetupError("KEY FINGERPRINT MISMATCH between the invite and the vault - refusing to join");
   }
   if (rejoin) { // start the vault state fresh; the old one is kept next to it, files stay
     const stamp = Math.floor(Date.now() / 1000);
-    for (const f of [ENGINE_FILE, LOCAL_FILE, OLD_STATE]) {
+    for (const f of [ENGINE_FILE, LOCAL_FILE]) {
       const st = join(folder, f);
       if (existsSync(st)) renameSync(st, `${st}.removed-${stamp}`);
     }

@@ -15,7 +15,6 @@ const HASH_PIECE = 4 * 1024 * 1024;
 const RACY_MS = 2000; // a file modified this close to when we hashed it is hashed again
 export const ENGINE_FILE = ".tgsync/engine.json";
 export const LOCAL_FILE = ".tgsync/local.json";
-export const OLD_STATE = ".tgsync/state.json"; // folders of the TypeScript engine: their vault id is reused
 
 export class VaultError extends Error {}
 
@@ -142,26 +141,7 @@ export class Vault {
     if (await files.stat(ENGINE_FILE)) {
       engine = w.Engine.load(me.secret, me.recipient, signing, await files.read(ENGINE_FILE));
     } else {
-      let old: any = null;
-      if (await files.stat(OLD_STATE)) {
-        try { old = JSON.parse(dec.decode(await files.read(OLD_STATE))); } catch { /* unreadable: start empty */ }
-      }
-      engine = new w.Engine(me.secret, me.recipient, signing, old?.vault_id ?? undefined);
-      // A folder of the old TypeScript engine: keep what it knew was synced (and its hashes), so the
-      // first push does not upload everything again and earlier local deletes stay deleted.
-      if (old?.synced && typeof old.synced === "object") {
-        const synced: { [p: string]: string } = {};
-        for (const [p, v] of Object.entries(old.synced) as [string, any][]) {
-          if (Array.isArray(v) && typeof v[0] === "string") {
-            synced[p] = v[0];
-            if (v[0] !== "dir" && v.length >= 4) state.d.stat[p] = [v[0], v[1], v[2], v[3]];
-          }
-        }
-        engine.materialized(JSON.stringify(synced));
-      }
-      // ... and the last record seq it posted (a fresh engine must not reuse it).
-      const mine = old?.authors?.[me.id];
-      if (typeof mine === "number") engine.setSentSeq(mine);
+      engine = new w.Engine(me.secret, me.recipient, signing, undefined);
     }
     const v = new Vault(files, me, transport, engine, state, makeIgnore(ig));
     v.adoptSeq();

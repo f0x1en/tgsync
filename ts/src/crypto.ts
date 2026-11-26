@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Crypto of tgsync protocol v1 (PROTOCOL.md section 2-3). WebCrypto only, so it runs in
-// Obsidian desktop (Electron) and mobile (WebView) alike.
-import { Decrypter, Encrypter, generateX25519Identity, identityToRecipient } from "age-encryption";
+// The host's crypto (PROTOCOL.md section 2): big-file chunks sealed with the platform's AES-GCM (much
+// faster than in WebAssembly), member ids, new keys. Everything else is the Rust core's. WebCrypto only.
+import { generateX25519Identity, identityToRecipient } from "age-encryption";
 
 const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();
@@ -41,18 +41,7 @@ export async function subkey(key: Uint8Array, purpose: Uint8Array, ctx: Uint8Arr
   return new Uint8Array(bits);
 }
 
-export async function mac(key: Uint8Array, ...parts: Uint8Array[]): Promise<Uint8Array> {
-  const k = await subtle.importKey("raw", key as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const msg = concat(...parts.flatMap((p) => [u32be(p.length), p]));
-  return new Uint8Array(await subtle.sign("HMAC", k, msg as BufferSource));
-}
-
-export async function fingerprint(key: Uint8Array): Promise<string> {
-  const d = hex(await sha256(concat(utf8("tgsync/fingerprint/v1"), key))).slice(0, 20);
-  return d.match(/..../g)!.join(" ");
-}
-
-export function blobEpoch(blob: Uint8Array): number {
+function blobEpoch(blob: Uint8Array): number {
   if (blob.length < HEADER) throw new CryptoError("blob too short");
   if (fromUtf8(blob.subarray(0, 4)) !== "TGS1") throw new CryptoError("bad magic");
   return new DataView(blob.buffer, blob.byteOffset).getUint32(4);
@@ -117,28 +106,6 @@ export async function memberId(recipient: string): Promise<string> {
   return hex(await sha256(utf8(recipient))).slice(0, 16);
 }
 
-export async function shortCode(recipient: string): Promise<string> {
-  const m = (await memberId(recipient)).slice(0, 8);
-  return `${m.slice(0, 4)}-${m.slice(4)}`;
-}
-
-export async function wrapFor(recipient: string, plain: Uint8Array): Promise<Uint8Array> {
-  const e = new Encrypter();
-  e.addRecipient(recipient);
-  return e.encrypt(plain);
-}
-
-export async function unwrap(secret: string, ciphertext: Uint8Array): Promise<Uint8Array> {
-  const d = new Decrypter();
-  d.addIdentity(secret);
-  try {
-    return await d.decrypt(ciphertext);
-  } catch (e) {
-    throw new CryptoError(`cannot decrypt with this identity: ${e}`);
-  }
-}
-
-/** A new person key (age X25519, same kind as the Python CLI makes). */
 /** A new age identity plus an Ed25519 signing key (64 hex). */
 export async function newIdentity(): Promise<{ secret: string; recipient: string; id: string; signing: string }> {
   const secret = await generateX25519Identity();

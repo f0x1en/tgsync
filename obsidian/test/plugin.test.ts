@@ -17,11 +17,11 @@ delete process.env.TGSYNC_HOME;
 const A = join(tmp, "alice"), B = join(tmp, "bob");
 
 const editor = new MarkdownView();
-const handlers: (() => void)[] = [];
 
 async function start(folder: string, settings: object = {}) {
+  const edits: (() => void)[] = []; // what Obsidian calls when a file changes
   const app: any = {
-    vault: { adapter: new FileSystemAdapter(folder), on: (_ev: string, f: () => void) => { handlers.push(f); return {}; } },
+    vault: { adapter: new FileSystemAdapter(folder), on: (_ev: string, f: () => void) => { edits.push(f); return {}; } },
     workspace: { onLayoutReady: () => {}, getLeavesOfType: () => [{ view: editor }], getActiveFile: () => null },
   };
   const p: any = new TgsyncPlugin(app);
@@ -29,6 +29,7 @@ async function start(folder: string, settings: object = {}) {
   await p.onload();
   p.editDelay = 50;
   p.joinEvery = () => 0;
+  p.edits = edits;
   return p;
 }
 
@@ -109,7 +110,7 @@ test("an edit is uploaded by itself a moment later", async () => {
     const sync = b.sync.bind(b);
     b.sync = (loud: boolean) => { const r = sync(loud); started.push(r); return r; };
     writeFileSync(join(B, "typed.md"), "typed in Obsidian\n");
-    for (const h of handlers) h(); // Obsidian reports the change
+    for (const h of b.edits) h(); // Obsidian reports the change
     await new Promise((r) => setTimeout(r, 150));
     assert.ok(started.length > 0, "the edit started a sync by itself");
     await Promise.all(started);
