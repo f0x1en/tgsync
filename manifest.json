@@ -1,7 +1,7 @@
 {
   "id": "tgsync",
   "name": "tgsync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.5.0",
   "description": "Sync your vault, end-to-end encrypted, through a private Telegram group. Free storage; notes edited on two devices merge.",
   "author": "f0x1en",
