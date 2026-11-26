@@ -324,7 +324,10 @@ impl Replica {
         r.accepted = msgs("accepted")?;
         let mut stale = false; // saved before owners existed: work the history out again
         for h in v["history"].as_array().ok_or_else(bad)? {
-            let list = |x: &Value| -> Option<Vec<String>> { x.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()) };
+            let list = |x: &Value| -> Option<Vec<String>> {
+                x.as_array()
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+            };
             let admins = list(&h[3]);
             let owners = h.get(4).and_then(list);
             stale |= admins.is_some() && owners.is_none();

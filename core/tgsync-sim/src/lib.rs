@@ -325,7 +325,11 @@ impl Sim {
                 (mine.to_vec(), Some(&mine))
             }
         };
-        let sg = tgsync_core::descriptor::Signing { admins: &admins, owners, key: &key };
+        let sg = tgsync_core::descriptor::Signing {
+            admins: &admins,
+            owners,
+            key: &key,
+        };
         let rng = &mut self.rng;
         let d = tgsync_core::descriptor::build(&ring, vid, &people, proof, 0, Some(sg), &mut || rng.bytes()).unwrap();
         self.trace.push(format!("c1, a plain admin, tries to take over (way {how})"));
@@ -732,7 +736,10 @@ impl Sim {
             for (i, cl) in self.clients.iter().enumerate() {
                 let r = &cl.vault.replica;
                 if r.owners.as_deref() != owner.as_ref().map(std::slice::from_ref) || r.removed {
-                    return Err(format!("c{i}: c0 should be the only owner and nobody removed, got owners {:?}", r.owners));
+                    return Err(format!(
+                        "c{i}: c0 should be the only owner and nobody removed, got owners {:?}",
+                        r.owners
+                    ));
                 }
             }
         }

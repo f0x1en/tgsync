@@ -199,13 +199,22 @@ test("a refused request is not asked about again", async () => {
   });
 });
 
-test("admins make others admin and remove members", async () => {
+test("owners make admins and owners; an admin cannot touch the owner", async () => {
   await both(async (a, b) => {
-    const bob = (await a.setup.members()).members.find((m: any) => !m.you);
+    const list = await a.setup.members();
+    assert.ok(list.owner, "the vault's creator is its owner");
+    const bob = list.members.find((m: any) => !m.you), alice = list.members.find((m: any) => m.you);
     await a.setup.giveAdmin(bob.id);
     assert.ok((await b.setup.members()).admin, "bob is an admin now");
+    await assert.rejects(b.setup.remove(alice.id), /only remove plain members/);
+    await assert.rejects(b.setup.takeAdmin(alice.id), /only an owner/);
+    await a.setup.takeAdmin(bob.id);
+    assert.ok(!(await b.setup.members()).admin, "the owner took it back");
+    await a.setup.giveOwner(bob.id);
+    assert.ok((await b.setup.members()).owner, "two owners");
+    await b.setup.takeOwner(bob.id);
     await b.setup.dropAdmin();
-    assert.ok(!(await b.setup.members()).admin, "bob stopped being one");
+    assert.ok(!(await b.setup.members()).admin, "bob stepped down");
     await a.setup.remove(bob.id);
     assert.equal((await a.setup.members()).members.length, 1);
     await b.sync(false);

@@ -327,7 +327,11 @@ fn check_v2(d: &Value, prev: Option<Roles>, enforce: bool) -> Result<V2> {
             return Err(err("an owner is not an admin"));
         }
     }
-    Ok(V2 { admins, owners, plain_admin })
+    Ok(V2 {
+        admins,
+        owners,
+        plain_admin,
+    })
 }
 
 /// A plain admin may not change the signing key of someone who stays (that would hand their name to
@@ -554,5 +558,10 @@ pub fn inspect(data: &[u8], ring: &KeyRing, expected_vault_id: Option<&str>, pre
     }
     check_kept_signers(&roles, prev_roles, &members, true)?;
     let (admins, owners) = roles.map_or((None, None), |r| (Some(r.admins), Some(r.owners)));
-    Ok(Snapshot { epoch, members, admins, owners })
+    Ok(Snapshot {
+        epoch,
+        members,
+        admins,
+        owners,
+    })
 }

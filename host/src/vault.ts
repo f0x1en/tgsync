@@ -116,6 +116,7 @@ export class Vault {
   /** The vault key fingerprint, to compare out of band. */
   fingerprint(): string | null { return this.engine.fingerprint() ?? null; }
   get isAdmin(): boolean { return this.members.some((m) => m.recipient === this.me.recipient && m.admin); }
+  get isOwner(): boolean { return this.members.some((m) => m.recipient === this.me.recipient && m.owner); }
 
   /** Give a (possibly fresh) engine the last seq this profile posted in this vault. */
   private adoptSeq(): void {
@@ -735,6 +736,21 @@ export class Vault {
 
   giveAdmin(target: string): Promise<void> {
     return this.postDescriptor(() => this.engine.giveAdmin(target, now(), seed()));
+  }
+
+  /** Owners: take admin (and owner) rights from anyone; anyone: from themselves. */
+  takeAdmin(target: string): Promise<void> {
+    return this.postDescriptor(() => this.engine.takeAdmin(target, now(), seed()));
+  }
+
+  /** Owners: make someone an owner (and admin). */
+  giveOwner(target: string): Promise<void> {
+    return this.postDescriptor(() => this.engine.giveOwner(target, now(), seed()));
+  }
+
+  /** Owners: take owner rights from someone (themselves too); they stay an admin. */
+  takeOwner(target: string): Promise<void> {
+    return this.postDescriptor(() => this.engine.takeOwner(target, now(), seed()));
   }
 
   dropAdmin(): Promise<void> {

@@ -142,8 +142,10 @@ export class VaultSetup {
   members() {
     return this.host.use(async (v) => (await v.pull(), {
       admin: v.isAdmin,
+      owner: v.isOwner,
       members: v.members.map((m) => ({
-        id: m.id!, name: named(m.name, w.shortCode(m.recipient)), admin: !!m.admin, you: m.recipient === v.me.recipient,
+        id: m.id!, name: named(m.name, w.shortCode(m.recipient)), admin: !!m.admin, owner: !!m.owner,
+        you: m.recipient === v.me.recipient,
       })),
       waiting: v.isAdmin ? (await v.pendingRequests()).map(withCode) : [],
     }));
@@ -155,6 +157,12 @@ export class VaultSetup {
   giveAdmin(id: string): Promise<void> { return this.host.use((v) => v.giveAdmin(id)); }
   /** Stop being an admin yourself. */
   dropAdmin(): Promise<void> { return this.host.use((v) => v.dropAdmin()); }
+  /** Owners: take admin (and owner) rights from a member. */
+  takeAdmin(id: string): Promise<void> { return this.host.use((v) => v.takeAdmin(id)); }
+  /** Owners: make a member an owner (and admin). */
+  giveOwner(id: string): Promise<void> { return this.host.use((v) => v.giveOwner(id)); }
+  /** Owners: take owner rights from a member, yourself included; they stay an admin. */
+  takeOwner(id: string): Promise<void> { return this.host.use((v) => v.takeOwner(id)); }
 
   /** Uploaded versions of a file, newest first (rev, when, who). */
   versions(path: string) {

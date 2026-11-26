@@ -276,7 +276,10 @@ fn owners_admins_and_plain_members() {
     refuse(members::give_admin(&rb, "carol", 4, &mut g.n()).unwrap_err(), "only an owner");
     refuse(members::give_owner(&rb, "carol", 4, &mut g.n()).unwrap_err(), "only an owner");
     refuse(members::take_admin(&rb, "alice", 4, &mut g.n()).unwrap_err(), "only an owner");
-    refuse(members::remove(&rb, "alice", &[6; 32], 4, &mut g.n()).unwrap_err(), "only remove plain members");
+    refuse(
+        members::remove(&rb, "alice", &[6; 32], 4, &mut g.n()).unwrap_err(),
+        "only remove plain members",
+    );
     let msg = members::remove(&rb, "carol", &[6; 32], 4, &mut g.n()).unwrap();
     g.post(msg);
     for r in [&mut ra, &mut rb, &mut rd] {
@@ -288,12 +291,16 @@ fn owners_admins_and_plain_members() {
     let (bs, as_) = (b.signer().unwrap(), a.signer().unwrap());
     let both = [as_.clone(), bs.clone()];
     let forged = |g: &mut Group, admins: &[String], owners: Option<&[String]>| {
-        let sg = Signing { admins, owners, key: b.signing.as_ref().unwrap() };
+        let sg = Signing {
+            admins,
+            owners,
+            key: b.signing.as_ref().unwrap(),
+        };
         let msg = build(&rb.keys, "00112233aabbccdd", &rb.members, None, 5, Some(sg), &mut g.n()).unwrap();
         g.post(msg);
     };
-    forged(&mut g, &both, Some(&[bs.clone()])); // bob makes himself the owner instead of alice
-    forged(&mut g, &[bs.clone()], None); // bob takes alice's admin rights
+    forged(&mut g, &both, Some(std::slice::from_ref(&bs))); // bob makes himself the owner instead of alice
+    forged(&mut g, std::slice::from_ref(&bs), None); // bob takes alice's admin rights
     for r in [&mut ra, &mut rd] {
         let problems: Vec<String> = g.pull(r).problems.into_iter().map(|p| p.1).collect();
         assert_eq!(problems.len(), 2, "{problems:?}");
@@ -306,7 +313,11 @@ fn owners_admins_and_plain_members() {
     let mut ring = rb.keys.clone();
     ring.add(3, &[7; 32]).unwrap();
     let keep: Vec<_> = rb.members.iter().filter(|m| m.recipient != a.recipient).cloned().collect();
-    let sg = Signing { admins: &[bs.clone()], owners: Some(&[bs.clone()]), key: b.signing.as_ref().unwrap() };
+    let sg = Signing {
+        admins: std::slice::from_ref(&bs),
+        owners: Some(std::slice::from_ref(&bs)),
+        key: b.signing.as_ref().unwrap(),
+    };
     let msg = build(&ring, "00112233aabbccdd", &keep, Some(2), 6, Some(sg), &mut g.n()).unwrap();
     g.post(msg);
     g.pull(&mut ra);
@@ -322,6 +333,9 @@ fn owners_admins_and_plain_members() {
     g.pull(&mut ra);
     g.pull(&mut rb);
     assert_eq!(ra.owners, Some(vec![bs.clone()]));
-    refuse(members::remove(&ra, "bob", &[8; 32], 9, &mut g.n()).unwrap_err(), "only remove plain members");
+    refuse(
+        members::remove(&ra, "bob", &[8; 32], 9, &mut g.n()).unwrap_err(),
+        "only remove plain members",
+    );
     refuse(members::take_owner(&rb, "bob", 9, &mut g.n()).unwrap_err(), "last owner");
 }

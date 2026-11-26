@@ -22,7 +22,7 @@ export const openChunk = (keys: KeyRing, fileId: string, i: number, n: number, b
   keys.open("chunk", chunkCtx(fileId, i, n), blob);
 
 // ------------------------------------------------------------------ people
-export interface Member { recipient: string; name: string; id?: string; signer?: string | null; admin?: boolean }
+export interface Member { recipient: string; name: string; id?: string; signer?: string | null; admin?: boolean; owner?: boolean }
 /** `signing`: Ed25519 signing key (64 hex) for vaults with admins and signed records. */
 export interface Identity {
   secret: string; recipient: string; id: string; signing?: string;

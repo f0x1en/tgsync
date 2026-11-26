@@ -34,7 +34,19 @@ fn signed(
 ) -> Result<Vec<u8>> {
     let key = me.signing.as_ref().ok_or_else(|| err("no signing key"))?;
     let (admins, owners) = roles;
-    build(ring, vault_id, members, proof_epoch, created, Some(Signing { admins, owners: Some(owners), key }), nonce)
+    build(
+        ring,
+        vault_id,
+        members,
+        proof_epoch,
+        created,
+        Some(Signing {
+            admins,
+            owners: Some(owners),
+            key,
+        }),
+        nonce,
+    )
 }
 
 /// Start a vault: `me` is the only member, admin and owner. `vault_id`: 16 random hex chars; `key`: 32 random bytes.
@@ -49,7 +61,16 @@ pub fn create(
     let mut ring = KeyRing::new();
     ring.add(1, key)?;
     let admins = [me.signer().ok_or_else(|| err("no signing key"))?];
-    signed(&ring, vault_id, &[me_as_member(me, name)?], (&admins, &admins), me, None, created, nonce)
+    signed(
+        &ring,
+        vault_id,
+        &[me_as_member(me, name)?],
+        (&admins, &admins),
+        me,
+        None,
+        created,
+        nonce,
+    )
 }
 
 /// The one member `target` names (key, member id or name). Names are not unique: refuse if several match.
@@ -101,7 +122,11 @@ fn admin_state(r: &Replica) -> Result<(&str, Vec<String>, Vec<String>, bool)> {
 }
 
 fn owner_only(owner: bool) -> Result<()> {
-    if owner { Ok(()) } else { Err(err("only an owner can do that")) }
+    if owner {
+        Ok(())
+    } else {
+        Err(err("only an owner can do that"))
+    }
 }
 
 /// Add a member (after comparing the short code of their join request).

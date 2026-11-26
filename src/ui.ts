@@ -223,33 +223,41 @@ export class TgsyncSettingTab extends PluginSettingTab {
       })));
     const list = el.createDiv();
     list.createEl("p", { text: "Loading members…" });
-    p.setup.members().then(({ admin, members, waiting }) => {
+    p.setup.members().then(({ admin, owner, members, waiting }) => {
       list.empty();
       list.createEl("h4", { text: "Members" });
+      const act = (row: Setting, text: string, done: string, fn: () => Promise<void>, ask?: [string, string, string]) =>
+        row.addButton((b) => {
+          b.setButtonText(text).onClick(() => busy(b, async () => {
+            if (ask && !await confirm(this.app, ask[0], ask[1], ask[2])) return;
+            await fn();
+            if (done) new Notice(`tgsync: ${done}`);
+            this.display();
+          }));
+          if (ask) b.setWarning();
+        });
+      const owners = members.filter((m) => m.owner).length;
       for (const m of members) {
-        const row = new Setting(list).setName(m.name + (m.you ? " (you)" : "")).setDesc(m.admin ? "Admin: can let people in and remove them." : "");
-        if (admin && !m.you && !m.admin) {
-          row.addButton((b) => b.setButtonText("Make admin").onClick(() => busy(b, async () => {
-            await p.setup.giveAdmin(m.id);
-            new Notice(`tgsync: ${m.name} is now an admin.`);
-            this.display();
-          })));
+        const role = m.owner ? "Owner: can do everything, including making admins and owners." :
+          m.admin ? "Admin: can let people in and remove plain members." : "";
+        const row = new Setting(list).setName(m.name + (m.you ? " (you)" : "")).setDesc(role);
+        if (m.you) {
+          if (m.owner && owners > 1) act(row, "Stop being owner", "", () => p.setup.takeOwner(m.id));
+          if (m.admin && !m.owner) {
+            act(row, "Stop being admin", "", () => p.setup.dropAdmin(),
+              ["Stop being an admin?", "You can no longer let people in or remove them. An owner can make you one again.", "Stop"]);
+          }
+          continue;
         }
-        if (admin && !m.you) {
-          row.addButton((b) => b.setButtonText("Remove…").setWarning().onClick(() => busy(b, async () => {
-            if (!await confirm(this.app, `Remove ${m.name}?`, "They keep what they already have, but cannot read anything new: " +
-              "the vault gets a new key.", "Remove")) return;
-            await p.setup.remove(m.id);
-            new Notice(`tgsync: ${m.name} was removed.`);
-            this.display();
-          })));
+        if (owner) {
+          if (!m.admin) act(row, "Make admin", `${m.name} is now an admin.`, () => p.setup.giveAdmin(m.id));
+          else if (!m.owner) act(row, "Make owner", `${m.name} is now an owner.`, () => p.setup.giveOwner(m.id));
+          if (m.owner) act(row, "Remove owner", `${m.name} is an admin now, not an owner.`, () => p.setup.takeOwner(m.id));
+          else if (m.admin) act(row, "Remove admin", `${m.name} is a plain member now.`, () => p.setup.takeAdmin(m.id));
         }
-        if (m.you && m.admin) {
-          row.addButton((b) => b.setButtonText("Stop being admin").onClick(() => busy(b, async () => {
-            if (!await confirm(this.app, "Stop being an admin?", "You can no longer let people in or remove them. Another admin can make you one again.", "Stop")) return;
-            await p.setup.dropAdmin();
-            this.display();
-          })));
+        if (owner || (admin && !m.admin)) {
+          act(row, "Remove…", `${m.name} was removed.`, () => p.setup.remove(m.id),
+            [`Remove ${m.name}?`, "They keep what they already have, but cannot read anything new: the vault gets a new key.", "Remove"]);
         }
       }
       for (const r of waiting.filter((r) => !p.settings.refused.includes(r.recipient))) {
@@ -257,6 +265,7 @@ export class TgsyncSettingTab extends PluginSettingTab {
           .addButton((b) => b.setButtonText("Let in…").setCta().onClick(() => new AcceptModal(this.app, p, r).open()));
       }
       if (!admin) list.createEl("p", { text: "Only admins can let people in." });
+      else if (!owner) list.createEl("p", { text: "Only owners can make admins or remove them." });
     }).catch((e) => { list.empty(); list.createEl("p", { text: `Could not load members: ${(e as Error).message}` }); });
   }
 }
